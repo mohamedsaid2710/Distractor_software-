@@ -1,9 +1,10 @@
-Condition,Item,Sentence
-SgGrammatical,1,"Pia erzählt, dass der Frisör die Tante häufig sieht, weil sie ihm gut zuhört."
-SgUngrammatical,1,"Pia erzählt, dass der Frisör die Tante häufign sieht, weil sie ihm gut zuhört."
-PlGrammatical,1,"Pia erzählt, dass der Frisör die Tanteen häufig sieht, weil sie ihm gut zuhört."
-PlUngrammatical,1,"Pia erzählt, dass der Frisör die Tanteen häufign sieht, weil sie ihm gut zuhört."
-SgGrammatical,2,"Karla betont, dass der Zauberer die Nonne gerne tröstet, da sie sehr einsam ist."
-SgUngrammatical,2,"Karla betont, dass der Zauberer die Nonne gernen tröstet, da sie sehr einsam ist."
-PlGrammatical,2,"Karla betont, dass der Zauberer die Nonneen gerne tröstet, da sie sehr einsam ist."
-PlUngrammatical,2,"Karla betont, dass der Zauberer die Nonneen gernen tröstet, da sie sehr einsam ist."
+sample;1;das ist ein test.
+sample;2;die katze saß auf der matte.
+sample;3;sie bestellte kaffee im café.
+sample;4;berlin ist eine große stadt.
+sample;5;wissenschaftler entdeckten eine neue art.
+sample;6;er schreibt jeden morgen code.
+sample;7;das rote auto raste am haus vorbei.
+sample;8;kinder spielten bis zur dämmerung im park.
+sample;9;maria kaufte blumen für sonntag.
+sample;10;der bergpfad war steil und felsig.
