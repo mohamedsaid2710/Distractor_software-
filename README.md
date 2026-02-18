@@ -2,6 +2,14 @@
 
 Distractor Software generates Maze-style distractor stimuli for psycholinguistic experiments in English and German.
 
+## Attribution
+
+This project is based on the original Maze repository by Victoria Boyce:
+
+- https://github.com/vboyce/Maze
+
+This implementation has been adapted and now differs from the original in models, configuration, and workflow details.
+
 ## What This Repository Does
 
 - Scores candidate distractors with causal Transformer language models.
