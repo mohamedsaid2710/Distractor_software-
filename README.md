@@ -17,7 +17,7 @@ This implementation has been adapted and now differs from the original in models
   - `delim` (semicolon-delimited table)
   - `ibex` (Maze item lines for Ibex)
 - Supports separate English and German parameter presets.
-- Keeps large model weights outside git and downloads them locally.
+- Runs online by default (Hugging Face model IDs), with optional offline local model files.
 
 ## Models Used
 
@@ -38,7 +38,7 @@ Optional (German noun/proper-noun post-casing fallback):
 python -m spacy download de_core_news_sm
 ```
 
-## Download Model Files
+## Optional: Download Model Files (Offline Use)
 
 ```bash
 python download_model.py --english
@@ -48,6 +48,7 @@ python download_model.py --all
 ```
 
 Only the files needed by this pipeline are downloaded (ONNX artifacts are skipped).
+Use this only if you want to run without internet access.
 
 ## Run the Pipeline
 
@@ -68,6 +69,9 @@ Ibex output:
 ```bash
 python distract.py -i English_sample.txt -o output_ibex.txt -p params.txt -f ibex
 ```
+
+The default params use online model IDs for both languages (`openai-community/gpt2-medium`, `dbmdz/german-gpt2`).
+For offline runs, first download models and then set `hf_model_name` to local paths in `params*.txt`.
 
 ## Input Format
 

@@ -18,7 +18,7 @@ class GermanScorer(lang_model):
 
     def __init__(self, params=None):
         params = params or {}
-        model_name_param = params.get("hf_model_name", "models/dbmdz-german-gpt2")
+        model_name_param = params.get("hf_model_name", "dbmdz/german-gpt2")
 
         if not os.path.isabs(model_name_param) and not os.path.exists(model_name_param):
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

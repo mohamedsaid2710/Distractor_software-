@@ -11,7 +11,7 @@ threshold_loc: "wordfreq_distractor"
 threshold_name: "get_thresholds"
 model_loc: "models.german_code.model"
 model_class: "GermanScorer"
-hf_model_name: "models/dbmdz-german-gpt2"
+hf_model_name: "dbmdz/german-gpt2"
 use_wordfreq: True
 include_words: "data/german_data/vocab.txt"
 exclude_words: "exclude.txt"
