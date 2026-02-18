@@ -18,4 +18,4 @@ jobs:
           python-version: "3.12"
 
       - name: Run repository smoke test
-        run: ./scripts/smoke_test.sh
+        run: bash ./scripts/smoke_test.sh
