@@ -47,6 +47,8 @@ python download_model.py --german
 python download_model.py --all
 ```
 
+Only the files needed by this pipeline are downloaded (ONNX artifacts are skipped).
+
 ## Run the Pipeline
 
 English (`delim`):
@@ -93,3 +95,15 @@ Detailed documentation is maintained in the GitHub Wiki:
 
 Model weight files are intentionally ignored by git and must not be committed.
 Use `download_model.py` to restore them locally on any machine.
+
+## Smoke Test
+
+Run a lightweight repository check:
+
+```bash
+./scripts/smoke_test.sh
+```
+
+## License
+
+See `LICENSE` in this repository.

@@ -25,6 +25,8 @@ requirements_working.txt
 
 # Large Model Files (Over 100MB) - MUST IGNORE THESE
 # You must download these locally. GitHub will REJECT the push if you include them.
+models/dbmdz-german-gpt2/onnx/
+models/openai-community-gpt2-medium/onnx/
 models/dbmdz-german-gpt2/pytorch_model.bin
 models/dbmdz-german-gpt2/model.safetensors
 models/dbmdz-german-gpt2/flax_model.msgpack

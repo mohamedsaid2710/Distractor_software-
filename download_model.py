@@ -15,8 +15,8 @@ MODEL_SPECS = {
     },
 }
 
-# Keep only the PyTorch files needed by the current pipeline.
-IGNORE_PATTERNS = ["*.msgpack", "*.h5", "*.safetensors"]
+# Keep only the files needed by the current pipeline.
+IGNORE_PATTERNS = ["*.msgpack", "*.h5", "*.safetensors", "*.onnx", "onnx/*", "*/onnx/*"]
 
 
 def has_weights(local_dir: str) -> bool:
