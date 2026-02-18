@@ -74,7 +74,7 @@ Use this only if you want to run without internet access.
 
 ## How to run:
 
-Detailed instructions on how to run is in the GitHub Wiki:
+Detailed instructions on how to run are in the GitHub Wiki:
 
 - https://github.com/mohamedsaid2710/Distractor_software-/wiki
 
