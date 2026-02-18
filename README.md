@@ -26,16 +26,43 @@ This implementation has been adapted and now differs from the original in models
 | English | `openai-community/gpt2-medium` | `models/openai-community-gpt2-medium` | `params.txt` |
 | German | `dbmdz/german-gpt2` | `models/dbmdz-german-gpt2` | `params_de.txt` |
 
+## Platform Support
+
+This repo is designed to run on Linux, macOS, and Windows.
+
+- Linux/macOS: use `python`
+- Windows: use `py` if `python` is not available
+
 ## Installation
 
+Linux/macOS:
+
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+```
+
+Windows (PowerShell):
+
+```powershell
+py -m pip install -r requirements.txt
+```
+
+Windows (CMD):
+
+```cmd
+py -m pip install -r requirements.txt
 ```
 
 Optional (German noun/proper-noun post-casing fallback):
 
 ```bash
 python -m spacy download de_core_news_sm
+```
+
+Windows (PowerShell/CMD):
+
+```powershell
+py -m spacy download de_core_news_sm
 ```
 
 ## Optional: Download Model Files (Offline Use)
@@ -105,5 +132,17 @@ Use `download_model.py` to restore them locally on any machine.
 Run a lightweight repository check:
 
 ```bash
-./scripts/smoke_test.sh
+python scripts/smoke_test.py
+```
+
+Windows (PowerShell/CMD):
+
+```powershell
+py scripts/smoke_test.py
+```
+
+Linux/macOS also support:
+
+```bash
+bash scripts/smoke_test.sh
 ```
