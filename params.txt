@@ -14,3 +14,4 @@ exclude_words: "exclude.txt"
 include_words: None
 max_repeat: 1
 apply_postcase: False
+match_surprisal: False

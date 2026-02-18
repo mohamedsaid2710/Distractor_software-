@@ -77,4 +77,3 @@ Use this only if you want to run without internet access.
 Detailed instructions on how to run are in the GitHub Wiki:
 
 - https://github.com/mohamedsaid2710/Distractor_software-/wiki
-
