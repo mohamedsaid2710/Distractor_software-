@@ -3,6 +3,13 @@ from utils import copy_punct, strip_punct
 from limit_repeats import Repeatcounter
 import re
 
+# Common uppercase acronyms to preserve when used as distractors in English.
+_EN_ACRONYM_WHITELIST = {
+    'ai', 'api', 'bbc', 'cia', 'cpu', 'eu', 'fbi', 'gdp', 'gps', 'gpu',
+    'ibm', 'imf', 'ml', 'nasa', 'nato', 'oecd', 'uk', 'un', 'usa', 'uefa',
+    'who',
+}
+
 # lazy SpaCy pipeline (initialized on first use)
 _spacy_nlp = None
 
@@ -30,6 +37,57 @@ def _split_punct(token):
     if not m:
         return '', token, ''
     return m.group('prefix'), m.group('body'), m.group('suffix')
+
+
+def _looks_acronym(body):
+    if not body or not body.isalpha():
+        return False
+    return body.isupper() and 2 <= len(body) <= 8
+
+
+def _looks_titlecase_name(body):
+    if not body or len(body) < 2 or not body.isalpha():
+        return False
+    return body[0].isupper() and body[1:].islower()
+
+
+def _normalize_english_distractor_case(source_token, distractor_token):
+    """English-specific casing normalization using source token as signal."""
+    if distractor_token == 'x-x-x':
+        return distractor_token
+    _, src_body, _ = _split_punct(source_token)
+    d_prefix, d_body, d_suffix = _split_punct(distractor_token)
+    if not d_body:
+        return distractor_token
+
+    # If the replaced token is an acronym, force distractor to all-caps.
+    if _looks_acronym(src_body):
+        return d_prefix + d_body.upper() + d_suffix
+
+    # Also capitalize known acronym distractors.
+    if d_body.lower() in _EN_ACRONYM_WHITELIST:
+        return d_prefix + d_body.upper() + d_suffix
+
+    # If the source token looks like a proper name, keep Title Case.
+    if _looks_titlecase_name(src_body):
+        return d_prefix + d_body[:1].upper() + d_body[1:].lower() + d_suffix
+
+    return distractor_token
+
+
+def _detect_language(params):
+    """Infer language code ('en' or 'de') from params."""
+    lang = (params.get('language', '') or '').strip().lower()
+    if lang.startswith('de'):
+        return 'de'
+    if lang.startswith('en'):
+        return 'en'
+    model_loc = (params.get('model_loc', '') or '').lower()
+    dict_cls = (params.get('dictionary_class', '') or '').lower()
+    hf_name = (params.get('hf_model_name', '') or '').lower()
+    if ('german' in model_loc) or ('german' in dict_cls) or ('dbmdz' in hf_name):
+        return 'de'
+    return 'en'
 
 
 def _normalize_distractor_token(token, dict_obj):
@@ -445,6 +503,7 @@ class Sentence_Set:
 
     def do_distractors(self, model, d, threshold_func, params, repeats):
         """Get distractors using specified stuff"""
+        lang = _detect_language(params)
         banned = repeats.banned[:] #don't allow duplicate distractors within the set
         for label in self.labels.values(): #get distractors for each label
             dist = label.choose_distractor(model, d, threshold_func, params, banned)
@@ -455,6 +514,8 @@ class Sentence_Set:
                 lab = sentence.labels[i]
                 # we match distractors to their real words on punctuation
                 distractor = copy_punct(sentence.words[i], self.labels[lab].distractor)
+                if lang == 'en':
+                    distractor = _normalize_english_distractor_case(sentence.words[i], distractor)
                 sentence.distractors.append(distractor)
             # Ensure the very first distractor slot remains the hard-coded placeholder
             try:

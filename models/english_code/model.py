@@ -5,6 +5,10 @@ import math
 import logging
 import torch
 import torch.nn.functional as F
+
+# Keep Transformers on the PyTorch path only to avoid noisy TensorFlow init logs.
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from lang_model import lang_model
 
@@ -26,15 +30,8 @@ class EnglishScorer(lang_model):
         device = params.get("device", None)
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False, local_files_only=True)
-        except OSError:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
-
-        try:
-            self.model = AutoModelForCausalLM.from_pretrained(model_name, local_files_only=True).to(self.device)
-        except OSError:
-            self.model = AutoModelForCausalLM.from_pretrained(model_name).to(self.device)
+        self.tokenizer = self._load_tokenizer(model_name)
+        self.model = self._load_model(model_name).to(self.device)
         self.model.eval()
 
         self.max_len = getattr(
@@ -56,6 +53,62 @@ class EnglishScorer(lang_model):
                 self.model.resize_token_embeddings(tok_len)
         except Exception as e:
             logging.debug("Embedding resize skipped or failed: %s", e)
+
+    @staticmethod
+    def _is_local_dir(model_name):
+        return os.path.isdir(model_name)
+
+    @staticmethod
+    def _has_local_weights(model_dir):
+        """Return True if a local HF model directory has a recognizable weight file."""
+        weight_markers = (
+            "pytorch_model.bin",
+            "model.safetensors",
+            "pytorch_model.bin.index.json",
+            "model.safetensors.index.json",
+        )
+        return any(os.path.exists(os.path.join(model_dir, m)) for m in weight_markers)
+
+    def _load_tokenizer(self, model_name):
+        # Prefer local cache/files first.
+        try:
+            return AutoTokenizer.from_pretrained(model_name, use_fast=False, local_files_only=True)
+        except Exception:
+            pass
+        try:
+            return AutoTokenizer.from_pretrained(model_name, use_fast=False)
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to load English tokenizer '%s'. "
+                "If this machine is offline, run `python download_model.py --english` "
+                "and set `hf_model_name` to the local model path."
+                % model_name
+            ) from e
+
+    def _load_model(self, model_name):
+        # If user points to a local directory, fail fast with a clear message.
+        if self._is_local_dir(model_name) and not self._has_local_weights(model_name):
+            raise RuntimeError(
+                "Local model directory '%s' does not contain model weights "
+                "(expected e.g. `pytorch_model.bin` or `model.safetensors`). "
+                "Download with `python download_model.py --english`."
+                % model_name
+            )
+        # First try strict local mode.
+        try:
+            return AutoModelForCausalLM.from_pretrained(model_name, local_files_only=True)
+        except Exception:
+            pass
+        # Then allow remote lookup.
+        try:
+            return AutoModelForCausalLM.from_pretrained(model_name)
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to load English model '%s'. "
+                "If this machine is offline, run `python download_model.py --english` "
+                "and set `hf_model_name` to the local model path."
+                % model_name
+            ) from e
 
     def tokenize(self, word):
         return self.tokenizer.tokenize(word)

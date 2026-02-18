@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 
 import argparse
+import os
 import sys
+
+# Keep CLI output focused on pipeline errors instead of TF backend noise.
+os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+
 from main import run_stuff
 
 
@@ -34,6 +40,9 @@ def main():
     except FileNotFoundError as e:
         print('ERROR: missing file:', e, file=sys.stderr)
         sys.exit(3)
+    except RuntimeError as e:
+        print('ERROR:', e, file=sys.stderr)
+        sys.exit(4)
 
 
 if __name__ == '__main__':
