@@ -1,0 +1,9 @@
+Condition,Item,Sentence
+SgGrammatical,1,"Pia erzählt, dass der Frisör die Tante häufig sieht, weil sie ihm gut zuhört."
+SgUngrammatical,1,"Pia erzählt, dass der Frisör die Tante häufign sieht, weil sie ihm gut zuhört."
+PlGrammatical,1,"Pia erzählt, dass der Frisör die Tanteen häufig sieht, weil sie ihm gut zuhört."
+PlUngrammatical,1,"Pia erzählt, dass der Frisör die Tanteen häufign sieht, weil sie ihm gut zuhört."
+SgGrammatical,2,"Karla betont, dass der Zauberer die Nonne gerne tröstet, da sie sehr einsam ist."
+SgUngrammatical,2,"Karla betont, dass der Zauberer die Nonne gernen tröstet, da sie sehr einsam ist."
+PlGrammatical,2,"Karla betont, dass der Zauberer die Nonneen gerne tröstet, da sie sehr einsam ist."
+PlUngrammatical,2,"Karla betont, dass der Zauberer die Nonneen gernen tröstet, da sie sehr einsam ist."

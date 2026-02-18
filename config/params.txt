@@ -1,0 +1,16 @@
+#These are required
+min_delta: 10
+min_abs: 25
+num_to_test: 200
+#These are not required, but if they aren't here you get the defaults
+dictionary_loc: "wordfreq_distractor"
+dictionary_class: "wordfreq_English_dict"
+threshold_loc: "wordfreq_distractor"
+threshold_name: "get_thresholds_en"
+model_loc: "models.english_code.model"
+model_class: "EnglishScorer"
+hf_model_name: "openai-community/gpt2-medium"
+exclude_words: "config/exclude.txt"
+include_words: None
+max_repeat: 0
+apply_postcase: False

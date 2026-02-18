@@ -1,0 +1,5 @@
+sample;1;The tired cat sleeps next to the hot steaming cup of coffee.
+sample;2;Above the hills flies a large bird, and it smells of fresh rain.
+sample;3;The early morning tram stop is quiet, only the lanterns glow.
+sample;4;The student checked the exam results and felt relieved.
+sample;5;Near the street, tall trees with shiny leaves grow.

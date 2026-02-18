@@ -1,0 +1,39 @@
+# Python internals
+__pycache__/
+*.pyc
+
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# Generated Output Files
+test_output.csv
+test_output_final.csv
+test_output_*.csv
+output.csv
+output_sample.csv
+*.log
+
+# System files
+.DS_Store
+
+# Temporary/Working files
+requirements_working.txt
+
+# Large Model Files (Over 100MB) - MUST IGNORE THESE
+# You must download these locally. GitHub will REJECT the push if you include them.
+models/dbmdz-german-gpt2/pytorch_model.bin
+models/dbmdz-german-gpt2/model.safetensors
+models/dbmdz-german-gpt2/flax_model.msgpack
+models/dbmdz-german-gpt2/tf_model.h5
+models/dbmdz-german-gpt2/*blobs*
+models/openai-community-gpt2-medium/pytorch_model.bin
+models/openai-community-gpt2-medium/model.safetensors
+models/openai-community-gpt2-medium/flax_model.msgpack
+models/openai-community-gpt2-medium/tf_model.h5
+models/openai-community-gpt2-medium/*blobs*
+
+# Ignore any large numbered blob files (cached from HuggingFace)
+models/dbmdz-german-gpt2/[0-9a-f]*[0-9a-f]
+models/openai-community-gpt2-medium/[0-9a-f]*[0-9a-f]
