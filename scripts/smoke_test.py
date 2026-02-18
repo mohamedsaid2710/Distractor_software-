@@ -19,13 +19,14 @@ def main() -> None:
         raise RuntimeError("Smoke test failed: Python compilation errors were found.")
 
     for path in ("params.txt", "params_de.txt"):
-        params = set_params(path)
+        full_path = os.path.join(ROOT, path)
+        params = set_params(full_path)
         for key in ("min_delta", "min_abs", "num_to_test"):
             if key not in params:
-                raise RuntimeError(f"Missing required key '{key}' in {path}")
+                raise RuntimeError(f"Missing required key '{key}' in {full_path}")
 
-    read_input("English_sample.txt")
-    read_input("german_sample.txt")
+    read_input(os.path.join(ROOT, "English_sample.txt"))
+    read_input(os.path.join(ROOT, "german_sample.txt"))
 
     print("Smoke test passed")
 
