@@ -103,8 +103,3 @@ Run a lightweight repository check:
 ```bash
 ./scripts/smoke_test.sh
 ```
-
-## License
-
-This project is open source under the MIT License.
-See `LICENSE` in this repository.
