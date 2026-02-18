@@ -37,3 +37,8 @@ models/openai-community-gpt2-medium/*blobs*
 # Ignore any large numbered blob files (cached from HuggingFace)
 models/dbmdz-german-gpt2/[0-9a-f]*[0-9a-f]
 models/openai-community-gpt2-medium/[0-9a-f]*[0-9a-f]
+
+# Keep wiki content out of main repo
+/docs/wiki/
+/wiki/
+*.wiki/

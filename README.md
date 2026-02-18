@@ -31,14 +31,6 @@ python distract.py -i examples/input.txt -o output_ibex.txt -p config/params.txt
 
 ## Documentation
 
-Full documentation is in the Wiki:
+Project documentation is maintained in the GitHub Wiki:
 
 - https://github.com/mohamedsaid2710/Distractor_software-/wiki
-
-Local wiki-ready pages are also provided in `docs/wiki/`.
-
-To publish `docs/wiki` into the GitHub Wiki repo from this project:
-
-```bash
-./scripts/wiki_sync.sh
-```
