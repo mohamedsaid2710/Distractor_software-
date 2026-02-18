@@ -13,6 +13,8 @@ test_output_final.csv
 test_output_*.csv
 output.csv
 output_sample.csv
+output*.txt
+test_output*.txt
 *.log
 
 # System files
