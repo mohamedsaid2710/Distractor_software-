@@ -102,7 +102,7 @@ class wordfreq_English_dict(wordfreq_dict):
      words must be lowercase alpha only"""
 
     def __init__(self, params={}):
-        exclude = params.get("exclude_words", "config/exclude.txt")
+        exclude = params.get("exclude_words", "exclude.txt")
         include = params.get("include_words", None)
         dict = wordfreq.get_frequency_dict('en')
         keys = dict.keys()
@@ -137,7 +137,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
     """
 
     def __init__(self, params={}):
-        exclude = params.get("exclude_words", "config/exclude.txt")
+        exclude = params.get("exclude_words", "exclude.txt")
         include = params.get("include_words", None)
         tsv_path = os.path.join(os.path.dirname(__file__), 'data', 'german_data', 'wordfreq_de.tsv')
         data_map = None

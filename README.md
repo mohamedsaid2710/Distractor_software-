@@ -23,8 +23,8 @@ This implementation has been adapted and now differs from the original in models
 
 | Language | Hugging Face model | Local directory | Params file |
 |---|---|---|---|
-| English | `openai-community/gpt2-medium` | `models/openai-community-gpt2-medium` | `config/params.txt` |
-| German | `dbmdz/german-gpt2` | `models/dbmdz-german-gpt2` | `config/params_de.txt` |
+| English | `openai-community/gpt2-medium` | `models/openai-community-gpt2-medium` | `params.txt` |
+| German | `dbmdz/german-gpt2` | `models/dbmdz-german-gpt2` | `params_de.txt` |
 
 ## Installation
 
@@ -54,19 +54,19 @@ Only the files needed by this pipeline are downloaded (ONNX artifacts are skippe
 English (`delim`):
 
 ```bash
-python distract.py -i examples/input.txt -o output_en.csv -p config/params.txt -f delim
+python distract.py -i English_sample.txt -o output_en.csv -p params.txt -f delim
 ```
 
 German (`delim`):
 
 ```bash
-python distract.py -i examples/sample.csv -o output_de.csv -p config/params_de.txt -f delim
+python distract.py -i german_sample.txt -o output_de.csv -p params_de.txt -f delim
 ```
 
 Ibex output:
 
 ```bash
-python distract.py -i examples/input.txt -o output_ibex.txt -p config/params.txt -f ibex
+python distract.py -i English_sample.txt -o output_ibex.txt -p params.txt -f ibex
 ```
 
 ## Input Format

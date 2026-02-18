@@ -10,7 +10,7 @@ threshold_name: "get_thresholds_en"
 model_loc: "models.english_code.model"
 model_class: "EnglishScorer"
 hf_model_name: "openai-community/gpt2-medium"
-exclude_words: "config/exclude.txt"
+exclude_words: "exclude.txt"
 include_words: None
 max_repeat: 1
 apply_postcase: False

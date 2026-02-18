@@ -19,7 +19,7 @@ def main():
     # named args
     parser.add_argument('-i', '--input', dest='input', help='Input file')
     parser.add_argument('-o', '--output', dest='output', help='Output file')
-    parser.add_argument('-p', '--parameters', type=str, default=None, help='Parameters file (default: config/params.txt)')
+    parser.add_argument('-p', '--parameters', type=str, default=None, help='Parameters file (default: params.txt)')
     parser.add_argument('-f', '--format', choices=['ibex', 'delim'], default='delim', help='Output format')
     args = parser.parse_args()
 
@@ -30,7 +30,7 @@ def main():
         parser.error('the following arguments are required: input output (positional) or -i/--input and -o/--output')
 
     try:
-        params = args.parameters if args.parameters is not None else 'config/params.txt'
+        params = args.parameters if args.parameters is not None else 'params.txt'
         run_stuff(infile, outfile, parameters=params, outformat=args.format)
     except ValueError as e:
         import traceback

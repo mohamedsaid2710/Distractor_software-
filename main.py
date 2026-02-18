@@ -19,7 +19,7 @@ def _should_apply_postcase(params):
     return ("german" in model_loc) or ("german" in dict_cls) or ("dbmdz" in hf_name)
 
 #these are the deafult values, but can be overridden by parameters file 
-def run_stuff(infile, outfile, parameters="config/params.txt", outformat="delim"):
+def run_stuff(infile, outfile, parameters="params.txt", outformat="delim"):
     """Takes an input file, and an output file location
     Does the whole distractor thing (according to specified parameters)
     Writes in outformat"""
