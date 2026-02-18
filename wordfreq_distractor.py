@@ -44,26 +44,28 @@ class wordfreq_dict(distractor_dict):
     def get_words(self, length_low, length_high, freq_low, freq_high):
         """Returns a list of words within specified ranges"""
         matches = []
+        lang = getattr(self, "lang", None)
         for word in self.words:
             # basic range checks
             if not (freq_low <= word.freq <= freq_high and length_low <= word.len <= length_high):
                 continue
             w = word.text
-            # filter: drop short all-caps acronyms (e.g., 'SPD', 'EU')
-            try:
-                if w.isupper() and len(w) <= 4:
-                    continue
-            except Exception:
-                pass
-            # filter: drop tokens that are more frequent in English than German
-            try:
-                en_z = wordfreq.zipf_frequency(w, 'en')
-                de_z = wordfreq.zipf_frequency(w, 'de')
-                # if English frequency notably higher than German, skip
-                if en_z - de_z > 0.3:
-                    continue
-            except Exception:
-                pass
+            # German-specific cleanup filters should not affect English candidates.
+            if lang == "de":
+                # drop short all-caps acronyms (e.g., 'SPD', 'EU')
+                try:
+                    if w.isupper() and len(w) <= 4:
+                        continue
+                except Exception:
+                    pass
+                # drop tokens that are more frequent in English than German
+                try:
+                    en_z = wordfreq.zipf_frequency(w, 'en')
+                    de_z = wordfreq.zipf_frequency(w, 'de')
+                    if en_z - de_z > 0.3:
+                        continue
+                except Exception:
+                    pass
             matches.append(w)
         return matches
 
@@ -102,6 +104,7 @@ class wordfreq_English_dict(wordfreq_dict):
      words must be lowercase alpha only"""
 
     def __init__(self, params={}):
+        self.lang = "en"
         exclude = params.get("exclude_words", "exclude.txt")
         include = params.get("include_words", None)
         dict = wordfreq.get_frequency_dict('en')
@@ -137,6 +140,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
     """
 
     def __init__(self, params={}):
+        self.lang = "de"
         exclude = params.get("exclude_words", "exclude.txt")
         include = params.get("include_words", None)
         tsv_path = os.path.join(os.path.dirname(__file__), 'data', 'german_data', 'wordfreq_de.tsv')
