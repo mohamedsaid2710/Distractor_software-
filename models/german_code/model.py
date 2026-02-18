@@ -70,20 +70,27 @@ class GermanScorer(lang_model):
         return any(os.path.exists(os.path.join(model_dir, m)) for m in weight_markers)
 
     def _load_tokenizer(self, model_name):
-        # Prefer local cache/files first.
-        try:
-            return AutoTokenizer.from_pretrained(model_name, use_fast=False, local_files_only=True)
-        except Exception:
-            pass
-        try:
-            return AutoTokenizer.from_pretrained(model_name, use_fast=False)
-        except Exception as e:
-            raise RuntimeError(
-                "Failed to load German tokenizer '%s'. "
-                "If this machine is offline, run `python download_model.py --german` "
-                "and set `hf_model_name` to the local model path."
-                % model_name
-            ) from e
+        # Prefer local cache/files first, then allow online lookup.
+        # Try slow tokenizer first for backwards compatibility, then fast tokenizer
+        # so partial caches containing only tokenizer.json still work offline.
+        attempts = (
+            {"use_fast": False, "local_files_only": True},
+            {"use_fast": True, "local_files_only": True},
+            {"use_fast": False},
+            {"use_fast": True},
+        )
+        last_error = None
+        for kwargs in attempts:
+            try:
+                return AutoTokenizer.from_pretrained(model_name, **kwargs)
+            except Exception as e:
+                last_error = e
+        raise RuntimeError(
+            "Failed to load German tokenizer '%s'. "
+            "If this machine is offline, run `python download_model.py --german` "
+            "and set `hf_model_name` to the local model path."
+            % model_name
+        ) from last_error
 
     def _load_model(self, model_name):
         # If user points to a local directory, fail fast with a clear message.
