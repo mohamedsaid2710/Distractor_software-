@@ -1,8 +1,8 @@
 #These are required
 # These are required
-min_delta: 10
-min_abs: 32
-num_to_test: 200
+min_delta: -3
+min_abs: 6
+num_to_test: 30
 
 # These are not required, but if they aren't here you get the defaults
 dictionary_loc: "wordfreq_distractor"
@@ -15,6 +15,6 @@ hf_model_name: "dbmdz/german-gpt2"
 use_wordfreq: True
 include_words: "data/german_data/vocab.txt"
 exclude_words: "exclude.txt"
-max_repeat: 1
+max_repeat: 3
 min_zipf: 2.5
 match_surprisal: False
