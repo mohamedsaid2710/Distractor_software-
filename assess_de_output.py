@@ -2,8 +2,11 @@
 """Assess German distractor output quality against key maze constraints.
 
 Checks:
-- First distractor token is x-x-x, and no later token is x-x-x.
+- First distractor token is an x-placeholder matching first-word length
+  (when `first_token_placeholder` is enabled).
+- No later token is an x-placeholder.
 - Distractors are letter-only words.
+- Distractors match target token length (when `enforce_length_match` is enabled).
 - Distractors are less plausible than targets in context (delta > threshold).
 """
 
@@ -24,6 +27,15 @@ from utils import strip_punct
 
 
 WORD_RE = re.compile(r"^[A-Za-zÄÖÜäöüß]+$")
+X_PLACEHOLDER_RE = re.compile(r"^x(?:-x)*$", re.IGNORECASE)
+
+
+def is_x_placeholder(tok):
+    return bool(X_PLACEHOLDER_RE.fullmatch(strip_punct(tok or "")))
+
+
+def x_placeholder_len(tok):
+    return len(re.findall(r"x", strip_punct(tok or "").lower()))
 
 
 def load_output_rows(path):
@@ -57,6 +69,8 @@ def main():
 
     params = set_params(args.params)
     model = GermanScorer(params)
+    first_token_placeholder = bool(params.get("first_token_placeholder", True))
+    enforce_length_match = bool(params.get("enforce_length_match", True))
 
     sents = read_input(args.input)
     for ss in sents.values():
@@ -68,6 +82,7 @@ def main():
     total_positions = 0
     placeholder_errors = 0
     nonword_errors = 0
+    length_errors = 0
     plausible_errors = 0
     examples = []
 
@@ -83,25 +98,55 @@ def main():
         sentence_obj = sentence_set.sentences[0]
 
         dtoks = distractor_sentence.split()
-        if not dtoks or dtoks[0] != "x-x-x":
-            placeholder_errors += 1
-            if len(examples) < args.max_examples:
-                examples.append((item_id, 0, "first-token-not-x-x-x", dtoks[0] if dtoks else ""))
+        expected_first_len = len(strip_punct(sentence_obj.words[0]))
+        if first_token_placeholder:
+            if not dtoks or (not is_x_placeholder(dtoks[0])):
+                placeholder_errors += 1
+                if len(examples) < args.max_examples:
+                    examples.append((item_id, 0, "first-token-not-placeholder", dtoks[0] if dtoks else ""))
+            else:
+                got_len = x_placeholder_len(dtoks[0])
+                if got_len != expected_first_len:
+                    placeholder_errors += 1
+                    if len(examples) < args.max_examples:
+                        examples.append((item_id, 0, f"first-placeholder-len-mismatch:{got_len}!={expected_first_len}", dtoks[0]))
+        else:
+            if not dtoks:
+                placeholder_errors += 1
+                if len(examples) < args.max_examples:
+                    examples.append((item_id, 0, "missing-first-token", ""))
+            elif is_x_placeholder(dtoks[0]):
+                placeholder_errors += 1
+                if len(examples) < args.max_examples:
+                    examples.append((item_id, 0, "first-token-is-placeholder", dtoks[0]))
+            elif enforce_length_match:
+                tok0 = strip_punct(dtoks[0])
+                if len(tok0) != expected_first_len:
+                    length_errors += 1
+                    if len(examples) < args.max_examples:
+                        examples.append((item_id, 0, f"len-mismatch:{len(tok0)}!={expected_first_len}", tok0))
 
         max_i = min(len(dtoks), len(sentence_obj.words))
         for i in range(1, max_i):
             total_positions += 1
             tok = strip_punct(dtoks[i])
-            if tok == "x-x-x":
+            if is_x_placeholder(dtoks[i]):
                 placeholder_errors += 1
                 if len(examples) < args.max_examples:
-                    examples.append((item_id, i, "x-x-x-after-first", tok))
+                    examples.append((item_id, i, "placeholder-after-first", tok))
                 continue
             if (not tok) or (not WORD_RE.match(tok)):
                 nonword_errors += 1
                 if len(examples) < args.max_examples:
                     examples.append((item_id, i, "nonword-token", tok))
                 continue
+            if enforce_length_match:
+                tgt_tok = strip_punct(sentence_obj.words[i])
+                if len(tok) != len(tgt_tok):
+                    length_errors += 1
+                    if len(examples) < args.max_examples:
+                        examples.append((item_id, i, f"len-mismatch:{len(tok)}!={len(tgt_tok)}", tok))
+                    continue
 
             try:
                 lab = sentence_obj.labels[i]
@@ -121,6 +166,7 @@ def main():
     print(f"positions_total={total_positions}")
     print(f"placeholder_errors={placeholder_errors}")
     print(f"nonword_errors={nonword_errors}")
+    print(f"length_errors={length_errors}")
     print(f"plausible_or_bad_delta_errors={plausible_errors}")
     if total_positions > 0:
         rate = 100.0 * plausible_errors / total_positions
@@ -131,7 +177,7 @@ def main():
         for ex in examples:
             print(ex)
 
-    failed = (placeholder_errors > 0) or (nonword_errors > 0) or (plausible_errors > 0)
+    failed = (placeholder_errors > 0) or (nonword_errors > 0) or (length_errors > 0) or (plausible_errors > 0)
     if args.strict and failed:
         return 1
     return 0

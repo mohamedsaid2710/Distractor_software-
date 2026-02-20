@@ -19,7 +19,7 @@ min_zipf: 3.5
 match_surprisal: False
 absolute_threshold_only: False
 lowercase_only: True
-min_word_len: 5
+min_word_len: 3
 force_max_surprisal: False
 device: "cuda"
 exclude_propn_candidates: True

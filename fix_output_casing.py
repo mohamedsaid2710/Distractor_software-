@@ -4,7 +4,7 @@
 Rules:
 - If a distractor is POS-tagged as NOUN or PROPN (via spaCy), Titlecase it.
 - Otherwise, lowercase the distractor.
-- Preserve `x-x-x` and punctuation.
+- Preserve x-placeholders (`x`, `x-x`, `x-x-x`, ...) and punctuation.
 """
 import os
 import re
@@ -16,6 +16,8 @@ except Exception:
     spacy = None
 
 from wordfreq_distractor import wordfreq_German_zipf_dict
+
+X_PLACEHOLDER_RE = re.compile(r"^x(?:-x)*$", re.IGNORECASE)
 
 
 def split_punct(token):
@@ -31,7 +33,7 @@ def process_file(infile='test_output.txt', outfile='test_output_fixed.txt'):
     - Supports in-place operation when infile == outfile by writing to a temp
       file and atomically replacing the destination.
     - Uses spaCy POS (NOUN/PROPN) to Titlecase; otherwise lowercases.
-    - Preserves x-x-x and punctuation; prefers dictionary Titlecase variants.
+    - Preserves x-placeholders and punctuation; prefers dictionary Titlecase variants.
     """
     # spaCy-only backend. If spaCy model missing, continue without POS.
     nlp_sp = None
@@ -71,10 +73,11 @@ def process_file(infile='test_output.txt', outfile='test_output_fixed.txt'):
             toks = distractor_field.split()
             newtoks = []
             for tok in toks:
-                if tok == 'x-x-x':
-                    newtoks.append(tok)
-                    continue
                 prefix, body, suffix = split_punct(tok)
+                if body and X_PLACEHOLDER_RE.fullmatch(body):
+                    # Keep placeholder shape stable and lowercase.
+                    newtoks.append(prefix + body.lower() + suffix)
+                    continue
                 if not body:
                     newtoks.append(tok)
                     continue

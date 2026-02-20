@@ -3,6 +3,7 @@ from utils import copy_punct, strip_punct
 from limit_repeats import Repeatcounter
 import re
 import random
+import os
 
 # Common uppercase acronyms to preserve when used as distractors in English.
 _EN_ACRONYM_WHITELIST = {
@@ -10,6 +11,8 @@ _EN_ACRONYM_WHITELIST = {
     'ibm', 'imf', 'ml', 'nasa', 'nato', 'oecd', 'uk', 'un', 'usa', 'uefa',
     'who',
 }
+
+_X_PLACEHOLDER_RE = re.compile(r"^x(?:-x)*$", re.IGNORECASE)
 
 # lazy SpaCy pipeline (initialized on first use)
 _spacy_nlp = None
@@ -40,6 +43,28 @@ def _split_punct(token):
     return m.group('prefix'), m.group('body'), m.group('suffix')
 
 
+def _is_x_placeholder_token(token):
+    """True for placeholder tokens like x, x-x, x-x-x, ... (ignoring edge punct)."""
+    if not token:
+        return False
+    body = strip_punct(token)
+    return bool(_X_PLACEHOLDER_RE.fullmatch(body))
+
+
+def _placeholder_for_length(length):
+    """Build a first-position placeholder with one 'x' per character in the target word."""
+    n = max(1, int(length))
+    if n == 1:
+        return "x"
+    return "-".join(["x"] * n)
+
+
+def _copy_edge_punct_no_case(source_token, token):
+    """Copy only leading/trailing punctuation from source token, leave token case untouched."""
+    prefix, _body, suffix = _split_punct(source_token)
+    return prefix + token + suffix
+
+
 def _looks_acronym(body):
     if not body or not body.isalpha():
         return False
@@ -54,7 +79,7 @@ def _looks_titlecase_name(body):
 
 def _normalize_english_distractor_case(source_token, distractor_token):
     """English-specific casing normalization using source token as signal."""
-    if distractor_token == 'x-x-x':
+    if _is_x_placeholder_token(distractor_token):
         return distractor_token
     _, src_body, _ = _split_punct(source_token)
     d_prefix, d_body, d_suffix = _split_punct(distractor_token)
@@ -96,7 +121,7 @@ def _normalize_distractor_token(token, dict_obj):
     dictionary titlecase variant when available.
     """
     # preserve placeholder
-    if token == 'x-x-x':
+    if _is_x_placeholder_token(token):
         return token
     prefix, body, suffix = _split_punct(token)
     if not body:
@@ -227,6 +252,33 @@ class Label:
         # get us some distractor candidates
         min_length, max_length, min_freq, max_freq = threshold_func(self.words)
         distractor_opts = dict.get_potential_distractors(min_length, max_length, min_freq, max_freq, params)
+        enforce_length_match = bool(params.get('enforce_length_match', True))
+        target_lengths = []
+        for w in self.words:
+            sw = strip_punct(w)
+            if sw:
+                target_lengths.append(len(sw))
+        target_exact_len = None
+        target_preferred_len = None
+        if target_lengths:
+            unique_lens = sorted(set(target_lengths))
+            if len(unique_lens) == 1:
+                target_exact_len = unique_lens[0]
+            else:
+                target_preferred_len = int(round(sum(target_lengths) / float(len(target_lengths))))
+
+        def candidate_length_ok(candidate):
+            if not enforce_length_match:
+                return True
+            sc = strip_punct(candidate)
+            if not sc:
+                return False
+            clen = len(sc)
+            if target_exact_len is not None:
+                return clen == target_exact_len
+            if target_preferred_len is not None:
+                return clen == target_preferred_len
+            return True
         avoid=[]
         for word in self.words: # it's awkward if the distractor is the same as the real word
             avoid.append(strip_punct(word).lower())
@@ -267,13 +319,15 @@ class Label:
                 if dist_surp < min_surp_val:
                     min_surp_val = dist_surp
             return min_surp_val
-        def pick_best_from_pool(pool, allow_banned=False):
+        def pick_best_from_pool(pool, allow_banned=False, relax_length=False):
             """Pick the most implausible candidate from a pool, respecting filters."""
             local_best = None
             local_best_surp = float('-inf')
             for dist in pool:
                 dist_l = strip_punct(dist).lower()
                 if not dist_l:
+                    continue
+                if (not relax_length) and (not candidate_length_ok(dist)):
                     continue
                 if dist_l in avoid:
                     continue
@@ -290,6 +344,35 @@ class Label:
                     local_best_surp = s
                     local_best = dist
             return local_best, local_best_surp
+
+        def get_include_words_exact_len(length_value):
+            """Optional fallback pool from include_words for strict exact-length matching."""
+            include_path = params.get('include_words', None)
+            if not include_path:
+                return []
+            if not os.path.exists(include_path):
+                return []
+            out = []
+            seen = set()
+            try:
+                with open(include_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        w = line.strip()
+                        if not w:
+                            continue
+                        if len(strip_punct(w)) != length_value:
+                            continue
+                        if not re.match(r"^[A-Za-zÄÖÜäöüß]+$", strip_punct(w)):
+                            continue
+                        wl = strip_punct(w).lower()
+                        if wl in seen:
+                            continue
+                        seen.add(wl)
+                        out.append(w)
+            except Exception:
+                return []
+            random.shuffle(out)
+            return out
         # initialize
         best_word = None
         best_min_surp = float('-inf')
@@ -346,6 +429,8 @@ class Label:
                     dist_l = strip_punct(dist).lower()
                     if dist_l in banned_l or dist_l in avoid:
                         continue
+                    if not candidate_length_ok(dist):
+                        continue
                     # light continuation filter: skip if candidate literally contains the target
                     skip = False
                     for target in self.words:
@@ -400,6 +485,8 @@ class Label:
         for dist in distractor_opts:
             dist_l = strip_punct(dist).lower()
             if dist_l in banned_l or dist_l in avoid:
+                continue
+            if not candidate_length_ok(dist):
                 continue
             if is_propn_candidate(dist):
                 continue
@@ -460,6 +547,23 @@ class Label:
             cand, cand_surp = pick_best_from_pool(fallback, allow_banned=False)
             if cand is None:
                 cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True)
+            desired_len = target_exact_len if target_exact_len is not None else target_preferred_len
+            if cand is None and enforce_length_match and desired_len is not None:
+                # Strict exact-length fallback from full in-memory dictionary first.
+                try:
+                    exact_full_pool = [w.text for w in getattr(dict, 'words', []) if len(strip_punct(w.text)) == desired_len]
+                except Exception:
+                    exact_full_pool = []
+                if exact_full_pool:
+                    random.shuffle(exact_full_pool)
+                    cand, cand_surp = pick_best_from_pool(exact_full_pool, allow_banned=True)
+            if cand is None and enforce_length_match and desired_len is not None:
+                # Then try include_words (can contain short forms filtered from main dict).
+                include_pool = get_include_words_exact_len(desired_len)
+                if include_pool:
+                    cand, cand_surp = pick_best_from_pool(include_pool, allow_banned=True)
+            if cand is None:
+                cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True, relax_length=True)
             if cand is None:
                 try:
                     emergency_pool = [w.text for w in getattr(dict, 'words', [])]
@@ -469,6 +573,8 @@ class Label:
                     sample_n = min(800, len(emergency_pool))
                     fallback = random.sample(emergency_pool, sample_n)
                     cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True)
+                    if cand is None:
+                        cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True, relax_length=True)
             if cand is None:
                 # Final defensive fallback: force a real word token.
                 cand = "wort"
@@ -641,7 +747,9 @@ class Sentence_Set:
         for sentence in self.sentences: #give the sentences the distractors
             sentence.distractors = []
             if use_first_placeholder:
-                sentence.distractors.append("x-x-x")
+                first_len = len(strip_punct(sentence.words[0]))
+                first_placeholder = _placeholder_for_length(first_len)
+                sentence.distractors.append(_copy_edge_punct_no_case(sentence.words[0], first_placeholder))
             else:
                 first_dist = choose_first_word(sentence)
                 first_dist = copy_punct(sentence.words[0], first_dist)
@@ -677,6 +785,12 @@ class Sentence_Set:
                         sentence.distractors[j] = _normalize_distractor_token(sentence.distractors[j], d)
                 except Exception:
                     pass
+            # Keep first placeholder shape stable (no auto-capitalization side effects).
+            if use_first_placeholder and sentence.distractors:
+                first_len = len(strip_punct(sentence.words[0]))
+                sentence.distractors[0] = _copy_edge_punct_no_case(
+                    sentence.words[0], _placeholder_for_length(first_len)
+                )
             sentence.distractor_sentence = " ".join(sentence.distractors) #and in sentence_format
 
     def clean_up(self):
