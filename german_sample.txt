@@ -1,10 +1,10 @@
-sample;1;das ist ein test.
-sample;2;die katze saß auf der matte.
-sample;3;sie bestellte kaffee im café.
-sample;4;berlin ist eine große stadt.
-sample;5;wissenschaftler entdeckten eine neue art.
-sample;6;er schreibt jeden morgen code.
-sample;7;das rote auto raste am haus vorbei.
-sample;8;kinder spielten bis zur dämmerung im park.
-sample;9;maria kaufte blumen für sonntag.
-sample;10;der bergpfad war steil und felsig.
+sample;1;Das ist ein Test.
+sample;2;Die katze saß auf der Matte.
+sample;3;Sie bestellte Kaffee im Café.
+sample;4;Berlin ist eine große Stadt.
+sample;5;Wissenschaftler entdeckten eine neue Art.
+sample;6;Er schreibt jeden Morgen Code.
+sample;7;Das rote Auto raste am Haus vorbei.
+sample;8;Kinder spielten bis zur dämmerung im Park.
+sample;9;Maria kaufte Blumen für Sonntag.
+sample;10;Der Bergpfad war steil und felsig.

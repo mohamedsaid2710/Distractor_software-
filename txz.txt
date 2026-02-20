@@ -1,0 +1,10 @@
+sample;1;Das ist ein Test.;x-x-x schrecklichen absolvieren feierten;0 1 2 3
+sample;2;Die katze saß auf der Matte.;x-x-x bunte sonderlich ignorieren literarischen boten;0 1 2 3 4 5
+sample;3;Sie bestellte Kaffee im Café.;x-x-x benutzten lustig bemerkte peinlich;0 1 2 3 4
+sample;4;Berlin ist eine große Stadt.;x-x-x ermordeten erschienenen sowas baden;0 1 2 3 4
+sample;5;Wissenschaftler entdeckten eine neue Art.;x-x-x gewonnenen beschert zugesprochen jahrzehntelang;0 1 2 3 4
+sample;6;Er schreibt jeden Morgen Code.;x-x-x aussehen tages Gebiet alliierten;0 1 2 3 4
+sample;7;Das rote Auto raste am Haus vorbei.;x-x-x benachbarten unglaublich facto silberne ordentlichen freuen;0 1 2 3 4 5 6
+sample;8;Kinder spielten bis zur dämmerung im Park.;x-x-x schlicht woraufhin detailliert ereignete enormen woraufhin;0 1 2 3 4 5 6
+sample;9;Maria kaufte Blumen für Sonntag.;x-x-x heilen stirbt zugesprochen anderer;0 1 2 3 4
+sample;10;Der Bergpfad war steil und felsig.;x-x-x erteilen effektive Helfe ordentliche groben;0 1 2 3 4 5

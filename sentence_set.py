@@ -2,6 +2,7 @@ import logging
 from utils import copy_punct, strip_punct
 from limit_repeats import Repeatcounter
 import re
+import random
 
 # Common uppercase acronyms to preserve when used as distractors in English.
 _EN_ACRONYM_WHITELIST = {
@@ -159,7 +160,7 @@ class Sentence:
             self.label_sentence = " ".join([str(lab) for lab in self.labels])  # labels as sentence
             self.id = id  # item number
             self.tag = tag  # group/type
-            self.distractors = ["x-x-x"]  # we probably shouldn't hard code this in this way, but whatevs
+            self.distractors = []
             self.distractor_sentence = ""
             self.probs = {}  # using a dictionary so we can start at 1 and not 0
             self.surprisal = {}
@@ -217,8 +218,12 @@ class Label:
         """Given a parameters specified in params and stuff
         Find a distractor not on banned (banned=already used in same sentence set)
         That hopefully meets threshold"""
+        absolute_threshold_only = bool(params.get('absolute_threshold_only', False))
         for surprisal in self.surprisals:  # calculate desired surprisal thresholds
-            self.surprisal_targets.append(max(params["min_abs"], surprisal + params["min_delta"]))
+            if absolute_threshold_only:
+                self.surprisal_targets.append(params["min_abs"])
+            else:
+                self.surprisal_targets.append(max(params["min_abs"], surprisal + params["min_delta"]))
         # get us some distractor candidates
         min_length, max_length, min_freq, max_freq = threshold_func(self.words)
         distractor_opts = dict.get_potential_distractors(min_length, max_length, min_freq, max_freq, params)
@@ -227,6 +232,9 @@ class Label:
             avoid.append(strip_punct(word).lower())
         # normalize banned list to lowercase for case-insensitive comparison
         banned_l = [b.lower() for b in banned]
+        exclude_propn_candidates = bool(params.get('exclude_propn_candidates', False))
+        nlp_sp = _get_spacy_nlp() if exclude_propn_candidates else None
+        _propn_cache = {}
         def candidate_surprisal(i, candidate):
             """Score candidate using full-context method when the model provides it."""
             if hasattr(model, 'get_surprisal_from_hidden'):
@@ -236,9 +244,58 @@ class Label:
                 except Exception:
                     pass
             return model.get_surprisal(self.probs[i], candidate)
+        def is_propn_candidate(candidate):
+            if nlp_sp is None:
+                return False
+            key = strip_punct(candidate).lower()
+            if key in _propn_cache:
+                return _propn_cache[key]
+            try:
+                doc = nlp_sp(strip_punct(candidate))
+                val = bool(doc and len(doc) > 0 and doc[0].pos_ == 'PROPN')
+            except Exception:
+                val = False
+            _propn_cache[key] = val
+            return val
+        def candidate_min_surprisal(candidate):
+            """Minimum surprisal of candidate across all contexts for this label."""
+            min_surp_val = float('inf')
+            for i in range(len(self.probs)):
+                dist_surp = candidate_surprisal(i, candidate)
+                if dist_surp is None:
+                    return None
+                if dist_surp < min_surp_val:
+                    min_surp_val = dist_surp
+            return min_surp_val
+        def pick_best_from_pool(pool, allow_banned=False):
+            """Pick the most implausible candidate from a pool, respecting filters."""
+            local_best = None
+            local_best_surp = float('-inf')
+            for dist in pool:
+                dist_l = strip_punct(dist).lower()
+                if not dist_l:
+                    continue
+                if dist_l in avoid:
+                    continue
+                if is_propn_candidate(dist):
+                    continue
+                if (not allow_banned) and (dist_l in banned_l):
+                    continue
+                if not re.match(r"^[A-Za-zÄÖÜäöüß]+$", strip_punct(dist)):
+                    continue
+                s = candidate_min_surprisal(dist)
+                if s is None:
+                    continue
+                if s > local_best_surp:
+                    local_best_surp = s
+                    local_best = dist
+            return local_best, local_best_surp
         # initialize
-        best_word = "x-x-x"
-        best_min_surp = 0
+        best_word = None
+        best_min_surp = float('-inf')
+        # When enabled, always pick the highest-surprisal candidate instead of
+        # returning early on threshold satisfaction.
+        force_max_surprisal = bool(params.get('force_max_surprisal', False))
         # New strategy: pick the candidate that maximizes the minimum surprisal
         # across the sentences for this label (i.e., best worst-case surprisal).
         # decide whether this label refers to nouns (use POS info if available)
@@ -275,7 +332,7 @@ class Label:
         # Optional mode: try to match candidate mean surprisal to the target
         # mean surprisal of the real words. This is more precise than simple
         # thresholding and can be enabled with `params['match_surprisal']`.
-        match_surprisal_mode = bool(params.get('match_surprisal', False))
+        match_surprisal_mode = bool(params.get('match_surprisal', False)) and (not force_max_surprisal)
         if match_surprisal_mode and len(self.surprisals) > 0:
             # compute target mean surprisal for the real words in this label
             try:
@@ -344,6 +401,8 @@ class Label:
             dist_l = strip_punct(dist).lower()
             if dist_l in banned_l or dist_l in avoid:
                 continue
+            if is_propn_candidate(dist):
+                continue
             # light continuation filter: skip if candidate literally contains the target
             skip = False
             for target in self.words:
@@ -354,16 +413,14 @@ class Label:
             if skip:
                 continue
             # compute minimum surprisal of this candidate across all sentences
-            min_surp_val = float('inf')
-            for i in range(len(self.probs)):
-                dist_surp = candidate_surprisal(i, dist)
-                if dist_surp < min_surp_val:
-                    min_surp_val = dist_surp
+            min_surp_val = candidate_min_surprisal(dist)
             if min_surp_val is None:
                 continue
             if min_surp_val > best_min_surp:
                 best_min_surp = min_surp_val
                 best_word = dist
+            if force_max_surprisal:
+                continue
             # if any candidate already meets all surprisal targets, take it immediately
             meets_all = True
             for i in range(len(self.probs)):
@@ -395,6 +452,29 @@ class Label:
                     pass
                 self.distractor = cand
                 return self.distractor
+        # Hard guarantee: never return x-x-x for non-initial positions.
+        # If no candidate survived strict filters, relax constraints in stages.
+        if best_word is None:
+            fallback = list(distractor_opts)
+            random.shuffle(fallback)
+            cand, cand_surp = pick_best_from_pool(fallback, allow_banned=False)
+            if cand is None:
+                cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True)
+            if cand is None:
+                try:
+                    emergency_pool = [w.text for w in getattr(dict, 'words', [])]
+                except Exception:
+                    emergency_pool = []
+                if emergency_pool:
+                    sample_n = min(800, len(emergency_pool))
+                    fallback = random.sample(emergency_pool, sample_n)
+                    cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True)
+            if cand is None:
+                # Final defensive fallback: force a real word token.
+                cand = "wort"
+                cand_surp = float('-inf')
+            best_word = cand
+            best_min_surp = cand_surp
         # apply canonical casing from the dictionary before assigning
         try:
             best_word = dict.canonical_case(best_word)
@@ -423,8 +503,9 @@ class Label:
                     best_word = best_word[0:1].upper() + best_word[1:]
         except Exception:
             pass
-        logging.warning("Could not find a word to meet threshold for item %s, label %s, returning %s with %f min surp instead",
-            self.id, self.lab, best_word, best_min_surp)
+        if not force_max_surprisal:
+            logging.warning("Could not find a word to meet threshold for item %s, label %s, returning %s with %f min surp instead",
+                self.id, self.lab, best_word, best_min_surp)
         self.distractor = best_word
         return self.distractor
 
@@ -509,7 +590,64 @@ class Sentence_Set:
             dist = label.choose_distractor(model, d, threshold_func, params, banned)
             banned.append(dist)
             repeats.increment(dist)
+
+        def choose_first_word(sentence):
+            """Choose a real-word distractor for sentence-initial position.
+            Enforce exact stripped-length match whenever possible.
+            """
+            target = strip_punct(sentence.words[0])
+            target_l = target.lower()
+            target_len = len(target)
+            banned_l = set([strip_punct(b).lower() for b in banned])
+
+            min_length, max_length, min_freq, max_freq = threshold_func([sentence.words[0]])
+            opts = d.get_potential_distractors(min_length, max_length, min_freq, max_freq, params)
+            random.shuffle(opts)
+            for cand in opts:
+                base = strip_punct(cand)
+                if (not base) or (not re.match(r"^[A-Za-zÄÖÜäöüß]+$", base)):
+                    continue
+                if len(base) != target_len:
+                    continue
+                low = base.lower()
+                if low == target_l or low in banned_l:
+                    continue
+                return cand
+
+            # Fallback: search full dictionary pool for closest valid match.
+            best = None
+            best_diff = 10**9
+            try:
+                pool = [w.text for w in getattr(d, "words", [])]
+            except Exception:
+                pool = []
+            random.shuffle(pool)
+            for cand in pool:
+                base = strip_punct(cand)
+                if (not base) or (not re.match(r"^[A-Za-zÄÖÜäöüß]+$", base)):
+                    continue
+                low = base.lower()
+                if low == target_l or low in banned_l:
+                    continue
+                diff = abs(len(base) - target_len)
+                if diff < best_diff:
+                    best = cand
+                    best_diff = diff
+                    if diff == 0:
+                        break
+            return best if best is not None else "wort"
+
+        use_first_placeholder = bool(params.get("first_token_placeholder", True))
         for sentence in self.sentences: #give the sentences the distractors
+            sentence.distractors = []
+            if use_first_placeholder:
+                sentence.distractors.append("x-x-x")
+            else:
+                first_dist = choose_first_word(sentence)
+                first_dist = copy_punct(sentence.words[0], first_dist)
+                if lang == 'en':
+                    first_dist = _normalize_english_distractor_case(sentence.words[0], first_dist)
+                sentence.distractors.append(first_dist)
             for i in range(1, len(sentence.labels)):
                 lab = sentence.labels[i]
                 # we match distractors to their real words on punctuation
@@ -517,12 +655,6 @@ class Sentence_Set:
                 if lang == 'en':
                     distractor = _normalize_english_distractor_case(sentence.words[i], distractor)
                 sentence.distractors.append(distractor)
-            # Ensure the very first distractor slot remains the hard-coded placeholder
-            try:
-                sentence.distractors[0] = "x-x-x"
-            except Exception:
-                # if for some reason the list is empty or malformed, ensure placeholder present
-                sentence.distractors.insert(0, "x-x-x")
             # (No forced pseudoword replacements: system uses real-word distractors only)
             # Post-process casing: only apply when appropriate (e.g., German pipeline).
             # Allow explicit override via `params['apply_postcase']` (True/False).

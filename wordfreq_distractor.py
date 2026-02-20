@@ -143,8 +143,11 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         self.lang = "de"
         exclude = params.get("exclude_words", "exclude.txt")
         include = params.get("include_words", None)
+        lowercase_only = bool(params.get("lowercase_only", False))
+        min_word_len = int(params.get("min_word_len", 3))
         tsv_path = os.path.join(os.path.dirname(__file__), 'data', 'german_data', 'wordfreq_de.tsv')
         data_map = None
+        variant_map = {}
         
         # Load from wordfreq_de.tsv (TSV format: word\tzipf)
         if os.path.exists(tsv_path):
@@ -161,7 +164,12 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                                 z = float(parts[1])
                             except Exception:
                                 continue
-                            data_map[tok] = (orig, z)
+                            prev = data_map.get(tok)
+                            if (prev is None) or (z > prev[1]):
+                                data_map[tok] = (orig, z)
+                            if tok not in variant_map:
+                                variant_map[tok] = set()
+                            variant_map[tok].add(orig)
             except Exception:
                 data_map = None
 
@@ -184,13 +192,24 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
         if data_map is not None:
             for lower, (orig, z) in data_map.items():
+                forms = variant_map.get(lower, set([orig]))
                 if lower in exclusions_lower:
                     continue
-                if not re.match(r"^[A-Za-zÄÖÜäöüß]+$", orig):
+                cand = orig
+                if lowercase_only:
+                    lower_forms = [f for f in forms if re.match(r"^[a-zäöüß]+$", f)]
+                    if not lower_forms:
+                        continue
+                    # Prefer the longest lowercase surface form to avoid tiny artifacts.
+                    cand = sorted(lower_forms, key=lambda x: (-len(x), x))[0]
+                if not re.match(r"^[A-Za-zÄÖÜäöüß]+$", cand):
                     continue
-                if len(orig) < 3:
+                if len(cand) < min_word_len:
                     continue
-                if _is_english_dominant(orig):
+                # Require a vowel so candidates are clearly word-like.
+                if not re.search(r"[aeiouyäöüAEIOUYÄÖÜ]", cand):
+                    continue
+                if _is_english_dominant(cand):
                     continue
                 # enforce min zipf threshold
                 try:
@@ -203,7 +222,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                     freq_val = float(z) * math.log(10)
                 except Exception:
                     continue
-                self.words.append(distractor(orig, freq_val))
+                self.words.append(distractor(cand, freq_val))
         else:
             # final fallback: use wordfreq zipf and convert
             dict_map = wordfreq.get_frequency_dict('de')
@@ -212,6 +231,10 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 if lw in exclusions_lower:
                     continue
                 if not re.match(r"^[a-zäöüß]+$", w.lower()):
+                    continue
+                if len(w) < min_word_len:
+                    continue
+                if not re.search(r"[aeiouyäöüAEIOUYÄÖÜ]", w):
                     continue
                 try:
                     z = wordfreq.zipf_frequency(w, 'de')
@@ -229,8 +252,18 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         try:
             case_map = {}
             if data_map is not None:
-                for k, (orig, _) in data_map.items():
-                    case_map[k] = orig
+                for k, forms in variant_map.items():
+                    if lowercase_only:
+                        lower_forms = [f for f in forms if re.match(r"^[a-zäöüß]+$", f)]
+                        if lower_forms:
+                            case_map[k] = sorted(lower_forms, key=lambda x: (-len(x), x))[0]
+                    else:
+                        # Prefer titlecase if available; else longest variant.
+                        title_forms = [f for f in forms if len(f) > 1 and f[0].isupper() and f[1:].islower()]
+                        if title_forms:
+                            case_map[k] = sorted(title_forms, key=lambda x: (-len(x), x))[0]
+                        else:
+                            case_map[k] = sorted(forms, key=lambda x: (-len(x), x))[0]
             self.case_map = case_map
         except Exception:
             self.case_map = {}
@@ -287,10 +320,11 @@ def get_thresholds(words):
     freqs = []
     for word in words:
         stripped = utils.strip_punct(word)
-        lengths.append(len(stripped))
+        # Clamp word lengths to Boyce-style bins [3, 15] before range creation.
+        lengths.append(max(3, min(len(stripped), 15)))
         freqs.append(get_frequency_de(stripped))
-    min_length = min(min(lengths), 15)
-    max_length = max(max(lengths), 4)
+    min_length = min(lengths)
+    max_length = max(lengths)
     min_freq = min(min(freqs), 11)
     max_freq = max(max(freqs), 3)
     return min_length, max_length, min_freq, max_freq
@@ -302,10 +336,11 @@ def get_thresholds_en(words):
     freqs = []
     for word in words:
         stripped = utils.strip_punct(word)
-        lengths.append(len(stripped))
+        # Clamp word lengths to Boyce-style bins [3, 15] before range creation.
+        lengths.append(max(3, min(len(stripped), 15)))
         freqs.append(get_frequency_en(stripped))
-    min_length = min(min(lengths), 15)
-    max_length = max(max(lengths), 4)
+    min_length = min(lengths)
+    max_length = max(lengths)
     min_freq = min(min(freqs), 11)
     max_freq = max(max(freqs), 3)
     return min_length, max_length, min_freq, max_freq
