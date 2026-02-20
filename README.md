@@ -21,7 +21,7 @@ python -m pip install -r requirements.txt
 Generate distractors:
 
 ```bash
-python distract.py -i german_sample.txt -o german_ready.csv -p params_de.txt -f delim
+python distract.py -i german_sample.txt -o output.txt -p params_de.txt -f delim
 ```
 
 ## Documentation

@@ -1,5 +1,5 @@
 #These are required
-min_delta: 0.5
+min_delta: 10
 min_abs: 24
 num_to_test: 200
 
@@ -14,13 +14,13 @@ hf_model_name: "dbmdz/german-gpt2"
 use_wordfreq: True
 include_words: "data/german_data/vocab.txt"
 exclude_words: "exclude.txt"
-max_repeat: 0
-min_zipf: 3.5
+max_repeat: 2
+min_zipf: 2.5
 match_surprisal: False
 absolute_threshold_only: False
 lowercase_only: True
 min_word_len: 3
-force_max_surprisal: False
+force_max_surprisal: True
 device: "cuda"
 exclude_propn_candidates: True
 

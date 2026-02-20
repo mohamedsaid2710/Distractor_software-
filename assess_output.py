@@ -66,9 +66,9 @@ def score_distractor(model, sentence_obj, idx, token):
 
 def main():
     ap = argparse.ArgumentParser(description="Assess EN/DE distractor output quality")
-    ap.add_argument("--input", required=True, help="Input source file")
-    ap.add_argument("--output", required=True, help="Generated delim output file")
-    ap.add_argument("--params", default="params.txt", help="Params file used for generation")
+    ap.add_argument("-i", "--input", dest="input", required=True, help="Input source file")
+    ap.add_argument("-o", "--output", dest="output", required=True, help="Generated delim output file")
+    ap.add_argument("-p", "--params", dest="params", default="params.txt", help="Params file used for generation")
     ap.add_argument(
         "--min-delta",
         type=float,
@@ -203,4 +203,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
