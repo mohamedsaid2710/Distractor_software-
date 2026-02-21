@@ -93,7 +93,10 @@ class wordfreq_dict(distractor_dict):
                     return distractor_opts[:n]
                 distractor_opts.extend(new)
                 i += 1
-        logging.warning("Could not find enough distractors")
+        logging.warning(
+            "Could not find enough distractors for requested num_to_test; "
+            "continuing with smaller candidate pool (non-fatal)"
+        )
         return distractor_opts
 
 

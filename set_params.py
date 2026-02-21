@@ -8,26 +8,34 @@ def set_params(file):
     params = {}
     with open(file, 'r') as f:
         reader = csv.reader(f, delimiter=":", quotechar='"')
-        for row in reader:
-            if row != []:
-                if row[0].startswith('#'):
-                    pass
-                else:
-                    raw = row[1].strip()
-                    low = raw.lower()
-                    # Accept common non-Python literals (true/false/null) used in params files
-                    if low == 'true':
-                        params[row[0]] = True
-                    elif low == 'false':
-                        params[row[0]] = False
-                    elif low in ('null', 'none'):
-                        params[row[0]] = None
-                    else:
-                        try:
-                            params[row[0]] = ast.literal_eval(raw)
-                        except Exception:
-                            # Fallback: keep as raw string (no surrounding quotes expected)
-                            params[row[0]] = raw.strip('"')
+        for lineno, row in enumerate(reader, start=1):
+            if not row:
+                continue
+
+            key = row[0].strip()
+            if (not key) or key.startswith('#'):
+                continue
+
+            if len(row) < 2:
+                logging.warning("Skipping malformed params line %d in %s: %r", lineno, file, row)
+                continue
+
+            # Keep content after first ":" so values can contain colons.
+            raw = ":".join(row[1:]).strip()
+            low = raw.lower()
+            # Accept common non-Python literals (true/false/null) used in params files
+            if low == 'true':
+                params[key] = True
+            elif low == 'false':
+                params[key] = False
+            elif low in ('null', 'none'):
+                params[key] = None
+            else:
+                try:
+                    params[key] = ast.literal_eval(raw)
+                except Exception:
+                    # Fallback: keep as raw string (no surrounding quotes expected)
+                    params[key] = raw.strip('"')
     # Check required parameters
     if params.get('min_delta', None) is None:
         logging.error("Min delta must be provided")

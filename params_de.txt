@@ -3,6 +3,7 @@ min_delta: 10
 min_abs: 24
 num_to_test: 200
 
+ 
 # These are not required, but if they aren't here you get the defaults
 dictionary_loc: "wordfreq_distractor"
 dictionary_class: "wordfreq_German_zipf_dict"
