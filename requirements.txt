@@ -1,5 +1,4 @@
 # NLP libraries
-# Updated to modern versions to support .safetensors model files and Python 3.8+
 torch>=2.0.0
 transformers>=4.30.0
 huggingface_hub>=0.20.0

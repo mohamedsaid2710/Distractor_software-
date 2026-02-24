@@ -22,7 +22,6 @@ absolute_threshold_only: False
 lowercase_only: True
 min_word_len: 3
 force_max_surprisal: True
-device: "cuda"
 exclude_propn_candidates: True 
 enforce_length_match: True 
 first_token_placeholder: True 

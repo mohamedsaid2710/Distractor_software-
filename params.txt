@@ -24,6 +24,5 @@ match_surprisal: False
 absolute_threshold_only: False
 force_max_surprisal: True 
 exclude_propn_candidates : True 
-device: "cuda" 
 enforce_length_match: True 
 first_token_placeholder: True  
