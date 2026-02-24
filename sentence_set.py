@@ -15,25 +15,29 @@ _EN_ACRONYM_WHITELIST = {
 _X_PLACEHOLDER_RE = re.compile(r"^x(?:-x)*$", re.IGNORECASE)
 
 # lazy SpaCy pipeline (initialized on first use)
-_spacy_nlp = None
+_spacy_nlp = {}
 
-def _get_spacy_nlp():
-    """Return a loaded spaCy German pipeline if available (de_core_news_sm), else None."""
+def _get_spacy_nlp(lang='de'):
+    """Return a loaded spaCy pipeline for `lang` ('de' or 'en'), else None."""
     global _spacy_nlp
-    if _spacy_nlp is None:
+    key = 'en' if str(lang or '').lower().startswith('en') else 'de'
+    if key in _spacy_nlp:
+        return _spacy_nlp[key]
+    try:
+        import spacy
+    except Exception:
+        _spacy_nlp[key] = None
+        return None
+
+    model_names = ['en_core_web_sm', 'en_core_web_md'] if key == 'en' else ['de_core_news_sm', 'de_core_news_md']
+    for model_name in model_names:
         try:
-            import spacy
-            try:
-                _spacy_nlp = spacy.load('de_core_news_sm')
-            except Exception:
-                # try a medium model name if present
-                try:
-                    _spacy_nlp = spacy.load('de_core_news_md')
-                except Exception:
-                    _spacy_nlp = None
+            _spacy_nlp[key] = spacy.load(model_name)
+            return _spacy_nlp[key]
         except Exception:
-            _spacy_nlp = None
-    return _spacy_nlp
+            continue
+    _spacy_nlp[key] = None
+    return None
 
 
 def _split_punct(token):
@@ -116,7 +120,7 @@ def _detect_language(params):
     return 'en'
 
 
-def _normalize_distractor_token(token, dict_obj):
+def _normalize_distractor_token(token, dict_obj, lang='de'):
     """Normalize casing for a single distractor token using POS from spaCy and
     dictionary titlecase variant when available.
     """
@@ -128,7 +132,7 @@ def _normalize_distractor_token(token, dict_obj):
         return token
     # Use spaCy for POS
     upos = None
-    nlp_sp = _get_spacy_nlp()
+    nlp_sp = _get_spacy_nlp(lang)
     if nlp_sp is not None:
         try:
             doc = nlp_sp(body)
@@ -243,6 +247,7 @@ class Label:
         """Given a parameters specified in params and stuff
         Find a distractor not on banned (banned=already used in same sentence set)
         That hopefully meets threshold"""
+        lang = _detect_language(params)
         absolute_threshold_only = bool(params.get('absolute_threshold_only', False))
         for surprisal in self.surprisals:  # calculate desired surprisal thresholds
             if absolute_threshold_only:
@@ -285,7 +290,7 @@ class Label:
         # normalize banned list to lowercase for case-insensitive comparison
         banned_l = [b.lower() for b in banned]
         exclude_propn_candidates = bool(params.get('exclude_propn_candidates', False))
-        nlp_sp = _get_spacy_nlp() if exclude_propn_candidates else None
+        nlp_sp = _get_spacy_nlp(lang) if exclude_propn_candidates else None
         _propn_cache = {}
         def candidate_surprisal(i, candidate):
             """Score candidate using full-context method when the model provides it."""
@@ -650,10 +655,12 @@ class Sentence_Set:
         for sentence in self.sentences:
             sentence.do_surprisal(model)
 
-    def make_labels(self):
+    def make_labels(self, params=None):
         """Regroups the stuff in the sentence items into by-label groups"""
+        params = params or {}
+        lang = _detect_language(params)
         # SpaCy-only POS tagging; else no POS
-        nlp_sp = _get_spacy_nlp()
+        nlp_sp = _get_spacy_nlp(lang)
         if nlp_sp is not None:
             for sentence in self.sentences:
                 try:
@@ -782,7 +789,7 @@ class Sentence_Set:
             if apply_postcase:
                 try:
                     for j in range(len(sentence.distractors)):
-                        sentence.distractors[j] = _normalize_distractor_token(sentence.distractors[j], d)
+                        sentence.distractors[j] = _normalize_distractor_token(sentence.distractors[j], d, lang=lang)
                 except Exception:
                     pass
             # Keep first placeholder shape stable (no auto-capitalization side effects).

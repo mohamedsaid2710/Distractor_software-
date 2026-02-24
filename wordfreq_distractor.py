@@ -136,6 +136,72 @@ class wordfreq_English_dict(wordfreq_dict):
                 self.words.append(distractor(word, freq))
 
 
+class wordfreq_English_zipf_dict(wordfreq_dict):
+    """Zipf-based English dictionary with German-style filtering knobs.
+
+    Supported params:
+    - min_zipf (float, default 3.0)
+    - min_word_len (int, default 3)
+    - lowercase_only (bool, default True)
+    - include_words (path, optional)
+    - exclude_words (path, optional)
+    """
+
+    def __init__(self, params={}):
+        self.lang = "en"
+        exclude = params.get("exclude_words", "exclude.txt")
+        include = params.get("include_words", None)
+        lowercase_only = bool(params.get("lowercase_only", True))
+        min_word_len = int(params.get("min_word_len", 3))
+        min_zipf = float(params.get("min_zipf", 3.0))
+
+        exclusions_lower = set()
+        if exclude is not None:
+            try:
+                with open(exclude, "r", encoding="utf-8") as f:
+                    exclusions_lower = set(line.strip().lower() for line in f if line.strip())
+            except Exception:
+                exclusions_lower = set()
+
+        include_words = None
+        if include is not None and os.path.exists(include):
+            try:
+                with open(include, "r", encoding="utf-8") as f:
+                    include_words = [line.strip() for line in f if line.strip()]
+            except Exception:
+                include_words = None
+
+        dict_map = wordfreq.get_frequency_dict("en")
+        source_words = include_words if include_words is not None else dict_map.keys()
+
+        self.words = []
+        seen = set()
+        alpha_re = r"^[a-z]+$" if lowercase_only else r"^[A-Za-z]+$"
+        vowel_re = r"[aeiouyAEIOUY]"
+        for raw in source_words:
+            token = raw.lower() if lowercase_only else raw
+            low = token.lower()
+            if low in seen:
+                continue
+            if low in exclusions_lower:
+                continue
+            if not re.match(alpha_re, token):
+                continue
+            if len(token) < min_word_len:
+                continue
+            if not re.search(vowel_re, token):
+                continue
+            try:
+                z = wordfreq.zipf_frequency(token, "en")
+            except Exception:
+                continue
+            if z < min_zipf:
+                continue
+            freq_val = z * math.log(10)
+            self.words.append(distractor(token, freq_val))
+            seen.add(low)
+
+
 class wordfreq_German_zipf_dict(wordfreq_dict):
     """Zipf-based German dictionary loaded from wordfreq_de.tsv.
     Frequencies stored on distractor objects are in natural-log units (zipf * ln(10))

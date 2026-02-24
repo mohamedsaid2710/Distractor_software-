@@ -13,25 +13,14 @@ from main import run_stuff
 
 def main():
     parser = argparse.ArgumentParser(description="Run distractor generation")
-    # positional args for backwards compatibility
-    parser.add_argument('pos_input', nargs='?', help='Input file (positional, for backwards compat)')
-    parser.add_argument('pos_output', nargs='?', help='Output file (positional, for backwards compat)')
-    # named args
-    parser.add_argument('-i', '--input', dest='input', help='Input file')
-    parser.add_argument('-o', '--output', dest='output', help='Output file')
-    parser.add_argument('-p', '--parameters', type=str, default=None, help='Parameters file (default: params.txt)')
+    parser.add_argument('-i', '--input', dest='input', required=True, help='Input file')
+    parser.add_argument('-o', '--output', dest='output', required=True, help='Output file')
+    parser.add_argument('-p', '--parameters', type=str, default='params.txt', help='Parameters file (default: params.txt)')
     parser.add_argument('-f', '--format', choices=['ibex', 'delim'], default='delim', help='Output format')
     args = parser.parse_args()
 
-    # allow either positional or named input/output
-    infile = args.input if args.input is not None else args.pos_input
-    outfile = args.output if args.output is not None else args.pos_output
-    if infile is None or outfile is None:
-        parser.error('the following arguments are required: input output (positional) or -i/--input and -o/--output')
-
     try:
-        params = args.parameters if args.parameters is not None else 'params.txt'
-        run_stuff(infile, outfile, parameters=params, outformat=args.format)
+        run_stuff(args.input, args.output, parameters=args.parameters, outformat=args.format)
     except ValueError as e:
         import traceback
         traceback.print_exc()

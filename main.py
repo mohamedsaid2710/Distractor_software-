@@ -40,7 +40,7 @@ def run_stuff(infile, outfile, parameters="params.txt", outformat="delim"):
     for ss in sents.values():
         ss.do_model(m)
         ss.do_surprisals(m)
-        ss.make_labels()
+        ss.make_labels(params)
         ss.do_distractors(m, d, threshold_func, params, repeats)
         ss.clean_up()
     

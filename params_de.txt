@@ -11,8 +11,8 @@ threshold_loc: "wordfreq_distractor"
 threshold_name: "get_thresholds"
 model_loc: "models.german_code.model"
 model_class: "GermanScorer"
+language: "de"
 hf_model_name: "dbmdz/german-gpt2"
-use_wordfreq: True
 include_words: "data/german_data/vocab.txt"
 exclude_words: "exclude.txt"
 max_repeat: 2
@@ -23,5 +23,7 @@ lowercase_only: True
 min_word_len: 3
 force_max_surprisal: True
 device: "cuda"
-exclude_propn_candidates: True
-
+exclude_propn_candidates: True 
+enforce_length_match: True 
+first_token_placeholder: True 
+apply_postcase: True

@@ -12,6 +12,10 @@ This implementation has been adapted and now differs from the original in models
 
 ## Quick Start
 
+Python version:
+
+- Recommended: Python `3.12` (see `.python-version`).
+
 Install dependencies:
 
 ```bash
