@@ -1,7 +1,7 @@
 #These are required
 min_delta: 10
 min_abs: 24
-num_to_test: 200
+num_to_test: 10
 
  
 # These are not required, but if they aren't here you get the defaults

@@ -24,11 +24,11 @@ def ibexify(infile, outfile):
                     )
                     continue
                 tag, item_id, sentence, distractors = row[0], row[1], row[2], row[3]
-                sentence = sentence.replace('"', '\\"')
-                distractors = distractors.replace('"', '\\"')
+                # format: [["tag", 'id'], "Maze", {s:"<sentence>", a:"<distractor>"}],
+                s = sentence.replace('"', '\\"')
+                d = distractors.replace('"', '\\"')
                 out.write(
-                    f'[[\"{tag}\", {repr(item_id)}], \"Maze\", '
-                    f'{{s:\"{sentence}\", a:\"{distractors}\"}}], \n'
+                    f'[["{tag}", {repr(item_id)}], "Maze", {{s:"{s}", a:"{d}"}}], \n'
                 )
 
 

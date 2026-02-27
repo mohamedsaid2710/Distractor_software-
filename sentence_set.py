@@ -243,7 +243,7 @@ class Label:
         # pos will be filled by make_labels if available; placeholder None
         self.pos.append(None)
 
-    def choose_distractor(self, model, dict, threshold_func, params, banned):
+    def choose_distractor(self, model, dictionary, threshold_func, params, banned):
         """Given a parameters specified in params and stuff
         Find a distractor not on banned (banned=already used in same sentence set)
         That hopefully meets threshold"""
@@ -256,7 +256,7 @@ class Label:
                 self.surprisal_targets.append(max(params["min_abs"], surprisal + params["min_delta"]))
         # get us some distractor candidates
         min_length, max_length, min_freq, max_freq = threshold_func(self.words)
-        distractor_opts = dict.get_potential_distractors(min_length, max_length, min_freq, max_freq, params)
+        distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params)
         enforce_length_match = bool(params.get('enforce_length_match', True))
         target_lengths = []
         for w in self.words:
@@ -407,7 +407,7 @@ class Label:
                     wlow = w.lower()
                     try:
                         # if dict provides an explicit Titlecase variant, treat as noun
-                        if hasattr(dict, 'has_titlecase_variant') and dict.has_titlecase_variant(w):
+                        if hasattr(dictionary, 'has_titlecase_variant') and dictionary.has_titlecase_variant(w):
                             target_is_noun = True
                             break
                     except Exception:
@@ -466,13 +466,13 @@ class Label:
                         best_candidate = dist
                 if best_candidate:
                     try:
-                        cand = dict.canonical_case(best_candidate)
+                        cand = dictionary.canonical_case(best_candidate)
                     except Exception:
                         cand = best_candidate
                     try:
                         if target_is_noun:
                             try:
-                                title_var = dict.get_titlecase_variant(best_candidate)
+                                title_var = dictionary.get_titlecase_variant(best_candidate)
                             except Exception:
                                 title_var = None
                             if title_var:
@@ -522,7 +522,7 @@ class Label:
             if meets_all:
                 # apply canonical casing from the dictionary before assigning
                 try:
-                    cand = dict.canonical_case(dist)
+                    cand = dictionary.canonical_case(dist)
                 except Exception:
                     cand = dist
                 # if target is a noun, prefer an exact Titlecase variant from the
@@ -531,7 +531,7 @@ class Label:
                 try:
                     if target_is_noun:
                         try:
-                            title_var = dict.get_titlecase_variant(dist)
+                            title_var = dictionary.get_titlecase_variant(dist)
                         except Exception:
                             title_var = None
                         if title_var:
@@ -588,7 +588,7 @@ class Label:
             best_min_surp = cand_surp
         # apply canonical casing from the dictionary before assigning
         try:
-            best_word = dict.canonical_case(best_word)
+            best_word = dictionary.canonical_case(best_word)
         except Exception:
             best_word = best_word
         # if target isn't a noun, prefer lowercased fallback
@@ -604,7 +604,7 @@ class Label:
                 # attempt to fetch a precise titlecase variant from the dict
                 title_var = None
                 try:
-                    title_var = dict.get_titlecase_variant(best_word)
+                    title_var = dictionary.get_titlecase_variant(best_word)
                 except Exception:
                     title_var = None
                 if title_var:
@@ -638,7 +638,7 @@ class Sentence_Set:
             first_label = sentence.labels[0]
             self.first_labels = self.first_labels.union(set([first_label]))
             self.label_ids = self.label_ids.union(sentence.labels[1:])
-            if self.first_labels & self.label_ids != set():
+            if self.first_labels & self.label_ids:
                 logging.error("Labels of first words cannot match labels of later words in the same set in item %s", self.id)
                 raise ValueError()
         else:
@@ -804,4 +804,4 @@ class Sentence_Set:
         """Removes memory intensive things like label items and prob distributions"""
         self.labels = {}
         for sentence in self.sentences:
-            sentence.probs = []
+            sentence.probs = {}

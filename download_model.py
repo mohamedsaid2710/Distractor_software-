@@ -16,7 +16,7 @@ MODEL_SPECS = {
 }
 
 # Keep only the files needed by the current pipeline.
-IGNORE_PATTERNS = ["*.msgpack", "*.h5", "*.safetensors", "*.onnx", "onnx/*", "*/onnx/*"]
+IGNORE_PATTERNS = ["*.msgpack", "*.h5", "*.onnx", "onnx/*", "*/onnx/*"]
 
 
 def has_weights(local_dir: str) -> bool:

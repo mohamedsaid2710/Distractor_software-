@@ -44,29 +44,11 @@ class wordfreq_dict(distractor_dict):
     def get_words(self, length_low, length_high, freq_low, freq_high):
         """Returns a list of words within specified ranges"""
         matches = []
-        lang = getattr(self, "lang", None)
         for word in self.words:
             # basic range checks
             if not (freq_low <= word.freq <= freq_high and length_low <= word.len <= length_high):
                 continue
-            w = word.text
-            # German-specific cleanup filters should not affect English candidates.
-            if lang == "de":
-                # drop short all-caps acronyms (e.g., 'SPD', 'EU')
-                try:
-                    if w.isupper() and len(w) <= 4:
-                        continue
-                except Exception:
-                    pass
-                # drop tokens that are more frequent in English than German
-                try:
-                    en_z = wordfreq.zipf_frequency(w, 'en')
-                    de_z = wordfreq.zipf_frequency(w, 'de')
-                    if en_z - de_z > 0.3:
-                        continue
-                except Exception:
-                    pass
-            matches.append(w)
+            matches.append(word.text)
         return matches
 
     def get_potential_distractors(self, min_length, max_length, min_freq, max_freq, params):
@@ -110,8 +92,8 @@ class wordfreq_English_dict(wordfreq_dict):
         self.lang = "en"
         exclude = params.get("exclude_words", "exclude.txt")
         include = params.get("include_words", None)
-        dict = wordfreq.get_frequency_dict('en')
-        keys = dict.keys()
+        freq_dict = wordfreq.get_frequency_dict('en')
+        keys = freq_dict.keys()
         self.words = []
         exclusions = []
 
@@ -132,7 +114,7 @@ class wordfreq_English_dict(wordfreq_dict):
         for word in words:
             if re.match("^[a-z]*$", word):
                 freq = math.log(
-                    dict[word] * 10 ** 9)  # we canonically calculate frequency as log occurrences/1 billion words
+                    freq_dict[word] * 10 ** 9)  # we canonically calculate frequency as log occurrences/1 billion words
                 self.words.append(distractor(word, freq))
 
 
@@ -171,8 +153,8 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
             except Exception:
                 include_words = None
 
-        dict_map = wordfreq.get_frequency_dict("en")
-        source_words = include_words if include_words is not None else dict_map.keys()
+        freq_dict = wordfreq.get_frequency_dict("en")
+        source_words = include_words if include_words is not None else freq_dict.keys()
 
         self.words = []
         seen = set()

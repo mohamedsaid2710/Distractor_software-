@@ -70,7 +70,9 @@ def read_input(filename):
             id = row[1]
             word_sentence = row[2]
             # Tokenize: capture contiguous letter sequences (including ÄÖÜäöüß and accented letters)
-            words = re.findall(r"[A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ]+", word_sentence, flags=re.UNICODE)
+            # Also keep apostrophes and hyphens inside words so contractions (it's)
+            # and hyphenated compounds (well-known) are treated as single tokens.
+            words = re.findall(r"[A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ]+(?:[-'][A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ]+)*", word_sentence, flags=re.UNICODE)
             if len(row) > 3 and row[3].strip() != "":
                 label_sentence = row[3]
                 labels = label_sentence.split()
