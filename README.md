@@ -80,6 +80,7 @@ sample;3;القطة جلست على السجادة
 | `force_max_surprisal` | `False` | `True` = rank by implausibility; `False` = threshold-first |
 | `enforce_length_match` | `True` | Require same-length distractors |
 | `first_token_placeholder` | `True` | Use `x-x-x` placeholder for sentence-initial position |
+| `early_position_boost` | `0` | Extra surprisal for early positions (reduces plausible distractors at sentence start) |
 | `apply_postcase` | auto | German noun casing post-processing (auto-enabled for German configs) |
 
 See the [Config Reference](https://github.com/mohamedsaid2710/Distractor_software-/wiki/Config-Reference) for the full parameter catalog.
