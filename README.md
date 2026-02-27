@@ -1,6 +1,6 @@
 # Distractor Software
 
-**Maze-style distractor stimulus generator for psycholinguistic experiments in English and German.**
+**Maze-style distractor stimulus generator for psycholinguistic experiments in English, German, and Arabic.**
 
 Built on Transformer-based language models (GPT-2), the pipeline selects real-word distractors that are contextually implausible while matching the target word in length and frequency range.
 
@@ -28,16 +28,23 @@ python distract.py -i English_sample.txt -o output_en.txt -p params.txt -f delim
 python distract.py -i german_sample.txt -o output_de.txt -p params_de.txt -f delim
 ```
 
+### Arabic
+
+```bash
+python distract.py -i arabic_sample.txt -o output_ar.txt -p params_ar.txt -f delim
+```
+
 > **Note:** Models download automatically from Hugging Face on first run. For offline use, run `python download_model.py --all` first and set `hf_model_name` in your params file to the local path.
 
 ## Features
 
-- **Two languages** — English (`gpt2-medium`) and German (`dbmdz/german-gpt2`) pipelines
+- **Three languages** — English (`gpt2-medium`), German (`dbmdz/german-gpt2`), and Arabic (`aubmindlab/aragpt2-medium`)
 - **Two selection modes** — threshold-first (Mode A) or max-implausibility ranking (Mode B)
 - **Two output formats** — `delim` (semicolon-delimited table) and `ibex` (PCIbex-ready lines)
 - **Length matching** — distractors match target word length
 - **Frequency filtering** — candidate pools built from Zipf-frequency dictionaries with configurable floors
 - **German noun casing** — automatic post-processing capitalizes German nouns (via spaCy POS tagging)
+- **Arabic diacritics handling** — tashkeel stripped for consistent frequency lookups and candidate matching
 - **Quality assessment** — built-in `assess_output.py` validates placeholder policy, word form, length, and surprisal margins
 
 ## CLI Usage
@@ -60,6 +67,7 @@ Semicolon-delimited text with columns: `tag`, `id`, `sentence`, and optional `la
 ```
 sample;1;The cat sat on the mat.
 sample;2;Die Katze saß auf der Matte.;0 1 2 3 4 5
+sample;3;القطة جلست على السجادة
 ```
 
 ## Key Parameters

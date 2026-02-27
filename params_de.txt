@@ -18,6 +18,8 @@ exclude_words: "exclude.txt"
 max_repeat: 2
 min_zipf: 2.5
 match_surprisal: False
+early_position_boost: 5
+early_position_count: 2
 absolute_threshold_only: False
 lowercase_only: True
 min_word_len: 3

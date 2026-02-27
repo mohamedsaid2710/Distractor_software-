@@ -1,0 +1,28 @@
+#These are required
+min_delta: 10
+min_abs: 24
+num_to_test: 200
+
+
+# These are not required, but if they aren't here you get the defaults
+dictionary_loc: "wordfreq_distractor"
+dictionary_class: "wordfreq_Arabic_zipf_dict"
+threshold_loc: "wordfreq_distractor"
+threshold_name: "get_thresholds_ar"
+model_loc: "models.arabic_code.model"
+model_class: "ArabicScorer"
+language: "ar"
+hf_model_name: "aubmindlab/aragpt2-medium"
+exclude_words: "exclude_ar.txt"
+include_words: None
+max_repeat: 2
+min_zipf: 3.0
+lowercase_only: False
+min_word_len: 2
+force_max_surprisal: True
+early_position_boost: 5
+early_position_count: 2
+exclude_propn_candidates: False
+enforce_length_match: True
+first_token_placeholder: True
+apply_postcase: False

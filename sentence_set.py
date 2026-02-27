@@ -106,10 +106,12 @@ def _normalize_english_distractor_case(source_token, distractor_token):
 
 
 def _detect_language(params):
-    """Infer language code ('en' or 'de') from params."""
+    """Infer language code ('en', 'de', or 'ar') from params."""
     lang = (params.get('language', '') or '').strip().lower()
     if lang.startswith('de'):
         return 'de'
+    if lang.startswith('ar'):
+        return 'ar'
     if lang.startswith('en'):
         return 'en'
     model_loc = (params.get('model_loc', '') or '').lower()
@@ -117,6 +119,8 @@ def _detect_language(params):
     hf_name = (params.get('hf_model_name', '') or '').lower()
     if ('german' in model_loc) or ('german' in dict_cls) or ('dbmdz' in hf_name):
         return 'de'
+    if ('arabic' in model_loc) or ('arabic' in dict_cls) or ('aragpt' in hf_name) or ('aubmindlab' in hf_name):
+        return 'ar'
     return 'en'
 
 
@@ -249,11 +253,32 @@ class Label:
         That hopefully meets threshold"""
         lang = _detect_language(params)
         absolute_threshold_only = bool(params.get('absolute_threshold_only', False))
+
+        # --- Early position boost ---
+        # Raises the surprisal threshold for positions near the start of the
+        # sentence where the language model has little context, producing more
+        # clearly-implausible distractors and reducing participant error rates
+        # at those positions.
+        early_boost = float(params.get('early_position_boost', 0))
+        early_count = int(params.get('early_position_count', 2))
+        is_early = False
+        try:
+            label_idx = int(self.lab)
+            # label 0 is the placeholder (first_token_placeholder), so
+            # early positions are labels 1 through early_count.
+            if 1 <= label_idx <= early_count:
+                is_early = True
+        except (ValueError, TypeError):
+            pass
+
         for surprisal in self.surprisals:  # calculate desired surprisal thresholds
             if absolute_threshold_only:
-                self.surprisal_targets.append(params["min_abs"])
+                base = params["min_abs"]
             else:
-                self.surprisal_targets.append(max(params["min_abs"], surprisal + params["min_delta"]))
+                base = max(params["min_abs"], surprisal + params["min_delta"])
+            if is_early:
+                base += early_boost
+            self.surprisal_targets.append(base)
         # get us some distractor candidates
         min_length, max_length, min_freq, max_freq = threshold_func(self.words)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params)
@@ -340,7 +365,7 @@ class Label:
                     continue
                 if (not allow_banned) and (dist_l in banned_l):
                     continue
-                if not re.match(r"^[A-Za-zÄÖÜäöüß]+$", strip_punct(dist)):
+                if not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", strip_punct(dist)):
                     continue
                 s = candidate_min_surprisal(dist)
                 if s is None:
@@ -367,7 +392,7 @@ class Label:
                             continue
                         if len(strip_punct(w)) != length_value:
                             continue
-                        if not re.match(r"^[A-Za-zÄÖÜäöüß]+$", strip_punct(w)):
+                        if not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", strip_punct(w)):
                             continue
                         wl = strip_punct(w).lower()
                         if wl in seen:
@@ -718,7 +743,7 @@ class Sentence_Set:
             random.shuffle(opts)
             for cand in opts:
                 base = strip_punct(cand)
-                if (not base) or (not re.match(r"^[A-Za-zÄÖÜäöüß]+$", base)):
+                if (not base) or (not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", base)):
                     continue
                 if len(base) != target_len:
                     continue
@@ -737,7 +762,7 @@ class Sentence_Set:
             random.shuffle(pool)
             for cand in pool:
                 base = strip_punct(cand)
-                if (not base) or (not re.match(r"^[A-Za-zÄÖÜäöüß]+$", base)):
+                if (not base) or (not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", base)):
                     continue
                 low = base.lower()
                 if low == target_l or low in banned_l:

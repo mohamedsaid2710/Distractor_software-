@@ -28,7 +28,7 @@ from utils import strip_punct
 
 
 # Latin letters including German umlauts and common accented chars.
-WORD_RE = re.compile(r"^[A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ]+$")
+WORD_RE = re.compile(r"^[A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ\u0600-\u06FF]+$")
 X_PLACEHOLDER_RE = re.compile(r"^x(?:-x)*$", re.IGNORECASE)
 
 

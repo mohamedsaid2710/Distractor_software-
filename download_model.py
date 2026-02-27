@@ -13,6 +13,10 @@ MODEL_SPECS = {
         "repo_id": "openai-community/gpt2-medium",
         "local_dir": "models/openai-community-gpt2-medium",
     },
+    "arabic": {
+        "repo_id": "aubmindlab/aragpt2-medium",
+        "local_dir": "models/aubmindlab-aragpt2-medium",
+    },
 }
 
 # Keep only the files needed by the current pipeline.
@@ -62,18 +66,21 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Download local model files for this repo")
     parser.add_argument("--english", action="store_true", help="download openai-community/gpt2-medium")
     parser.add_argument("--german", action="store_true", help="download dbmdz/german-gpt2")
-    parser.add_argument("--all", action="store_true", help="download both models")
+    parser.add_argument("--arabic", action="store_true", help="download aubmindlab/aragpt2-medium")
+    parser.add_argument("--all", action="store_true", help="download all models")
     args = parser.parse_args()
 
-    if args.all or (not args.english and not args.german):
-        download_model("english")
-        download_model("german")
+    if args.all or (not args.english and not args.german and not args.arabic):
+        for name in MODEL_SPECS:
+            download_model(name)
         return
 
     if args.english:
         download_model("english")
     if args.german:
         download_model("german")
+    if args.arabic:
+        download_model("arabic")
 
 
 if __name__ == "__main__":

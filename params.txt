@@ -21,6 +21,8 @@ min_word_len: 3
 lowercase_only: True
 apply_postcase: False
 match_surprisal: False
+early_position_boost: 5
+early_position_count: 2
 absolute_threshold_only: False
 force_max_surprisal: True 
 exclude_propn_candidates : True 

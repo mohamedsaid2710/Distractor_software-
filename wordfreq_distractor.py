@@ -395,3 +395,110 @@ def get_thresholds_en(words):
     min_freq = min(min(freqs), 11)
     max_freq = max(max(freqs), 3)
     return min_length, max_length, min_freq, max_freq
+
+
+# ---------------------------------------------------------------------------
+# Arabic support
+# ---------------------------------------------------------------------------
+
+# Arabic diacritical marks (tashkeel) Unicode range: U+0610–U+061A, U+064B–U+065F, U+0670
+_ARABIC_DIACRITICS_RE = re.compile(
+    r'[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7\u06E8\u06EA-\u06ED]'
+)
+
+
+def strip_arabic_diacritics(text):
+    """Remove Arabic diacritical marks (tashkeel/harakat) from text."""
+    return _ARABIC_DIACRITICS_RE.sub('', text)
+
+
+# Regex for Arabic-only word tokens (core Arabic block).
+_ARABIC_WORD_RE = re.compile(r'^[\u0600-\u06FF]+$')
+
+
+class wordfreq_Arabic_zipf_dict(wordfreq_dict):
+    """Zipf-based Arabic dictionary built from the wordfreq library.
+
+    Arabic has no uppercase/lowercase distinction, so casing logic is skipped.
+    Diacritics (tashkeel) are stripped for consistent matching.
+    """
+
+    def __init__(self, params={}):
+        self.lang = "ar"
+        exclude = params.get("exclude_words", "exclude_ar.txt")
+        include = params.get("include_words", None)
+        min_word_len = int(params.get("min_word_len", 2))
+        min_zipf = float(params.get("min_zipf", 3.0))
+
+        exclusions_lower = set()
+        if exclude is not None:
+            try:
+                with open(exclude, "r", encoding="utf-8") as f:
+                    exclusions_lower = set(
+                        strip_arabic_diacritics(line.strip()) for line in f if line.strip()
+                    )
+            except Exception:
+                exclusions_lower = set()
+
+        include_words = None
+        if include is not None and os.path.exists(include):
+            try:
+                with open(include, "r", encoding="utf-8") as f:
+                    include_words = [line.strip() for line in f if line.strip()]
+            except Exception:
+                include_words = None
+
+        freq_dict = wordfreq.get_frequency_dict("ar")
+        source_words = include_words if include_words is not None else freq_dict.keys()
+
+        self.words = []
+        seen = set()
+        for raw in source_words:
+            token = strip_arabic_diacritics(raw)
+            if token in seen:
+                continue
+            if token in exclusions_lower:
+                continue
+            if not _ARABIC_WORD_RE.match(token):
+                continue
+            if len(token) < min_word_len:
+                continue
+            try:
+                z = wordfreq.zipf_frequency(token, "ar")
+            except Exception:
+                continue
+            if z < min_zipf:
+                continue
+            freq_val = z * math.log(10)
+            self.words.append(distractor(token, freq_val))
+            seen.add(token)
+
+    def canonical_case(self, token):
+        """Arabic has no casing; return as-is."""
+        return token
+
+    def get_titlecase_variant(self, token):
+        """Arabic has no casing; always returns None."""
+        return None
+
+
+def get_frequency_ar(word):
+    """Returns Arabic Zipf frequency converted to natural-log units."""
+    return wordfreq.zipf_frequency(strip_arabic_diacritics(word), 'ar') * math.log(10)
+
+
+def get_thresholds_ar(words):
+    """Arabic thresholds based on Arabic frequency."""
+    lengths = []
+    freqs = []
+    for word in words:
+        stripped = utils.strip_punct(word)
+        # Arabic words can be shorter; clamp to [2, 15].
+        lengths.append(max(2, min(len(stripped), 15)))
+        freqs.append(get_frequency_ar(stripped))
+    min_length = min(lengths)
+    max_length = max(lengths)
+    min_freq = min(min(freqs), 11)
+    max_freq = max(max(freqs), 3)
+    return min_length, max_length, min_freq, max_freq
+

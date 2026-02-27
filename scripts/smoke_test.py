@@ -18,7 +18,7 @@ def main() -> None:
     if not compileall.compile_dir(ROOT, quiet=1):
         raise RuntimeError("Smoke test failed: Python compilation errors were found.")
 
-    for path in ("params.txt", "params_de.txt"):
+    for path in ("params.txt", "params_de.txt", "params_ar.txt"):
         full_path = os.path.join(ROOT, path)
         params = set_params(full_path)
         for key in ("min_delta", "min_abs", "num_to_test"):
@@ -27,6 +27,7 @@ def main() -> None:
 
     read_input(os.path.join(ROOT, "English_sample.txt"))
     read_input(os.path.join(ROOT, "german_sample.txt"))
+    read_input(os.path.join(ROOT, "arabic_sample.txt"))
 
     print("Smoke test passed")
 
