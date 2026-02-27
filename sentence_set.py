@@ -406,6 +406,10 @@ class Label:
         # initialize
         best_word = None
         best_min_surp = float('-inf')
+        # For Mode B + early positions: separately track the best candidate
+        # that also meets the boosted threshold, so the boost is effective.
+        best_qualified_word = None
+        best_qualified_surp = float('-inf')
         # When enabled, always pick the highest-surprisal candidate instead of
         # returning early on threshold satisfaction.
         force_max_surprisal = bool(params.get('force_max_surprisal', False))
@@ -536,6 +540,17 @@ class Label:
             if min_surp_val > best_min_surp:
                 best_min_surp = min_surp_val
                 best_word = dist
+            # In Mode B + early positions: also track the best candidate that
+            # meets the boosted threshold.  After the loop we prefer this over
+            # the unconstrained best, making the boost effective in Mode B.
+            if force_max_surprisal and is_early and early_boost > 0:
+                meets_boosted = all(
+                    candidate_surprisal(j, dist) >= self.surprisal_targets[j]
+                    for j in range(len(self.probs))
+                )
+                if meets_boosted and min_surp_val > best_qualified_surp:
+                    best_qualified_surp = min_surp_val
+                    best_qualified_word = dist
             if force_max_surprisal:
                 continue
             # if any candidate already meets all surprisal targets, take it immediately
@@ -569,6 +584,12 @@ class Label:
                     pass
                 self.distractor = cand
                 return self.distractor
+        # Mode B + early position boost: prefer the best candidate that meets
+        # the boosted threshold.  Falls back to the unconstrained best_word if
+        # nothing passed the threshold.
+        if best_qualified_word is not None:
+            best_word = best_qualified_word
+            best_min_surp = best_qualified_surp
         # Hard guarantee: never return x-x-x for non-initial positions.
         # If no candidate survived strict filters, relax constraints in stages.
         if best_word is None:

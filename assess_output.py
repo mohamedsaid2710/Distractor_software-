@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assess distractor output quality for English or German pipelines.
+"""Assess distractor output quality for English, German, and Arabic pipelines.
 
 Checks:
 - First token placeholder policy (from params).
@@ -27,7 +27,7 @@ from set_params import set_params
 from utils import strip_punct
 
 
-# Latin letters including German umlauts and common accented chars.
+# Latin letters, German umlauts, accented chars, and Arabic characters.
 WORD_RE = re.compile(r"^[A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ\u0600-\u06FF]+$")
 X_PLACEHOLDER_RE = re.compile(r"^x(?:-x)*$", re.IGNORECASE)
 
@@ -65,7 +65,7 @@ def score_distractor(model, sentence_obj, idx, token):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Assess EN/DE distractor output quality")
+    ap = argparse.ArgumentParser(description="Assess EN/DE/AR distractor output quality")
     ap.add_argument("-i", "--input", dest="input", required=True, help="Input source file")
     ap.add_argument("-o", "--output", dest="output", required=True, help="Generated delim output file")
     ap.add_argument("-p", "--params", dest="params", default="params.txt", help="Params file used for generation")
