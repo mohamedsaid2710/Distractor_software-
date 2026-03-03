@@ -7,7 +7,7 @@ from output import save_ibex, save_delim
 
 
 #these are the default values, but can be overridden by parameters file 
-def run_stuff(infile, outfile, parameters="params.txt", outformat="delim"):
+def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
     """Takes an input file, and an output file location
     Does the whole distractor thing (according to specified parameters)
     Writes in outformat"""

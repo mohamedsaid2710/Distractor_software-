@@ -13,7 +13,7 @@ model_loc: "models.english_code.model"
 model_class: "EnglishScorer"
 language: "en"
 hf_model_name: "openai-community/gpt2-medium"
-exclude_words: "exclude.txt"
+exclude_words: "exclude_en.txt"
 include_words: None
 max_repeat: 1
 min_zipf: 3.0

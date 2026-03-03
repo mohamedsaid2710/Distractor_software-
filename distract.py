@@ -15,7 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run distractor generation")
     parser.add_argument('-i', '--input', dest='input', required=True, help='Input file')
     parser.add_argument('-o', '--output', dest='output', required=True, help='Output file')
-    parser.add_argument('-p', '--parameters', type=str, default='params.txt', help='Parameters file (default: params.txt)')
+    parser.add_argument('-p', '--parameters', type=str, default='params_en.txt', help='Parameters file (default: params_en.txt)')
     parser.add_argument('-f', '--format', choices=['ibex', 'delim'], default='delim', help='Output format')
     args = parser.parse_args()
 

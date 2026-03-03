@@ -68,7 +68,7 @@ def main():
     ap = argparse.ArgumentParser(description="Assess EN/DE/AR distractor output quality")
     ap.add_argument("-i", "--input", dest="input", required=True, help="Input source file")
     ap.add_argument("-o", "--output", dest="output", required=True, help="Generated delim output file")
-    ap.add_argument("-p", "--params", dest="params", default="params.txt", help="Params file used for generation")
+    ap.add_argument("-p", "--params", dest="params", default="params_en.txt", help="Params file used for generation")
     ap.add_argument(
         "--min-delta",
         type=float,

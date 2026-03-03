@@ -46,8 +46,8 @@ def process_file(infile='test_output.txt', outfile='test_output_fixed.txt'):
         except Exception:
             nlp_sp = None
     # load dictionary to obtain titlecase variants when available
-    d = wordfreq_German_zipf_dict({'exclude_words': os.path.join(os.path.dirname(__file__), 'exclude.txt'),
-                                    'include_words': os.path.join(os.path.dirname(__file__), 'data', 'german_data', 'wordfreq_de.tsv')})
+    d = wordfreq_German_zipf_dict({'exclude_words': os.path.join(os.path.dirname(__file__), 'exclude_de.txt'),
+                                    'include_words': None})
 
     # Decide output path (avoid truncating when doing in-place process)
     same_path = os.path.abspath(infile) == os.path.abspath(outfile)

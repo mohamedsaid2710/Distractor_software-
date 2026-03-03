@@ -90,7 +90,7 @@ class wordfreq_English_dict(wordfreq_dict):
 
     def __init__(self, params={}):
         self.lang = "en"
-        exclude = params.get("exclude_words", "exclude.txt")
+        exclude = params.get("exclude_words", "exclude_en.txt")
         include = params.get("include_words", None)
         freq_dict = wordfreq.get_frequency_dict('en')
         keys = freq_dict.keys()
@@ -131,7 +131,7 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
 
     def __init__(self, params={}):
         self.lang = "en"
-        exclude = params.get("exclude_words", "exclude.txt")
+        exclude = params.get("exclude_words", "exclude_en.txt")
         include = params.get("include_words", None)
         lowercase_only = bool(params.get("lowercase_only", True))
         min_word_len = int(params.get("min_word_len", 3))
@@ -185,173 +185,99 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
 
 
 class wordfreq_German_zipf_dict(wordfreq_dict):
-    """Zipf-based German dictionary loaded from wordfreq_de.tsv.
-    Frequencies stored on distractor objects are in natural-log units (zipf * ln(10))
-    to be consistent with other code.
+    """Zipf-based German dictionary built from the wordfreq library.
+
+    Frequencies stored on distractor objects are in natural-log units
+    (zipf * ln(10)) to be consistent with other code.
+    German noun casing is handled by apply_postcase in sentence_set.py
+    (spaCy POS tagging + .capitalize()).
+
+    Supported params:
+    - min_zipf (float, default 3.0)
+    - min_word_len (int, default 3)
+    - lowercase_only (bool, default True)
+    - include_words (path, optional)
+    - exclude_words (path, optional)
     """
 
     def __init__(self, params={}):
         self.lang = "de"
-        exclude = params.get("exclude_words", "exclude.txt")
+        exclude = params.get("exclude_words", "exclude_de.txt")
         include = params.get("include_words", None)
-        lowercase_only = bool(params.get("lowercase_only", False))
+        lowercase_only = bool(params.get("lowercase_only", True))
         min_word_len = int(params.get("min_word_len", 3))
-        tsv_path = os.path.join(os.path.dirname(__file__), 'data', 'german_data', 'wordfreq_de.tsv')
-        data_map = None
-        variant_map = {}
-        
-        # Load from wordfreq_de.tsv (TSV format: word\tzipf)
-        if os.path.exists(tsv_path):
-            try:
-                data_map = {}
-                with open(tsv_path, 'r', encoding='utf-8') as f:
-                    next(f)  # skip header
-                    for line in f:
-                        parts = line.strip().split('\t')
-                        if len(parts) >= 2:
-                            orig = parts[0].strip()
-                            tok = orig.lower()
-                            try:
-                                z = float(parts[1])
-                            except Exception:
-                                continue
-                            prev = data_map.get(tok)
-                            if (prev is None) or (z > prev[1]):
-                                data_map[tok] = (orig, z)
-                            if tok not in variant_map:
-                                variant_map[tok] = set()
-                            variant_map[tok].add(orig)
-            except Exception:
-                data_map = None
+        min_zipf = float(params.get("min_zipf", 3.0))
 
-        # Respect `min_zipf` parameter to avoid selecting very rare tokens
-        MIN_ZIPF = params.get('min_zipf', 3.0)
-
-        # build word list from data_map or fallback to wordfreq
-        self.words = []
-        exclusions = []
+        exclusions_lower = set()
         if exclude is not None:
             try:
-                with open(exclude, 'r', encoding='utf-8') as f:
+                with open(exclude, "r", encoding="utf-8") as f:
                     for line in f:
-                        word = line.strip()
-                        if word:
-                            exclusions.append(word)
+                        w = line.strip()
+                        if w and not w.startswith("#"):
+                            exclusions_lower.add(w.lower())
             except Exception:
-                exclusions = []
-        exclusions_lower = set([e.lower() for e in exclusions])
+                exclusions_lower = set()
 
-        if data_map is not None:
-            for lower, (orig, z) in data_map.items():
-                forms = variant_map.get(lower, set([orig]))
-                if lower in exclusions_lower:
-                    continue
-                cand = orig
-                if lowercase_only:
-                    lower_forms = [f for f in forms if re.match(r"^[a-zäöüß]+$", f)]
-                    if not lower_forms:
-                        continue
-                    # Prefer the longest lowercase surface form to avoid tiny artifacts.
-                    cand = sorted(lower_forms, key=lambda x: (-len(x), x))[0]
-                if not re.match(r"^[A-Za-zÄÖÜäöüß]+$", cand):
-                    continue
-                if len(cand) < min_word_len:
-                    continue
-                # Require a vowel so candidates are clearly word-like.
-                if not re.search(r"[aeiouyäöüAEIOUYÄÖÜ]", cand):
-                    continue
-                if _is_english_dominant(cand):
-                    continue
-                # enforce min zipf threshold
-                try:
-                    if float(z) < MIN_ZIPF:
-                        continue
-                except Exception:
-                    continue
-                # store freq as ln(count) equivalent: zipf*ln(10)
-                try:
-                    freq_val = float(z) * math.log(10)
-                except Exception:
-                    continue
-                self.words.append(distractor(cand, freq_val))
-        else:
-            # final fallback: use wordfreq zipf and convert
-            dict_map = wordfreq.get_frequency_dict('de')
-            for w in dict_map.keys():
-                lw = w.lower()
-                if lw in exclusions_lower:
-                    continue
-                if not re.match(r"^[a-zäöüß]+$", w.lower()):
-                    continue
-                if len(w) < min_word_len:
-                    continue
-                if not re.search(r"[aeiouyäöüAEIOUYÄÖÜ]", w):
-                    continue
-                try:
-                    z = wordfreq.zipf_frequency(w, 'de')
-                    # enforce min zipf threshold for fallback source as well
-                    if z < MIN_ZIPF:
-                        continue
-                    if _is_english_dominant(w):
-                        continue
-                    freq_val = z * math.log(10)
-                    self.words.append(distractor(w, freq_val))
-                except Exception:
-                    continue
+        include_words = None
+        if include is not None and os.path.exists(include):
+            try:
+                with open(include, "r", encoding="utf-8") as f:
+                    include_words = [line.strip() for line in f if line.strip()]
+            except Exception:
+                include_words = None
 
-        # build case_map for titlecase lookup
-        try:
-            case_map = {}
-            if data_map is not None:
-                for k, forms in variant_map.items():
-                    if lowercase_only:
-                        lower_forms = [f for f in forms if re.match(r"^[a-zäöüß]+$", f)]
-                        if lower_forms:
-                            case_map[k] = sorted(lower_forms, key=lambda x: (-len(x), x))[0]
-                    else:
-                        # Prefer titlecase if available; else longest variant.
-                        title_forms = [f for f in forms if len(f) > 1 and f[0].isupper() and f[1:].islower()]
-                        if title_forms:
-                            case_map[k] = sorted(title_forms, key=lambda x: (-len(x), x))[0]
-                        else:
-                            case_map[k] = sorted(forms, key=lambda x: (-len(x), x))[0]
-            self.case_map = case_map
-        except Exception:
-            self.case_map = {}
+        freq_dict = wordfreq.get_frequency_dict("de")
+        source_words = include_words if include_words is not None else freq_dict.keys()
+
+        self.words = []
+        seen = set()
+        for raw in source_words:
+            w = raw.strip()
+            lw = w.lower()
+            if lw in seen:
+                continue
+            if lw in exclusions_lower:
+                continue
+            if not re.match(r"^[a-zäöüß]+$", lw):
+                continue
+            if len(lw) < min_word_len:
+                continue
+            # Require a vowel so candidates are clearly word-like
+            if not re.search(r"[aeiouyäöü]", lw):
+                continue
+            # Reject likely abbreviations: short words with very few vowels
+            # (e.g., nsu, olg, edv, sap, vip, akp). Real German words of
+            # length 3-4 almost always have >= 2 vowels or >= 50% vowel ratio.
+            vowel_count = len(re.findall(r"[aeiouyäöü]", lw))
+            if len(lw) <= 4 and vowel_count <= 1:
+                continue
+            if _is_english_dominant(lw):
+                continue
+            try:
+                z = wordfreq.zipf_frequency(lw, "de")
+            except Exception:
+                continue
+            if z < min_zipf:
+                continue
+            freq_val = z * math.log(10)
+            self.words.append(distractor(lw, freq_val))
+            seen.add(lw)
+
+        # No external case_map needed — apply_postcase uses spaCy + .capitalize()
+        self.case_map = {}
 
     def canonical_case(self, token):
-        low = token.lower()
-        return self.case_map.get(low, token)
+        """Return token as-is (casing handled by apply_postcase in sentence_set.py)."""
+        return token
 
     def get_titlecase_variant(self, token):
-        low = token.lower()
-        cand = self.case_map.get(low)
-        if cand and len(cand) > 1 and cand[0].isupper() and cand[1:].islower():
-            return cand
+        """No pre-built titlecase map; apply_postcase falls back to .capitalize()."""
         return None
 
 
 def get_frequency_de(word):
-    """Returns German frequency from wordfreq_de.tsv or wordfreq fallback."""
-    tsv_path = os.path.join(os.path.dirname(__file__), 'data', 'german_data', 'wordfreq_de.tsv')
-    w = word.lower()
-    # Try wordfreq_de.tsv
-    if os.path.exists(tsv_path):
-        try:
-            with open(tsv_path, 'r', encoding='utf-8') as f:
-                next(f)  # skip header
-                for line in f:
-                    parts = line.strip().split('\t')
-                    if len(parts) >= 2:
-                        tok = parts[0].strip().lower()
-                        if tok == w:
-                            try:
-                                return float(parts[1]) * math.log(10)
-                            except Exception:
-                                break
-        except Exception:
-            pass
-    # fallback to wordfreq library
+    """Returns German Zipf frequency converted to natural-log units."""
     return wordfreq.zipf_frequency(word, 'de') * math.log(10)
 
 

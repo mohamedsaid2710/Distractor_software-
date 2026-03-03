@@ -19,7 +19,7 @@ pip install -r requirements.txt
 ### English
 
 ```bash
-python distract.py -i English_sample.txt -o output_en.txt -p params.txt -f delim
+python distract.py -i English_sample.txt -o output_en.txt -p params_en.txt -f delim
 ```
 
 ### German
@@ -57,7 +57,7 @@ python distract.py -i INPUT -o OUTPUT [-p PARAMS] [-f {delim,ibex}]
 |----------|----------|---------|-------------|
 | `-i` | yes | — | Input file (semicolon-delimited) |
 | `-o` | yes | — | Output file path |
-| `-p` | no | `params.txt` | Parameters file |
+| `-p` | no | `params_en.txt` | Parameters file |
 | `-f` | no | `delim` | Output format: `delim` or `ibex` |
 
 ## Input Format
@@ -94,8 +94,12 @@ See the [Config Reference](https://github.com/mohamedsaid2710/Distractor_softwar
 ## Quality Assessment
 
 ```bash
-python assess_output.py -i English_sample.txt -o output_en.txt -p params.txt --min-delta 0 --strict
+python assess_output.py -i English_sample.txt -o output_en.txt -p params_en.txt --min-delta 0 --strict
 ```
+
+> **Tip:** The fastest way to improve distractor quality for any language is to
+> expand the exclude file (`exclude_en.txt`, `exclude_de.txt`, `exclude_ar.txt`).
+> Review output, spot bad words, and add them — the list is meant to grow over time.
 
 ## Documentation
 
