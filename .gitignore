@@ -23,11 +23,15 @@ test_output*.txt
 # System files
 .DS_Store
 
+# IDE / editor
+.vscode/
+.idea/
+
 # Temporary/Working files
 requirements_working.txt
 
 # Large Model Files (Over 100MB) - MUST IGNORE THESE
-# You must download these locally. GitHub will REJECT the push if you include them.
+
 models/dbmdz-german-gpt2/
 models/openai-community-gpt2-medium/
 models/aubmindlab-aragpt2-medium/
