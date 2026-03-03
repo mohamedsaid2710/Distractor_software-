@@ -105,4 +105,6 @@ Full usage guide, configuration reference, and troubleshooting:
 
 ## License
 
-See the original [Maze repository](https://github.com/vboyce/Maze) for licensing information.
+MIT License. See [LICENSE](LICENSE) for details.
+
+Based on the original [Maze repository](https://github.com/vboyce/Maze) by Victoria Boyce.

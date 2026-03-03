@@ -9,7 +9,6 @@ venv/
 env/
 .env
 uv.lock
-pyproject.toml
 
 # Generated Output Files
 test_output.csv
@@ -55,7 +54,6 @@ models/dbmdz-german-gpt2/[0-9a-f]*[0-9a-f]
 models/openai-community-gpt2-medium/[0-9a-f]*[0-9a-f]
 models/aubmindlab-aragpt2-medium/[0-9a-f]*[0-9a-f]
 
-# Keep wiki content out of main repo
+# Keep generated wiki builds out (GitHub wiki is separate)
 /docs/wiki/
-/wiki/
 *.wiki/
