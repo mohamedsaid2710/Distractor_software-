@@ -91,6 +91,14 @@ See the [Config Reference](https://github.com/mohamedsaid2710/Distractor_softwar
 2. If the pool is too small, the search widens in both directions (lower and higher frequency bins).
 3. Final distractor choice is surprisal-driven (mode-dependent) — frequency constrains the pool but does not directly pick the winner.
 
+## A Note on Sub-word Tokenization
+
+GPT-2 uses Byte Pair Encoding (BPE), which often splits a single word into multiple sub-word tokens (e.g., *"unbelievable"* → `["un", "believ", "able"]`). This software handles multi-token words correctly: it computes the **joint surprisal across all sub-tokens** by summing the conditional log-probabilities of each sub-token given its full left context (including prior sub-tokens of the same word). Formally, this applies the chain rule of probability:
+
+**−log₂ P(word | context) = −log₂ P(t₁ | ctx) − log₂ P(t₂ | ctx, t₁) − … − log₂ P(tₖ | ctx, t₁, …, tₖ₋₁)**
+
+This means the sub-word splitting introduces **no information loss or approximation errors** in the surprisal calculation.
+
 ## Quality Assessment
 
 ```bash
