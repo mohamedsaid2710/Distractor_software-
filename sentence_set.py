@@ -128,12 +128,11 @@ def _normalize_distractor_token(token, dict_obj, lang='de', source_pos=None):
     """Normalize casing for a single distractor token.
 
     When *source_pos* is provided (the POS tag of the **original** word,
-    obtained from full-sentence spaCy tagging), it is used directly.  This
-    is far more reliable than re-tagging the isolated distractor word,
-    which lacks sentence context and frequently misclassifies nouns.
+    obtained from full-sentence spaCy tagging), it is used directly.
 
-    Falls back to isolated-word spaCy tagging only when *source_pos* is
-    None (e.g. when POS tags were unavailable).
+    When *source_pos* is None, the dictionary's case_map (built during
+    init via 3-context majority-vote spaCy tagging) is consulted to
+    decide whether the word is a noun.
     """
     # preserve placeholder
     if _is_x_placeholder_token(token):
@@ -142,21 +141,8 @@ def _normalize_distractor_token(token, dict_obj, lang='de', source_pos=None):
     if not body:
         return token
 
-    # Determine POS: prefer the source word's POS (tagged in sentence context)
-    upos = source_pos
-    if upos is None:
-        # Fallback: tag the distractor in isolation (less reliable)
-        nlp_sp = _get_spacy_nlp(lang)
-        if nlp_sp is not None:
-            try:
-                doc = nlp_sp(body)
-                if doc and len(doc) > 0:
-                    upos = doc[0].pos_
-            except Exception:
-                upos = None
-
     # if noun or proper noun, prefer dictionary titlecase variant
-    if upos in ('NOUN', 'PROPN'):
+    if source_pos in ('NOUN', 'PROPN'):
         try:
             title_var = dict_obj.get_titlecase_variant(body)
         except Exception:
@@ -166,9 +152,8 @@ def _normalize_distractor_token(token, dict_obj, lang='de', source_pos=None):
         else:
             new_body = body.lower().capitalize()
     else:
-        # If POS is unavailable, prefer an explicit Titlecase variant from the
-        # dictionary when present. Otherwise, preserve any existing capitalization
-        # (so earlier canonicalization isn't undone); finally fall back to lower.
+        # Consult dictionary case_map (reliable: built via 3-context
+        # majority-vote spaCy tagging during dictionary init).
         try:
             title_var = dict_obj.get_titlecase_variant(body)
         except Exception:
@@ -176,11 +161,8 @@ def _normalize_distractor_token(token, dict_obj, lang='de', source_pos=None):
         if title_var:
             new_body = title_var
         else:
-            # if body already contains uppercase letters, assume it's intentionally cased
-            if any(c.isupper() for c in body):
-                new_body = body
-            else:
-                new_body = body.lower()
+            # Not a noun → lowercase
+            new_body = body.lower()
     return prefix + new_body + suffix
 
 def no_duplicates(my_list):

@@ -4,7 +4,7 @@ transformers>=4.30.0
 huggingface_hub>=0.20.0
 spacy>=3.5.0
 wordfreq>=3.0.0
-nltk>=3.8.0
+
 
 # To install the German model for spaCy:
 # python -m spacy download de_core_news_sm
