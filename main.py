@@ -17,7 +17,7 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
     params = set_params(parameters)
     sents = read_input(infile)
     dict_class = getattr(importlib.import_module(params.get("dictionary_loc", "wordfreq_distractor")),
-                         params.get("dictionary_class", "wordfreq_English_dict"))
+                         params.get("dictionary_class", "wordfreq_English_zipf_dict"))
     d = dict_class(params)
     model_class = getattr(importlib.import_module(params.get("model_loc", "models.english_code.model")),
                           params.get("model_class", "EnglishScorer"))

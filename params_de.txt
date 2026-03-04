@@ -8,7 +8,7 @@ num_to_test: 200
 dictionary_loc: "wordfreq_distractor"
 dictionary_class: "wordfreq_German_zipf_dict"
 threshold_loc: "wordfreq_distractor"
-threshold_name: "get_thresholds"
+threshold_name: "get_thresholds_de"
 model_loc: "models.german_code.model"
 model_class: "GermanScorer"
 language: "de"

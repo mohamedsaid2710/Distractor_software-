@@ -1,1 +1,3 @@
-# Arabic model adapter package
+from .model import ArabicScorer
+
+__all__ = ["ArabicScorer"]

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Post-process to enforce noun capitalization on distractors.
+"""Post-process to enforce German noun capitalization on distractors.
 
 Rules:
-- If a distractor is POS-tagged as NOUN or PROPN (via spaCy), Titlecase it.
+- If a distractor word is a noun (identified during dictionary construction
+  via 3-context majority-vote spaCy tagging), Titlecase it.
 - Otherwise, lowercase the distractor.
 - Preserve x-placeholders (`x`, `x-x`, `x-x-x`, ...) and punctuation.
 """
@@ -10,10 +11,6 @@ import os
 import re
 import tempfile
 import shutil
-try:
-    import spacy
-except Exception:
-    spacy = None
 
 from wordfreq_distractor import wordfreq_German_zipf_dict
 
@@ -32,20 +29,12 @@ def process_file(infile='test_output.txt', outfile='test_output_fixed.txt'):
 
     - Supports in-place operation when infile == outfile by writing to a temp
       file and atomically replacing the destination.
-    - Uses spaCy POS (NOUN/PROPN) to Titlecase; otherwise lowercases.
-    - Preserves x-placeholders and punctuation; prefers dictionary Titlecase variants.
+    - Capitalizes distractor words that are nouns (per the dictionary's
+      case_map, built via spaCy majority-vote tagging during dictionary init).
+    - Preserves x-placeholders and punctuation.
     """
-    # spaCy-only backend. If spaCy model missing, continue without POS.
-    nlp_sp = None
-    if spacy is not None:
-        try:
-            try:
-                nlp_sp = spacy.load('de_core_news_sm')
-            except Exception:
-                nlp_sp = spacy.load('de_core_news_md')
-        except Exception:
-            nlp_sp = None
-    # load dictionary to obtain titlecase variants when available
+    # Load dictionary — its __init__ batch-tags all words with spaCy
+    # to build the noun case_map.
     d = wordfreq_German_zipf_dict({'exclude_words': os.path.join(os.path.dirname(__file__), 'exclude_de.txt'),
                                     'include_words': None})
 
@@ -69,54 +58,31 @@ def process_file(infile='test_output.txt', outfile='test_output_fixed.txt'):
             if len(parts) < 4:
                 fout.write(line + '\n')
                 continue
+
             distractor_field = parts[3]
             toks = distractor_field.split()
             newtoks = []
             for tok in toks:
                 prefix, body, suffix = split_punct(tok)
                 if body and X_PLACEHOLDER_RE.fullmatch(body):
-                    # Keep placeholder shape stable and lowercase.
                     newtoks.append(prefix + body.lower() + suffix)
                     continue
                 if not body:
                     newtoks.append(tok)
                     continue
-                # tag the body with spaCy if available
-                # IMPORTANT: tag the LOWERCASE version to avoid SpaCy misclassifying capitalized verbs as proper nouns (e.g., "Kommst" → PROPN instead of VERB)
-                 
-                upos = None
-                if nlp_sp is not None:
-                    try:
-                        doc = nlp_sp(body.lower())
-                        if doc and len(doc) > 0:
-                            upos = doc[0].pos_
-                    except Exception:
-                        upos = None
-                # decide casing: POS-first to avoid over-capitalizing function words
-                # Handle common acronyms and proper names that should stay uppercase
+
+                # Decide casing based on the DISTRACTOR word's own POS.
+                # The dictionary's case_map was built during init by tagging
+                # every word with spaCy in 3 sentence contexts (majority vote).
                 if body.upper() in {'USA', 'EU', 'UN', 'CDU', 'SPD', 'FDP', 'NATO', 'EZB'}:
                     new_body = body.upper()
-                elif upos in ('NOUN', 'PROPN'):
-                    # prefer dictionary titlecase if available, else Titlecase
-                    try:
-                        tv = d.get_titlecase_variant(body)
-                    except Exception:
-                        tv = None
-                    new_body = tv if tv else body.lower().capitalize()
                 else:
-                    # Not a noun according to spaCy, OR spaCy is missing.
-                    if nlp_sp is None:
-                        # Fallback when no POS tagger: rely on the probability dictionary.
-                        # If the dictionary says the most frequent form is Titlecased (e.g. "Euro", "März"), use it.
-                        # This handles obvious nouns even without spaCy.
-                        try:
-                            tv = d.get_titlecase_variant(body)
-                            new_body = tv if tv else body
-                        except Exception:
-                            new_body = body  # Leave as is if we can't check
+                    tv = d.get_titlecase_variant(body)
+                    if tv:
+                        # Dictionary says it's a noun → capitalize
+                        new_body = tv
                     else:
-                        # We have POS tags, and this is NOT a noun.
-                        # Force lowercase to correct any erroneously capitalized non-nouns.
+                        # Not a noun → lowercase
                         new_body = body.lower()
                 newtoks.append(prefix + new_body + suffix)
             parts[3] = ' '.join(newtoks)

@@ -124,9 +124,16 @@ def _detect_language(params):
     return 'en'
 
 
-def _normalize_distractor_token(token, dict_obj, lang='de'):
-    """Normalize casing for a single distractor token using POS from spaCy and
-    dictionary titlecase variant when available.
+def _normalize_distractor_token(token, dict_obj, lang='de', source_pos=None):
+    """Normalize casing for a single distractor token.
+
+    When *source_pos* is provided (the POS tag of the **original** word,
+    obtained from full-sentence spaCy tagging), it is used directly.  This
+    is far more reliable than re-tagging the isolated distractor word,
+    which lacks sentence context and frequently misclassifies nouns.
+
+    Falls back to isolated-word spaCy tagging only when *source_pos* is
+    None (e.g. when POS tags were unavailable).
     """
     # preserve placeholder
     if _is_x_placeholder_token(token):
@@ -134,16 +141,20 @@ def _normalize_distractor_token(token, dict_obj, lang='de'):
     prefix, body, suffix = _split_punct(token)
     if not body:
         return token
-    # Use spaCy for POS
-    upos = None
-    nlp_sp = _get_spacy_nlp(lang)
-    if nlp_sp is not None:
-        try:
-            doc = nlp_sp(body)
-            if doc and len(doc) > 0:
-                upos = doc[0].pos_
-        except Exception:
-            upos = None
+
+    # Determine POS: prefer the source word's POS (tagged in sentence context)
+    upos = source_pos
+    if upos is None:
+        # Fallback: tag the distractor in isolation (less reliable)
+        nlp_sp = _get_spacy_nlp(lang)
+        if nlp_sp is not None:
+            try:
+                doc = nlp_sp(body)
+                if doc and len(doc) > 0:
+                    upos = doc[0].pos_
+            except Exception:
+                upos = None
+
     # if noun or proper noun, prefer dictionary titlecase variant
     if upos in ('NOUN', 'PROPN'):
         try:
@@ -835,7 +846,17 @@ class Sentence_Set:
             if apply_postcase:
                 try:
                     for j in range(len(sentence.distractors)):
-                        sentence.distractors[j] = _normalize_distractor_token(sentence.distractors[j], d, lang=lang)
+                        # Use the original word's POS tag (from full-sentence
+                        # spaCy tagging in make_labels) instead of re-tagging
+                        # the distractor in isolation.
+                        src_pos = None
+                        if hasattr(sentence, 'pos_tags') and sentence.pos_tags is not None:
+                            try:
+                                src_pos = sentence.pos_tags[j]
+                            except (IndexError, TypeError):
+                                src_pos = None
+                        sentence.distractors[j] = _normalize_distractor_token(
+                            sentence.distractors[j], d, lang=lang, source_pos=src_pos)
                 except Exception:
                     pass
             # Keep first placeholder shape stable (no auto-capitalization side effects).

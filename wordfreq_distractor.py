@@ -82,41 +82,6 @@ class wordfreq_dict(distractor_dict):
         return distractor_opts
 
 
-class wordfreq_English_dict(wordfreq_dict):
-    """Dictionary built using word freq for frequencies
-     Words need to be in wordfreq's vocab, also in include file if provided
-     and not in exclude file
-     words must be lowercase alpha only"""
-
-    def __init__(self, params={}):
-        self.lang = "en"
-        exclude = params.get("exclude_words", "exclude_en.txt")
-        include = params.get("include_words", None)
-        freq_dict = wordfreq.get_frequency_dict('en')
-        keys = freq_dict.keys()
-        self.words = []
-        exclusions = []
-
-        if exclude is not None:
-            with open(exclude, "r", encoding="utf-8") as f:
-                for line in f:
-                    word = line.strip()
-                    exclusions.append(word)
-        inclusions = []
-        if include is not None and os.path.exists(include):
-            with open(include, "r", encoding="utf-8") as f:
-                for line in f:
-                    word = line.strip()
-                    inclusions.append(word)
-            words = list(set(inclusions) & set(keys) - set(exclusions))
-        else:
-            words = list(set(keys) - set(exclusions))
-        for word in words:
-            if re.match("^[a-z]*$", word):
-                freq = math.log(
-                    freq_dict[word] * 10 ** 9)  # we canonically calculate frequency as log occurrences/1 billion words
-                self.words.append(distractor(word, freq))
-
 
 class wordfreq_English_zipf_dict(wordfreq_dict):
     """Zipf-based English dictionary with German-style filtering knobs.
@@ -182,6 +147,32 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
             freq_val = z * math.log(10)
             self.words.append(distractor(token, freq_val))
             seen.add(low)
+
+
+# ---------------------------------------------------------------------------
+# German noun suffix heuristic (no spaCy required)
+# ---------------------------------------------------------------------------
+# Well-known derivational suffixes that almost exclusively form nouns.
+_GERMAN_NOUN_SUFFIXES = (
+    'ung', 'heit', 'keit', 'schaft', 'tion', 'sion', 'nis', 'tum',
+    'ling', 'tät', 'ment', 'chen', 'lein', 'ismus', 'eur', 'ant',
+    'ent', 'ist', 'enz', 'anz',
+)
+
+def _is_likely_german_noun(word):
+    """Heuristic: return True if *word* looks like a German noun.
+
+    Uses a curated list of derivational suffixes that almost exclusively
+    produce nouns in German.  This is a reliable fallback when no spaCy
+    model is installed.
+    """
+    lw = word.lower()
+    if len(lw) < 3:
+        return False
+    for suffix in _GERMAN_NOUN_SUFFIXES:
+        if lw.endswith(suffix) and len(lw) > len(suffix):
+            return True
+    return False
 
 
 class wordfreq_German_zipf_dict(wordfreq_dict):
@@ -264,16 +255,77 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.words.append(distractor(lw, freq_val))
             seen.add(lw)
 
-        # No external case_map needed — apply_postcase uses spaCy + .capitalize()
+        # Build case_map: identify which distractor words are German nouns
+        # and store their Titlecased form.
         self.case_map = {}
+        self._build_case_map()
+
+    def _build_case_map(self):
+        """Identify nouns via 3-context majority-vote spaCy tagging.
+
+        Each word is tagged in three sentence contexts:
+          1. Isolated (just the word)
+          2. Neutral:    'Das {word} ist hier.'
+          3. Verb-biased: 'Er will {word} gehen.'
+
+        If >= 2 of the 3 contexts tag the word as NOUN/PROPN, it's a noun.
+        Falls back to suffix heuristic when no spaCy model is available.
+        """
+        all_words = [d_obj.text for d_obj in self.words]
+        if not all_words:
+            return
+
+        nlp_sp = None
+        try:
+            import spacy
+            try:
+                nlp_sp = spacy.load('de_core_news_sm')
+            except Exception:
+                try:
+                    nlp_sp = spacy.load('de_core_news_md')
+                except Exception:
+                    nlp_sp = None
+        except Exception:
+            nlp_sp = None
+
+        if nlp_sp is not None:
+            # Batch-tag in three contexts for majority vote
+            iso_texts = all_words
+            neutral_texts = [f'Das {w} ist hier.' for w in all_words]
+            verb_texts = [f'Er will {w} gehen.' for w in all_words]
+
+            def _batch_noun_flags(texts, word_idx):
+                """Return list of bools: True if token at word_idx is NOUN/PROPN."""
+                flags = []
+                for doc in nlp_sp.pipe(texts, batch_size=256):
+                    tokens = list(doc)
+                    if word_idx < len(tokens):
+                        flags.append(tokens[word_idx].pos_ in ('NOUN', 'PROPN'))
+                    else:
+                        flags.append(False)
+                return flags
+
+            iso_flags = _batch_noun_flags(iso_texts, 0)
+            neutral_flags = _batch_noun_flags(neutral_texts, 1)  # 'Das {word} ...'
+            verb_flags = _batch_noun_flags(verb_texts, 2)        # 'Er will {word} ...'
+
+            for i, w in enumerate(all_words):
+                votes = sum([iso_flags[i], neutral_flags[i], verb_flags[i]])
+                if votes >= 2:
+                    self.case_map[w.lower()] = w.lower().capitalize()
+        else:
+            # Fallback: suffix heuristic (less accurate but works without spaCy)
+            for w in all_words:
+                if _is_likely_german_noun(w):
+                    self.case_map[w.lower()] = w.lower().capitalize()
 
     def canonical_case(self, token):
-        """Return token as-is (casing handled by apply_postcase in sentence_set.py)."""
-        return token
+        """Return Titlecased form if known noun, else token as-is."""
+        return self.case_map.get(token.lower(), token)
 
     def get_titlecase_variant(self, token):
-        """No pre-built titlecase map; apply_postcase falls back to .capitalize()."""
-        return None
+        """Return Titlecased variant if the word is a known German noun."""
+        return self.case_map.get(token.lower(), None)
 
 
 def get_frequency_de(word):
@@ -286,12 +338,9 @@ def get_frequency_en(word):
     return wordfreq.zipf_frequency(word, 'en') * math.log(10)
 
 
-def get_frequency(word):
-    """Backward-compatible alias: German frequency."""
-    return get_frequency_de(word)
 
 
-def get_thresholds(words):
+def get_thresholds_de(words):
     """German thresholds based on German frequency."""
     lengths = []
     freqs = []
