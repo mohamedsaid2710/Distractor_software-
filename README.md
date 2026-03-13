@@ -42,10 +42,12 @@ python distract.py -i arabic_sample.txt -o output_ar.txt -p params_ar.txt -f del
 - **Two selection modes** — threshold-first (Mode A) or max-implausibility ranking (Mode B)
 - **Two output formats** — `delim` (semicolon-delimited table) and `ibex` (PCIbex-ready lines)
 - **Length matching** — distractors match target word length
+- **Dynamic length alignment** — automatically assigns separate proper distractors when target words occupy the identical structural position across condition variants but differ in character length (e.g., *wurde* vs *wurden*).
 - **Frequency filtering** — candidate pools built from Zipf-frequency dictionaries with configurable floors
 - **German noun casing** — automatic post-processing capitalizes German nouns (via spaCy POS tagging)
 - **Arabic diacritics handling** — tashkeel stripped for consistent frequency lookups and candidate matching
 - **Quality assessment** — built-in `assess_output.py` validates placeholder policy, word form, length, and surprisal margins
+- **Set-level distractor reuse** — distractors are chosen once per label within an item-set and reused across its condition variants; this preserves controlled comparisons (e.g., Latin-square style designs) and reduces compute time
 
 ## CLI Usage
 
@@ -90,6 +92,7 @@ See the [Config Reference](https://github.com/mohamedsaid2710/Distractor_softwar
 1. Candidate pools are built using target length and frequency ranges.
 2. If the pool is too small, the search widens in both directions (lower and higher frequency bins).
 3. Final distractor choice is surprisal-driven (mode-dependent) — frequency constrains the pool but does not directly pick the winner.
+4. Within one item-set (same `id`), distractors are selected per label once and then reused across condition rows. This is intentional to keep lexical confounds stable across conditions while lowering model-scoring cost.
 
 ## A Note on Sub-word Tokenization
 
@@ -102,7 +105,7 @@ This means the sub-word splitting introduces **no information loss or approximat
 ## Quality Assessment
 
 ```bash
-python assess_output.py -i English_sample.txt -o output_en.txt -p params_en.txt --min-delta 0 --strict
+python assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en.txt --min-delta 0 --strict
 ```
 
 > **Tip:** The fastest way to improve distractor quality for any language is to

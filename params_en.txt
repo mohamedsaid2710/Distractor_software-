@@ -28,3 +28,4 @@ force_max_surprisal: True
 exclude_propn_candidates : True 
 enforce_length_match: True 
 first_token_placeholder: True  
+allow_banned_fallback: False

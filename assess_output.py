@@ -116,7 +116,8 @@ def main():
         sentence_set = sents[item_id]
         if not sentence_set.sentences:
             continue
-        sentence_obj = sentence_set.sentences[0]
+        tag = row[0]
+        sentence_obj = next((s for s in sentence_set.sentences if s.tag == tag), sentence_set.sentences[0])
 
         dtoks = distractor_sentence.split()
         expected_first_len = len(strip_punct(sentence_obj.words[0]))

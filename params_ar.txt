@@ -26,3 +26,4 @@ exclude_propn_candidates: False
 enforce_length_match: True
 first_token_placeholder: True
 apply_postcase: False
+allow_banned_fallback: False 

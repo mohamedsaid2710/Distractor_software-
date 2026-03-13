@@ -714,6 +714,36 @@ class Sentence_Set:
         else:
             for sentence in self.sentences:
                 sentence.pos_tags = None
+
+        # --- DYNAMIC LENGTH ALIGNMENT FIX ---
+        # Instead of rigidly assigning all words in a column to a single generator label (which breaks
+        # when condition targets possess different character counts like `wurde` vs `wurden`),
+        # we append the word's specific target length to its internal label tag!
+        # E.g. '6' splits gracefully into '6_L5' and '6_L6'. The system safely interprets them as
+        # different categories, giving `wurde` a 5-letter word and `wurden` a 6-letter word implicitly!
+        new_label_ids = set()
+        for sentence in self.sentences:
+            for i in range(1, len(sentence.labels)):
+                orig_lab = sentence.labels[i]
+                target_len = len(strip_punct(sentence.words[i]))
+                if target_len > 0:
+                    new_lab = f"{orig_lab}_L{target_len}"
+                else:
+                    new_lab = orig_lab
+                
+                if new_lab != orig_lab:
+                    sentence.labels[i] = new_lab
+                    if orig_lab in sentence.probs:
+                        sentence.probs[new_lab] = sentence.probs.pop(orig_lab)
+                    if hasattr(sentence, 'hiddens') and orig_lab in sentence.hiddens:
+                        sentence.hiddens[new_lab] = sentence.hiddens.pop(orig_lab)
+                    if hasattr(sentence, 'surprisal') and orig_lab in sentence.surprisal:
+                        sentence.surprisal[new_lab] = sentence.surprisal.pop(orig_lab)
+                new_label_ids.add(new_lab)
+                
+        self.label_ids = new_label_ids
+        # ------------------------------------
+
         for lab in self.label_ids: #init label objects
             self.labels[lab] = Label(self.id, lab)
         for sentence in self.sentences: #dump stuff into the label objects

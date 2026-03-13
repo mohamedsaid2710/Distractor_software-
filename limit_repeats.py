@@ -17,11 +17,12 @@ class Repeatcounter:
 
     def increment(self, word):
         """adds a new repeat of word to the list, if this puts it up to max, adds it to banned"""
-        if word in self.distractors.keys():
-            self.distractors[word] += 1
+        word_key = word.lower()
+        if word_key in self.distractors.keys():
+            self.distractors[word_key] += 1
         else:
-            self.distractors[word] = 1
+            self.distractors[word_key] = 1
         if self.limit:
-            if self.distractors[word] >= self.max:
-                self.banned.append(word)
+            if self.distractors[word_key] >= self.max:
+                self.banned.append(word_key)
 
