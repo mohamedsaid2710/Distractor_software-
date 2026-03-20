@@ -21,7 +21,6 @@ match_surprisal: False
 early_position_boost: 5
 early_position_count: 5
 absolute_threshold_only: False
-lowercase_only: True
 min_word_len: 2
 force_max_surprisal: True
 exclude_propn_candidates: True 
