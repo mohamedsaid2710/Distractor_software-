@@ -104,11 +104,18 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
 
         exclusions_lower = set()
         if exclude is not None:
+            import os
+            if not os.path.isabs(exclude) and not os.path.exists(exclude):
+                fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), exclude)
+                if os.path.exists(fallback):
+                    exclude = fallback
             try:
                 with open(exclude, "r", encoding="utf-8") as f:
                     exclusions_lower = set(line.strip().lower() for line in f if line.strip())
-            except Exception:
-                exclusions_lower = set()
+            except Exception as e:
+                import logging
+                logging.error(f"Could not load exclude_words from {exclude}: {e}")
+                pass
 
         include_words = None
         if include is not None and os.path.exists(include):
@@ -201,14 +208,22 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
         exclusions_lower = set()
         if exclude is not None:
+            import os
+            # Try to resolve relative paths against the script directory
+            if not os.path.isabs(exclude) and not os.path.exists(exclude):
+                fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), exclude)
+                if os.path.exists(fallback):
+                    exclude = fallback
             try:
                 with open(exclude, "r", encoding="utf-8") as f:
                     for line in f:
                         w = line.strip()
                         if w and not w.startswith("#"):
                             exclusions_lower.add(w.lower())
-            except Exception:
-                exclusions_lower = set()
+            except Exception as e:
+                import logging
+                logging.error(f"Could not load exclude_words from {exclude}: {e}")
+                pass
 
         include_words = None
         if include is not None and os.path.exists(include):
@@ -258,74 +273,62 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         # Build case_map: identify which distractor words are German nouns
         # and store their Titlecased form.
         self.case_map = {}
-        self._build_case_map()
+        self.nlp_sp = None
+        self._init_spacy()
 
-    def _build_case_map(self):
-        """Identify nouns via 3-context majority-vote spaCy tagging.
-
-        Each word is tagged in three sentence contexts:
-          1. Isolated (just the word)
-          2. Neutral:    'Das {word} ist hier.'
-          3. Verb-biased: 'Er will {word} gehen.'
-
-        If >= 2 of the 3 contexts tag the word as NOUN/PROPN, it's a noun.
-        Falls back to suffix heuristic when no spaCy model is available.
-        """
-        all_words = [d_obj.text for d_obj in self.words]
-        if not all_words:
-            return
-
-        nlp_sp = None
+    def _init_spacy(self):
         try:
             import spacy
             try:
-                nlp_sp = spacy.load('de_core_news_sm')
+                self.nlp_sp = spacy.load('de_core_news_sm')
             except Exception:
                 try:
-                    nlp_sp = spacy.load('de_core_news_md')
+                    self.nlp_sp = spacy.load('de_core_news_md')
                 except Exception:
-                    nlp_sp = None
+                    self.nlp_sp = None
         except Exception:
-            nlp_sp = None
+            self.nlp_sp = None
 
-        if nlp_sp is not None:
-            # Batch-tag in three contexts for majority vote
-            iso_texts = all_words
-            neutral_texts = [f'Das {w} ist hier.' for w in all_words]
-            verb_texts = [f'Er will {w} gehen.' for w in all_words]
-
-            def _batch_noun_flags(texts, word_idx):
-                """Return list of bools: True if token at word_idx is NOUN/PROPN."""
-                flags = []
-                for doc in nlp_sp.pipe(texts, batch_size=256):
-                    tokens = list(doc)
-                    if word_idx < len(tokens):
-                        flags.append(tokens[word_idx].pos_ in ('NOUN', 'PROPN'))
-                    else:
-                        flags.append(False)
-                return flags
-
-            iso_flags = _batch_noun_flags(iso_texts, 0)
-            neutral_flags = _batch_noun_flags(neutral_texts, 1)  # 'Das {word} ...'
-            verb_flags = _batch_noun_flags(verb_texts, 2)        # 'Er will {word} ...'
-
-            for i, w in enumerate(all_words):
-                votes = sum([iso_flags[i], neutral_flags[i], verb_flags[i]])
-                if votes >= 2:
-                    self.case_map[w.lower()] = w.lower().capitalize()
+    def _eval_single_word_case(self, token_lower):
+        """Evaluate a single word on the fly for noun candidacy using SpaCy if available."""
+        if self.nlp_sp is not None:
+            w_cap = token_lower.capitalize()
+            iso_text = w_cap
+            nt_text = f'Das {w_cap} ist hier.'
+            vt_text = f'Er will {token_lower} gehen.'
+            
+            votes = 0
+            for text, offset in [(iso_text, 0), (nt_text, 1), (vt_text, 2)]:
+                doc = self.nlp_sp(text)
+                if len(doc) > offset and doc[offset].pos_ in ('NOUN', 'PROPN'):
+                    votes += 1
+                    
+            if votes >= 2:
+                self.case_map[token_lower] = w_cap
+            else:
+                self.case_map[token_lower] = None
         else:
-            # Fallback: suffix heuristic (less accurate but works without spaCy)
-            for w in all_words:
-                if _is_likely_german_noun(w):
-                    self.case_map[w.lower()] = w.lower().capitalize()
+            if _is_likely_german_noun(token_lower):
+                self.case_map[token_lower] = token_lower.capitalize()
+            else:
+                self.case_map[token_lower] = None
+                
+        return self.case_map[token_lower]
 
     def canonical_case(self, token):
         """Return Titlecased form if known noun, else token as-is."""
-        return self.case_map.get(token.lower(), token)
+        t_lower = token.lower()
+        if t_lower not in self.case_map:
+            self._eval_single_word_case(t_lower)
+        ans = self.case_map.get(t_lower, None)
+        return ans if ans is not None else token
 
     def get_titlecase_variant(self, token):
         """Return Titlecased variant if the word is a known German noun."""
-        return self.case_map.get(token.lower(), None)
+        t_lower = token.lower()
+        if t_lower not in self.case_map:
+            self._eval_single_word_case(t_lower)
+        return self.case_map.get(t_lower, None)
 
 
 def get_frequency_de(word):
@@ -407,13 +410,20 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
 
         exclusions_lower = set()
         if exclude is not None:
+            import os
+            if not os.path.isabs(exclude) and not os.path.exists(exclude):
+                fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), exclude)
+                if os.path.exists(fallback):
+                    exclude = fallback
             try:
                 with open(exclude, "r", encoding="utf-8") as f:
                     exclusions_lower = set(
                         strip_arabic_diacritics(line.strip()) for line in f if line.strip()
                     )
-            except Exception:
-                exclusions_lower = set()
+            except Exception as e:
+                import logging
+                logging.error(f"Could not load exclude_words from {exclude}: {e}")
+                pass
 
         include_words = None
         if include is not None and os.path.exists(include):

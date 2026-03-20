@@ -127,12 +127,9 @@ def _detect_language(params):
 def _normalize_distractor_token(token, dict_obj, lang='de', source_pos=None):
     """Normalize casing for a single distractor token.
 
-    When *source_pos* is provided (the POS tag of the **original** word,
-    obtained from full-sentence spaCy tagging), it is used directly.
-
-    When *source_pos* is None, the dictionary's case_map (built during
-    init via 3-context majority-vote spaCy tagging) is consulted to
-    decide whether the word is a noun.
+    Rely entirely on the distractor's inherent POS properties via the
+    dictionary's case_map (built via 3-context majority-vote spaCy tagging)
+    to decide whether the word is a noun.
     """
     # preserve placeholder
     if _is_x_placeholder_token(token):
@@ -141,28 +138,20 @@ def _normalize_distractor_token(token, dict_obj, lang='de', source_pos=None):
     if not body:
         return token
 
-    # if noun or proper noun, prefer dictionary titlecase variant
-    if source_pos in ('NOUN', 'PROPN'):
-        try:
-            title_var = dict_obj.get_titlecase_variant(body)
-        except Exception:
-            title_var = None
-        if title_var:
-            new_body = title_var
-        else:
-            new_body = body.lower().capitalize()
+    # Consult dictionary case_map (reliable: built via majority-vote spaCy tagging).
+    # We do NOT force capitalization just because the target word was a NOUN,
+    # as replacing a noun with an adverb shouldn't blindly capitalize the adverb.
+    try:
+        title_var = dict_obj.get_titlecase_variant(body)
+    except Exception:
+        title_var = None
+        
+    if title_var:
+        new_body = title_var
     else:
-        # Consult dictionary case_map (reliable: built via 3-context
-        # majority-vote spaCy tagging during dictionary init).
-        try:
-            title_var = dict_obj.get_titlecase_variant(body)
-        except Exception:
-            title_var = None
-        if title_var:
-            new_body = title_var
-        else:
-            # Not a noun → lowercase
-            new_body = body.lower()
+        # Not a noun → lowercase
+        new_body = body.lower()
+        
     return prefix + new_body + suffix
 
 def no_duplicates(my_list):
@@ -586,10 +575,11 @@ class Label:
         # Hard guarantee: never return x-x-x for non-initial positions.
         # If no candidate survived strict filters, relax constraints in stages.
         if best_word is None:
+            allow_banned_fallback = bool(params.get("allow_banned_fallback", False))
             fallback = list(distractor_opts)
             random.shuffle(fallback)
             cand, cand_surp = pick_best_from_pool(fallback, allow_banned=False)
-            if cand is None:
+            if cand is None and allow_banned_fallback:
                 cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True)
             desired_len = target_exact_len if target_exact_len is not None else target_preferred_len
             if cand is None and enforce_length_match and desired_len is not None:
@@ -600,14 +590,20 @@ class Label:
                     exact_full_pool = []
                 if exact_full_pool:
                     random.shuffle(exact_full_pool)
-                    cand, cand_surp = pick_best_from_pool(exact_full_pool, allow_banned=True)
+                    cand, cand_surp = pick_best_from_pool(exact_full_pool, allow_banned=False)
+                    if cand is None and allow_banned_fallback:
+                        cand, cand_surp = pick_best_from_pool(exact_full_pool, allow_banned=True)
             if cand is None and enforce_length_match and desired_len is not None:
                 # Then try include_words (can contain short forms filtered from main dict).
                 include_pool = get_include_words_exact_len(desired_len)
                 if include_pool:
-                    cand, cand_surp = pick_best_from_pool(include_pool, allow_banned=True)
+                    cand, cand_surp = pick_best_from_pool(include_pool, allow_banned=False)
+                    if cand is None and allow_banned_fallback:
+                        cand, cand_surp = pick_best_from_pool(include_pool, allow_banned=True)
             if cand is None:
-                cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True, relax_length=True)
+                cand, cand_surp = pick_best_from_pool(fallback, allow_banned=False, relax_length=True)
+                if cand is None and allow_banned_fallback:
+                    cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True, relax_length=True)
             if cand is None:
                 try:
                     emergency_pool = [w.text for w in getattr(dict, 'words', [])]
@@ -615,10 +611,14 @@ class Label:
                     emergency_pool = []
                 if emergency_pool:
                     sample_n = min(800, len(emergency_pool))
-                    fallback = random.sample(emergency_pool, sample_n)
-                    cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True)
+                    fallback_emerg = random.sample(emergency_pool, sample_n)
+                    cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=False)
+                    if cand is None and allow_banned_fallback:
+                        cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=True)
                     if cand is None:
-                        cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True, relax_length=True)
+                        cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=False, relax_length=True)
+                        if cand is None and allow_banned_fallback:
+                            cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=True, relax_length=True)
             if cand is None:
                 # Final defensive fallback: force a real word token.
                 cand = "wort"

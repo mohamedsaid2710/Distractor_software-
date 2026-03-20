@@ -42,7 +42,15 @@ def x_placeholder_len(tok):
 
 def load_output_rows(path):
     with open(path, "r", encoding="utf-8", newline="") as f:
-        return list(csv.reader(f, delimiter=";", quotechar='"'))
+        sample = f.read(4096)
+        f.seek(0)
+        delim = ";"
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=";,")
+            delim = dialect.delimiter
+        except Exception:
+            delim = ";" if ";" in sample else ","
+        return list(csv.reader(f, delimiter=delim, quotechar='"'))
 
 
 def build_model(params):
