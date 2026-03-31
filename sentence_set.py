@@ -66,11 +66,18 @@ def is_propn_candidate(cand):
         lang = 'de' # Default to German
         nlp_sp = _get_spacy_nlp(lang)
         if nlp_sp is not None:
-            # Wrap in neutral context to force Proper Noun recognition for brands/names
+            # Contextual frame check
             w_cap = clean_cand.capitalize()
-            doc = nlp_sp(f"Das {w_cap} ist hier.")
-            # If the word at index 1 is PROPN, it's a proper noun
-            is_propn = len(doc) > 1 and doc[1].pos_ == 'PROPN'
+            # Double-check: ensure it's NOT a verb/adj in lowercase first
+            doc_l = nlp_sp(key)
+            if len(doc_l) > 0 and doc_l[0].pos_ in ('VERB', 'AUX', 'ADJ', 'ADV', 'PRON', 'DET', 'ADP', 'CONJ', 'SCONJ'):
+                PROPN_CACHE[key] = False
+                return False
+                
+            # Now test in a natural sentence frame to find brands/names
+            doc_c = nlp_sp(f"Das ist {w_cap}.")
+            # Using index 2 for the word
+            is_propn = len(doc_c) > 2 and doc_c[2].pos_ == 'PROPN'
             PROPN_CACHE[key] = is_propn
             return is_propn
     except Exception:

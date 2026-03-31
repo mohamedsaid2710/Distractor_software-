@@ -366,19 +366,26 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.nlp_sp = None
 
     def _eval_single_word_case(self, token_lower):
-        """Evaluate a single word on the fly for noun candidacy using SpaCy inside its context."""
+        """Ultimate POS check: compares lowercase and titlecase results inside natural context."""
         if self.nlp_sp is not None:
             w_cap = token_lower.capitalize()
-            # Wrap in neutral context to prevent SpaCy from blindly tagging isolated capitals as Nouns
-            doc = self.nlp_sp(f"Das {w_cap} ist hier.")
-            # Noun check must skip the first word 'Das' (index 0) and check the word at index 1
-            if len(doc) > 1 and doc[1].pos_ in ('NOUN', 'PROPN'):
+            
+            # Step 1: Lowercase check (Is it naturally a verb/adj/etc?)
+            doc_l = self.nlp_sp(token_lower)
+            if len(doc_l) > 0 and doc_l[0].pos_ in ('VERB', 'AUX', 'ADJ', 'ADV', 'PRON', 'DET', 'ADP', 'CONJ', 'SCONJ'):
+                # It's a common non-noun; keep it lowercase.
+                self.case_map[token_lower] = None
+                return None
+                
+            # Step 2: Titlecase context check (Is it a legitimate noun in 'Natural' context?)
+            # Using 'Ich habe {word} gelesen.' is much better for distinguishing nouns from nominalized verbs.
+            doc_c = self.nlp_sp(f"Ich habe {w_cap} gelesen.")
+            # Index 2 is the word
+            if len(doc_c) > 2 and doc_c[2].pos_ in ('NOUN', 'PROPN'):
                 self.case_map[token_lower] = w_cap
             else:
                 self.case_map[token_lower] = None
         else:
-            # Fallback if SpaCy failed to load: assume anything starting with cap in dict is noun?
-            # Better to just be safe and assume lowercase if SpaCy is broken.
             self.case_map[token_lower] = None
                 
         return self.case_map[token_lower]

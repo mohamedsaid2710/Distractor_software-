@@ -3,6 +3,7 @@
 import argparse
 import os
 import sys
+import time
 
 # Keep CLI output focused on pipeline errors instead of TF backend noise.
 os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
@@ -12,6 +13,7 @@ from main import run_stuff
 
 
 def main():
+    start_time = time.time()
     parser = argparse.ArgumentParser(description="Run distractor generation")
     
     # Positional arguments for better tab-completion
@@ -37,6 +39,9 @@ def main():
 
     try:
         run_stuff(input_path, output_path, parameters=params_path, outformat=args.format)
+        
+        elapsed = time.time() - start_time
+        print(f"\n>>> [Done] Total run time: {elapsed / 60:.2f} minutes.")
     except ValueError as e:
         import traceback
         traceback.print_exc()
