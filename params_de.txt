@@ -28,7 +28,6 @@ hf_model_name: "dbmdz/german-gpt2"
 device: "cuda"
 
 # --- File Paths & Resources ---
-include_words: "include_words_de_short.txt"
 exclude_words: "exclude_de.txt"
 
 # --- Position & Repeat Settings ---

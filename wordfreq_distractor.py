@@ -320,12 +320,9 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             # Require a vowel so candidates are clearly word-like
             if not re.search(r"[aeiouyäöü]", lw):
                 continue
-            # Reject likely abbreviations: short words with very few vowels
-            # (e.g., nsu, olg, edv, sap, vip, akp). Real German words of
-            # length 3-4 almost always have >= 2 vowels or >= 50% vowel ratio.
-            vowel_count = len(re.findall(r"[aeiouyäöü]", lw))
-            if len(lw) <= 4 and vowel_count <= 1:
+            if not re.search(r"[aeiouyäöü]", lw):
                 continue
+
             if _is_english_dominant(lw):
                 continue
             try:
@@ -367,15 +364,18 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
     def _eval_single_word_case(self, token_lower):
         """Ultimate POS check: compares lowercase and titlecase results inside natural context."""
+        w_cap = token_lower.capitalize()
+        
+        # 1. Fast, highly-reliable fallback for common German noun suffixes (including plurals)
+        strong_noun_suffixes = ('ung', 'ungen', 'heit', 'heiten', 'keit', 'keiten', 'schaft', 'schaften', 'tion', 'tionen', 'sion', 'sionen', 'nis', 'nisse', 'tum', 'tät', 'itäten', 'ismus', 'eur')
+        if any(token_lower.endswith(sfx) for sfx in strong_noun_suffixes):
+            self.case_map[token_lower] = w_cap
+            return w_cap
+
+        # 2. Use stable SpaCy frame (same as batch tagger)
         if self.nlp_sp is not None:
-            w_cap = token_lower.capitalize()
-                
-            # Trust the Context Frame: If it's a noun in this frame, it's a noun in German.
-            # Using 'Ich habe {word} gelesen.' is much better for distinguishing nouns 
-            # from nominalized verbs like 'Üben' or 'Essen' unless they are used as nouns.
-            doc_c = self.nlp_sp(f"Ich habe {w_cap} gelesen.")
-            # Index 2 is the word
-            if len(doc_c) > 2 and doc_c[2].pos_ in ('NOUN', 'PROPN'):
+            doc_c = self.nlp_sp(f"Das {w_cap} ist hier.")
+            if len(doc_c) > 1 and doc_c[1].pos_ in ('NOUN', 'PROPN'):
                 self.case_map[token_lower] = w_cap
             else:
                 self.case_map[token_lower] = None

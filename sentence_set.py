@@ -159,20 +159,12 @@ def _detect_language(params):
 
 
 def _get_german_grammatical_case(token, dict_obj, source_token=None):
-    """Determine correct German casing based on the token's own linguistic class
-    and the source token's casing (for start-of-sentence words)."""
+    """Determine correct German casing based on the token's own linguistic class."""
     if _is_x_placeholder_token(token):
         return token
     prefix, body, suffix = _split_punct(token)
     if not body:
         return token
-
-    # Determine if source token is TitleCased (signal for start of sentence)
-    source_is_title = False
-    if source_token:
-        s_prefix, s_body, s_suffix = _split_punct(source_token)
-        if s_body and s_body[0].isupper():
-            source_is_title = True
 
     # Hard-coded Preposition/Function Word Guard
     func_word_guard = {
@@ -198,11 +190,6 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None):
     else:
         # Not a noun -> lowercase (Standard German rule)
         new_body = body.lower()
-    
-    # --- MIRROR CASING ---
-    # if the source was TitleCased (start of sentence), forceTitleCase the distractor
-    if source_is_title:
-        new_body = new_body[0].upper() + new_body[1:]
     
     return prefix + new_body + suffix
 
@@ -395,89 +382,17 @@ class Label:
         
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
-
-        # --- GERMAN STRICKT CASING FILTER ---
-        # If the target is lowercase, we MUST NOT pick a distractor that is 
-        # naturally a noun (Capitalized), to avoid string cues.
-        if lang == 'de' and distractor_opts:
-            source_word = strip_punct(self.words[0]) if self.words else ""
-            target_is_lower = source_word[0].islower() if source_word else True
-            
-            # Identify if target is a noun
-            target_is_noun_dict = False
-            try:
-                if hasattr(dictionary, 'has_titlecase_variant'):
-                    target_is_noun_dict = dictionary.has_titlecase_variant(source_word)
-            except Exception:
-                pass
-
-            filtered = []
-            for d in distractor_opts:
-                is_noun_dict = False
-                try:
-                    if hasattr(dictionary, 'has_titlecase_variant'):
-                        is_noun_dict = dictionary.has_titlecase_variant(d)
-                except Exception:
-                    pass
-                
-                # Filter Logic:
-                # 1. Target is lowercase -> Dist MUST not be a noun.
-                # 2. Target is TitleCase AND is a Noun -> Dist MUST be a noun.
-                # 3. Target is TitleCase AND NOT a noun (Start of Sentence) -> Dist MUST NOT be a noun.
-                if target_is_lower:
-                    if not is_noun_dict:
-                        filtered.append(d)
-                else:
-                    if target_is_noun_dict:
-                        if is_noun_dict:
-                            filtered.append(d)
-                    else:
-                        if not is_noun_dict:
-                            filtered.append(d)
-            
-            # Strict fallback: if filtered is empty, broadening search is better 
-            # than returning a pool that breaks the capitalization rules.
-            distractor_opts = filtered
-
         # --- ADAPTIVE LENGTH SEARCH (Fix for 0-candidate long words) ---
         # If no candidates found for exact length, widen search recursively.
         if not distractor_opts:
             for extra_len in range(1, 11): # Try widening up to +/- 10 characters
-                logging.info(f"0 candidates for {self.words} after casing filter. Widening search by +/- {extra_len}")
+                logging.info(f"0 candidates for {self.words} after primary fetch. Widening search by +/- {extra_len}")
                 distractor_opts = dictionary.get_potential_distractors(
                     min_length - extra_len, max_length + extra_len, 
                     min_freq, max_freq, params, pos_filter=pos_filter
                 )
-                
-                # Apply the casing filter to the widened pool!
-                if distractor_opts and lang == 'de':
-                    source_word = strip_punct(self.words[0]) if self.words else ""
-                    target_is_lower = source_word[0].islower() if source_word else True
-                    target_is_noun_dict = False
-                    try:
-                        if hasattr(dictionary, 'has_titlecase_variant'):
-                            target_is_noun_dict = dictionary.has_titlecase_variant(source_word)
-                    except Exception: pass
-                    
-                    filtered = []
-                    for d in distractor_opts:
-                        is_noun_dict = False
-                        try:
-                            if hasattr(dictionary, 'has_titlecase_variant'):
-                                is_noun_dict = dictionary.has_titlecase_variant(d)
-                        except Exception: pass
-                        if target_is_lower:
-                            if not is_noun_dict: filtered.append(d)
-                        else:
-                            if target_is_noun_dict:
-                                if is_noun_dict: filtered.append(d)
-                            else:
-                                if not is_noun_dict: filtered.append(d)
-                    distractor_opts = filtered
-
                 if distractor_opts:
-                    break
-                
+                    break                
                 # --- FINAL FALLBACK: Frequency Relaxation ---
                 # If still nothing, try ignoring frequency thresholds for this length widening
                 logging.info(f"Still 0 candidates. Relaxing frequency constraints for +/- {extra_len}")
