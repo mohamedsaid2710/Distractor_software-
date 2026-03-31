@@ -61,3 +61,6 @@ models/aubmindlab-aragpt2-medium/[0-9a-f]*[0-9a-f]
 # Keep generated wiki builds out (GitHub wiki is separate)
 /docs/wiki/
 *.wiki/
+Untitled spreadsheet - Sheet1.csv 
+notes.txt
+txt.txt 

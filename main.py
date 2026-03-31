@@ -25,7 +25,12 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
     threshold_func = getattr(importlib.import_module(params.get("threshold_loc", "wordfreq_distractor")),
                              params.get("threshold_name", "get_thresholds_en"))
     repeats=Repeatcounter(params.get("max_repeat", 0))
-    for ss in sents.values():
+    total = len(sents)
+    for i, ss in enumerate(sents.values(), 1):
+        # Get tag from the first sentence in the set (most sets only have one)
+        tag = ss.sentences[0].tag if ss.sentences else "None"
+        print(f"\n>>> [{i}/{total}] Processing Sentence: {tag} (ID: {ss.id})")
+        
         ss.do_model(m)
         ss.do_surprisals(m)
         ss.make_labels(params)

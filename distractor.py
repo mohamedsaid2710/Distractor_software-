@@ -4,10 +4,11 @@ import logging
 class distractor:
     """General class for distractor words"""
 
-    def __init__(self, text, freq):
+    def __init__(self, text, freq, pos=None):
         self.text = text
         self.len = len(text)
         self.freq = freq
+        self.pos = pos
 
 
 class distractor_dict:

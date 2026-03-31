@@ -1,31 +1,47 @@
-#These are required
-min_delta: 10
-min_abs: 24
-num_to_test: 200
+# =============================================================================
+# Maze Stimulus Generation Parameters - German (DE)
+# =============================================================================
 
- 
-# These are not required, but if they aren't here you get the defaults
+# --- Core Scorer & Generation Settings ---
+min_delta: 8
+min_abs: 15
+num_to_test: 1500
+force_max_surprisal: True
+match_surprisal: True
+absolute_threshold_only: False
+
+# --- Linguistic & POS Matching ---
+language: "de"
+match_noun_pos: True
+len_tolerance: 3
+min_zipf: 1.0
+freq_tolerance: 0.3
+max_freq_widen: 20
+min_word_len: 2
+exclude_propn_candidates: False
+enforce_length_match: True
+apply_postcase: True
+match_target_case: False
+
+# --- Model & Hardware Settings ---
+hf_model_name: "dbmdz/german-gpt2"
+device: "cuda"
+
+# --- File Paths & Resources ---
+include_words: "include_words_de_short.txt"
+exclude_words: "exclude_de.txt"
+
+# --- Position & Repeat Settings ---
+early_position_boost: 20
+early_position_count: 5
+first_token_placeholder: True
+max_repeat: 1
+allow_banned_fallback: False
+
+# --- Internal Architecture (Defaults) ---
 dictionary_loc: "wordfreq_distractor"
 dictionary_class: "wordfreq_German_zipf_dict"
 threshold_loc: "wordfreq_distractor"
 threshold_name: "get_thresholds_de"
 model_loc: "models.german_code.model"
 model_class: "GermanScorer"
-language: "de"
-hf_model_name: "dbmdz/german-gpt2"
-include_words: None
-exclude_words: "exclude_de.txt"
-max_repeat: 2
-min_zipf: 2.5
-match_surprisal: False
-early_position_boost: 5
-early_position_count: 5
-absolute_threshold_only: False
-min_word_len: 2
-force_max_surprisal: True
-exclude_propn_candidates: True 
-enforce_length_match: True 
-first_token_placeholder: True 
-apply_postcase: True
-device: "cuda" 
-allow_banned_fallback: False

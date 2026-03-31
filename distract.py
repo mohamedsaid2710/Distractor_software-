@@ -13,14 +13,30 @@ from main import run_stuff
 
 def main():
     parser = argparse.ArgumentParser(description="Run distractor generation")
-    parser.add_argument('-i', '--input', dest='input', required=True, help='Input file')
-    parser.add_argument('-o', '--output', dest='output', required=True, help='Output file')
-    parser.add_argument('-p', '--parameters', type=str, default='params_en.txt', help='Parameters file (default: params_en.txt)')
+    
+    # Positional arguments for better tab-completion
+    parser.add_argument('input_file', nargs='?', help='Input file (can also use -i)')
+    parser.add_argument('output_file', nargs='?', help='Output file (can also use -o)')
+    parser.add_argument('params_file', nargs='?', help='Parameters file (can also use -p)')
+    
+    # Optional flags for backwards compatibility
+    parser.add_argument('-i', '--input', dest='input_flag', help='Input file')
+    parser.add_argument('-o', '--output', dest='output_flag', help='Output file')
+    parser.add_argument('-p', '--parameters', dest='params_flag', help='Parameters file')
+    
     parser.add_argument('-f', '--format', choices=['ibex', 'delim'], default='delim', help='Output format')
     args = parser.parse_args()
 
+    # Resolve arguments: flags take precedence, then positional
+    input_path = args.input_flag or args.input_file
+    output_path = args.output_flag or args.output_file
+    params_path = args.params_flag or args.params_file or 'params_en.txt'
+
+    if not input_path or not output_path:
+        parser.error("Both input and output files are required.")
+
     try:
-        run_stuff(args.input, args.output, parameters=args.parameters, outformat=args.format)
+        run_stuff(input_path, output_path, parameters=params_path, outformat=args.format)
     except ValueError as e:
         import traceback
         traceback.print_exc()

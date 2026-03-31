@@ -1,29 +1,45 @@
-#These are required
+# =============================================================================
+# Maze Stimulus Generation Parameters - Arabic (AR)
+# =============================================================================
+
+# --- Core Scorer & Generation Settings ---
 min_delta: 10
 min_abs: 24
 num_to_test: 200
+force_max_surprisal: True
+absolute_threshold_only: False
 
+# --- Linguistic & Selection Settings ---
+language: "ar"
+len_tolerance: 0
+min_zipf: 3.0
+min_word_len: 2
+exclude_propn_candidates: False
+enforce_length_match: True
+lowercase_only: False
+apply_postcase: False
+match_target_case: False
 
-# These are not required, but if they aren't here you get the defaults
+# --- Model & Hardware Settings ---
+hf_model_name: "aubmindlab/aragpt2-medium"
+device: "cuda"
+
+# --- File Paths & Resources ---
+include_words: None
+exclude_words: "exclude_ar.txt"
+
+# --- Position & Repeat Settings ---
+early_position_boost: 5
+early_position_count: 2
+first_token_placeholder: True
+max_repeat: 2
+allow_banned_fallback: False
+match_surprisal: False
+
+# --- Internal Architecture (Defaults) ---
 dictionary_loc: "wordfreq_distractor"
 dictionary_class: "wordfreq_Arabic_zipf_dict"
 threshold_loc: "wordfreq_distractor"
 threshold_name: "get_thresholds_ar"
 model_loc: "models.arabic_code.model"
 model_class: "ArabicScorer"
-language: "ar"
-hf_model_name: "aubmindlab/aragpt2-medium"
-exclude_words: "exclude_ar.txt"
-include_words: None
-max_repeat: 2
-min_zipf: 3.0
-lowercase_only: False
-min_word_len: 2
-force_max_surprisal: True
-early_position_boost: 5
-early_position_count: 2
-exclude_propn_candidates: False
-enforce_length_match: True
-first_token_placeholder: True
-apply_postcase: False
-allow_banned_fallback: False 

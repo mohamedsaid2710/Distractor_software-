@@ -47,6 +47,38 @@ def _split_punct(token):
     return m.group('prefix'), m.group('body'), m.group('suffix')
 
 
+# Global Cache for proper noun checks to speed up is_propn_candidate
+PROPN_CACHE = {}
+
+def is_propn_candidate(cand):
+    """Returns True if the candidate is likely a Proper Noun (PROPN).
+    Uses a cache to avoid redundant SpaCy calls.
+    """
+    clean_cand = strip_punct(cand)
+    if not clean_cand:
+        return False
+        
+    if clean_cand in PROPN_CACHE:
+        return PROPN_CACHE[clean_cand]
+        
+    try:
+        lang = 'de' # Default to German for now given context
+        nlp_sp = _get_spacy_nlp(lang)
+        if nlp_sp is not None:
+            # We capitalize to test if it behaves as a noun/proper noun
+            doc2 = nlp_sp(clean_cand.capitalize())
+            is_propn = len(doc2) > 0 and doc2[0].pos_ == 'PROPN'
+            PROPN_CACHE[clean_cand] = is_propn
+            return is_propn
+    except Exception:
+        pass
+    
+    # Heuristic fallback if SpaCy fails
+    is_propn = clean_cand[0].isupper() and len(clean_cand) > 1
+    PROPN_CACHE[clean_cand] = is_propn
+    return is_propn
+
+
 def _is_x_placeholder_token(token):
     """True for placeholder tokens like x, x-x, x-x-x, ... (ignoring edge punct)."""
     if not token:
@@ -124,35 +156,42 @@ def _detect_language(params):
     return 'en'
 
 
-def _normalize_distractor_token(token, dict_obj, lang='de', source_pos=None):
-    """Normalize casing for a single distractor token.
-
-    Rely entirely on the distractor's inherent POS properties via the
-    dictionary's case_map (built via 3-context majority-vote spaCy tagging)
-    to decide whether the word is a noun.
-    """
-    # preserve placeholder
+def _get_german_grammatical_case(token, dict_obj):
+    """Determine correct German casing based on the token's own linguistic class."""
     if _is_x_placeholder_token(token):
         return token
     prefix, body, suffix = _split_punct(token)
     if not body:
         return token
 
-    # Consult dictionary case_map (reliable: built via majority-vote spaCy tagging).
-    # We do NOT force capitalization just because the target word was a NOUN,
-    # as replacing a noun with an adverb shouldn't blindly capitalize the adverb.
+    # Check if it's a noun/proper noun in the dictionary
+    title_var = None
     try:
-        title_var = dict_obj.get_titlecase_variant(body)
+        if hasattr(dict_obj, 'get_titlecase_variant'):
+            title_var = dict_obj.get_titlecase_variant(body)
     except Exception:
-        title_var = None
-        
+        pass
+
     if title_var:
         new_body = title_var
     else:
-        # Not a noun → lowercase
+        # Not a noun -> lowercase (Standard German rule)
         new_body = body.lower()
-        
+    
     return prefix + new_body + suffix
+
+def _normalize_distractor_token(token, dict_obj, lang='de', source_pos=None):
+    """Normalize casing for a single distractor token."""
+    if lang == 'de':
+        return _get_german_grammatical_case(token, dict_obj)
+    
+    # Non-German fallback (e.g. English as before)
+    if _is_x_placeholder_token(token):
+        return token
+    prefix, body, suffix = _split_punct(token)
+    if not body:
+        return token
+    return prefix + body.lower() + suffix
 
 def no_duplicates(my_list):
     """True if list has no duplicates, else false"""
@@ -234,6 +273,8 @@ class Label:
         Find a distractor not on banned (banned=already used in same sentence set)
         That hopefully meets threshold"""
         lang = _detect_language(params)
+        # Identify if we should strictly match noun POS (default False, except if enabled in params)
+        match_noun_pos = bool(params.get('match_noun_pos', False))
         absolute_threshold_only = bool(params.get('absolute_threshold_only', False))
 
         # --- Early position boost ---
@@ -261,10 +302,153 @@ class Label:
             if is_early:
                 base += early_boost
             self.surprisal_targets.append(base)
+
+        # decide whether this label refers to nouns (use POS info if available)
+        noun_tags = set(['NOUN', 'PROPN'])
+        target_is_noun = False
+        try:
+            # if any POS tag for this label is a noun/proper noun, consider it a noun label
+            for p in self.pos:
+                if p in noun_tags:
+                    target_is_noun = True
+                    break
+        except Exception:
+            target_is_noun = False
+        # If POS info is unavailable or non-conclusive, fall back to dictionary hints
+        if not target_is_noun:
+            try:
+                currency_whitelist = set(['euro', 'dollar', 'pound', 'yen'])
+                for w in self.words:
+                    wlow = w.lower()
+                    try:
+                        # if dict provides an explicit Titlecase variant, treat as noun
+                        if hasattr(dictionary, 'has_titlecase_variant') and dictionary.has_titlecase_variant(w):
+                            target_is_noun = True
+                            break
+                    except Exception:
+                        pass
+                    if wlow in currency_whitelist:
+                        target_is_noun = True
+                        break
+            except Exception:
+                pass
+
+        exclude_propn_candidates = bool(params.get('exclude_propn_candidates', False))
+        nlp_sp = _get_spacy_nlp(lang)
+
+        _propn_cache = {}
+        _pos_cache = {}
+        
+        def get_candidate_pos(candidate):
+            if nlp_sp is None: return None
+            clean = strip_punct(candidate)
+            if not clean: return None
+            key = clean.lower()
+            if key in _pos_cache: return _pos_cache[key]
+            try:
+                doc = nlp_sp(clean)
+                val = doc[0].pos_ if doc and len(doc) > 0 else None
+            except Exception:
+                val = None
+            _pos_cache[key] = val
+            return val
+
+        target_pos = get_candidate_pos(self.words[0]) if self.words else None
+        target_is_noun = (target_pos == 'NOUN')
+
+        # --- CASING CALCULATION ---
+        sw_target = strip_punct(self.words[0]) if self.words else ""
+        target_is_lower = sw_target[0].islower() if sw_target else True
+
         # get us some distractor candidates
-        min_length, max_length, min_freq, max_freq = threshold_func(self.words)
-        distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params)
+        # Strict POS matching: if target is a noun, dist must be a noun.
+        # If target is NOT a noun, dist must NOT be a noun.
+        pos_filter = None
+        if match_noun_pos:
+            pos_filter = 'NOUN' if target_is_noun else '!NOUN'
+        
+        min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
+        distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
+
+        # --- ADAPTIVE LENGTH SEARCH (Fix for 0-candidate long words) ---
+        # If no candidates found for exact length, widen search recursively.
+        if not distractor_opts:
+            for extra_len in range(1, 11): # Try widening up to +/- 10 characters
+                logging.info(f"0 candidates for {self.words} at exact length. Widening search by +/- {extra_len}")
+                distractor_opts = dictionary.get_potential_distractors(
+                    min_length - extra_len, max_length + extra_len, 
+                    min_freq, max_freq, params, pos_filter=pos_filter
+                )
+                if distractor_opts:
+                    break
+                
+                # --- FINAL FALLBACK: Frequency Relaxation ---
+                # If still nothing, try ignoring frequency thresholds for this length widening
+                logging.info(f"Still 0 candidates. Relaxing frequency constraints for +/- {extra_len}")
+                distractor_opts = dictionary.get_potential_distractors(
+                    min_length - extra_len, max_length + extra_len, 
+                    None, None, params, pos_filter=pos_filter
+                )
+                if distractor_opts:
+                    break
+
+        # --- Fallback: allow other non-noun classes as a last resort ---
+        if match_noun_pos and not target_is_noun:
+            num_req = int(params.get('num_to_test', 100))
+            if len(distractor_opts) < (num_req // 2):
+                logging.info(f"Not enough non-NOUN candidates for {self.words}, falling back to broader search (still excluding nouns)")
+                fallback_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter="!NOUN")
+                existing = set(distractor_opts)
+                for opt in fallback_opts:
+                    if opt not in existing:
+                        distractor_opts.append(opt)
+
+        if match_noun_pos and target_pos:
+            exact = []
+            others = []
+            bad_pos = {'PROPN', 'X', 'SYM', 'INTJ'}
+            if not target_is_noun:
+                bad_pos.add('NOUN')
+                
+            # --- HYPER-SPEED CPU FIX: BATCH TAGGING ---
+            try:
+                if nlp_sp is not None and distractor_opts:
+                    clean_opts = [strip_punct(c) for c in distractor_opts]
+                    docs = list(nlp_sp.pipe(clean_opts, batch_size=500))
+                    for c, doc in zip(distractor_opts, docs):
+                        c_pos = doc[0].pos_ if doc and len(doc) > 0 else None
+                        is_exact_match = (c_pos == target_pos) or (target_is_noun and c_pos == 'PROPN')
+                        
+                        if is_exact_match:
+                            exact.append(c)
+                        elif c_pos not in bad_pos:
+                            others.append(c)
+                else:
+                    for c in distractor_opts:
+                        c_pos = get_candidate_pos(c)
+                        is_exact_match = (c_pos == target_pos) or (target_is_noun and c_pos == 'PROPN')
+                        
+                        if is_exact_match:
+                            exact.append(c)
+                        elif c_pos not in bad_pos:
+                            others.append(c)
+            except Exception as e:
+                logging.error(f"Batch POS tagging failed: {e}")
+                for c in distractor_opts:
+                    c_pos = get_candidate_pos(c)
+                    if c_pos == target_pos:
+                        exact.append(c)
+                    elif c_pos not in bad_pos:
+                        others.append(c)
+
+            # Pre-sort exact matches first, fallback second. Drop bad POS completely!
+            if target_is_noun:
+                distractor_opts = exact
+            else:
+                distractor_opts = exact + others
+
         enforce_length_match = bool(params.get('enforce_length_match', True))
+        len_tolerance = int(params.get('len_tolerance', 0))
         target_lengths = []
         for w in self.words:
             sw = strip_punct(w)
@@ -287,18 +471,27 @@ class Label:
                 return False
             clen = len(sc)
             if target_exact_len is not None:
-                return clen == target_exact_len
+                return abs(clen - target_exact_len) <= len_tolerance
             if target_preferred_len is not None:
-                return clen == target_preferred_len
+                return abs(clen - target_preferred_len) <= len_tolerance
             return True
         avoid=[]
         for word in self.words: # it's awkward if the distractor is the same as the real word
             avoid.append(strip_punct(word).lower())
+            
+        # load exact exclude words just in case a fallback reads from unfiltered sources
+        global_exclude = set()
+        exc_path = params.get('exclude_words', None)
+        if exc_path and os.path.exists(exc_path):
+            with open(exc_path, 'r', encoding='utf-8') as ef:
+                for ln in ef:
+                    ew = ln.strip()
+                    if ew and not ew.startswith('#'):
+                        global_exclude.add(ew.lower())
+
         # normalize banned list to lowercase for case-insensitive comparison
         banned_l = [b.lower() for b in banned]
-        exclude_propn_candidates = bool(params.get('exclude_propn_candidates', False))
-        nlp_sp = _get_spacy_nlp(lang) if exclude_propn_candidates else None
-        _propn_cache = {}
+
         def candidate_surprisal(i, candidate):
             """Score candidate using full-context method when the model provides it."""
             if hasattr(model, 'get_surprisal_from_hidden'):
@@ -314,9 +507,21 @@ class Label:
             key = strip_punct(candidate).lower()
             if key in _propn_cache:
                 return _propn_cache[key]
+            
+            clean_cand = strip_punct(candidate)
             try:
-                doc = nlp_sp(strip_punct(candidate))
-                val = bool(doc and len(doc) > 0 and doc[0].pos_ == 'PROPN')
+                # Test the original (likely lowercase from dictionary)
+                doc1 = nlp_sp(clean_cand)
+                val1 = bool(doc1 and len(doc1) > 0 and doc1[0].pos_ == 'PROPN')
+                
+                val2 = False
+                # If it wasn't flagged as PROPN but is lowercase, 
+                # test its capitalized form. German SpaCy strictly relies on casing!
+                if not val1 and clean_cand.islower() and lang == 'de':
+                    doc2 = nlp_sp(clean_cand.capitalize())
+                    val2 = bool(doc2 and len(doc2) > 0 and doc2[0].pos_ == 'PROPN')
+                
+                val = val1 or val2
             except Exception:
                 val = False
             _propn_cache[key] = val
@@ -331,31 +536,43 @@ class Label:
                 if dist_surp < min_surp_val:
                     min_surp_val = dist_surp
             return min_surp_val
-        def pick_best_from_pool(pool, allow_banned=False, relax_length=False):
+        def pick_best_from_pool(pool, allow_banned=False, relax_length=False, enforce_pos=None):
             """Pick the most implausible candidate from a pool, respecting filters."""
-            local_best = None
-            local_best_surp = float('-inf')
-            for dist in pool:
-                dist_l = strip_punct(dist).lower()
-                if not dist_l:
-                    continue
-                if (not relax_length) and (not candidate_length_ok(dist)):
-                    continue
-                if dist_l in avoid:
-                    continue
-                if is_propn_candidate(dist):
-                    continue
-                if (not allow_banned) and (dist_l in banned_l):
-                    continue
-                if not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", strip_punct(dist)):
-                    continue
-                s = candidate_min_surprisal(dist)
-                if s is None:
-                    continue
-                if s > local_best_surp:
-                    local_best_surp = s
-                    local_best = dist
-            return local_best, local_best_surp
+            def _find_best(sub_pool):
+                local_best = None
+                local_best_surp = float('-inf')
+                for dist in sub_pool:
+                    dist_l = strip_punct(dist).lower()
+                    if not dist_l:
+                        continue
+                    if (not relax_length) and (not candidate_length_ok(dist)):
+                        continue
+                    if dist_l in avoid or dist_l in global_exclude:
+                        continue
+                    if is_propn_candidate(dist):
+                        continue
+                    if (not allow_banned) and (dist_l in banned_l):
+                        continue
+                    if not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", strip_punct(dist)):
+                        continue
+                    s = candidate_min_surprisal(dist)
+                    if s is None:
+                        continue
+                    if s > local_best_surp:
+                        local_best_surp = s
+                        local_best = dist
+                return local_best, local_best_surp
+
+            if target_pos and match_noun_pos:
+                exact_pool = [c for c in pool if get_candidate_pos(c) == target_pos]
+                best_cand, best_surp = _find_best(exact_pool)
+                if best_cand is not None:
+                    return best_cand, best_surp
+                if target_is_noun: 
+                    # Nouns MUST be nouns, no fallback allowed
+                    return None, float('-inf')
+            
+            return _find_best(pool)
 
         def get_include_words_exact_len(length_value):
             """Optional fallback pool from include_words for strict exact-length matching."""
@@ -395,39 +612,6 @@ class Label:
         # When enabled, always pick the highest-surprisal candidate instead of
         # returning early on threshold satisfaction.
         force_max_surprisal = bool(params.get('force_max_surprisal', False))
-        # New strategy: pick the candidate that maximizes the minimum surprisal
-        # across the sentences for this label (i.e., best worst-case surprisal).
-        # decide whether this label refers to nouns (use POS info if available)
-        noun_tags = set(['NOUN', 'PROPN'])
-        target_is_noun = False
-        try:
-            # if any POS tag for this label is a noun/proper noun, consider it a noun label
-            for p in self.pos:
-                if p in noun_tags:
-                    target_is_noun = True
-                    break
-        except Exception:
-            target_is_noun = False
-        # If POS info is unavailable or non-conclusive, fall back to dictionary hints
-        # (prefer Titlecase variants) and a small currency whitelist so that
-        # words like "euro" are recognized as nouns and capitalized.
-        if not target_is_noun:
-            try:
-                currency_whitelist = set(['euro', 'dollar', 'pound', 'yen'])
-                for w in self.words:
-                    wlow = w.lower()
-                    try:
-                        # if dict provides an explicit Titlecase variant, treat as noun
-                        if hasattr(dictionary, 'has_titlecase_variant') and dictionary.has_titlecase_variant(w):
-                            target_is_noun = True
-                            break
-                    except Exception:
-                        pass
-                    if wlow in currency_whitelist:
-                        target_is_noun = True
-                        break
-            except Exception:
-                pass
         # Optional mode: try to match candidate mean surprisal to the target
         # mean surprisal of the real words. This is more precise than simple
         # thresholding and can be enabled with `params['match_surprisal']`.
@@ -439,74 +623,73 @@ class Label:
             except Exception:
                 target_mean = None
             if target_mean is not None:
-                best_diff = float('inf')
-                best_candidate = None
-                for dist in distractor_opts:
-                    dist_l = strip_punct(dist).lower()
-                    if dist_l in banned_l or dist_l in avoid:
-                        continue
-                    if not candidate_length_ok(dist):
-                        continue
-                    # light continuation filter: skip if candidate literally contains the target
-                    skip = False
-                    for target in self.words:
-                        t = strip_punct(target).lower()
-                        if t and (t in dist_l or dist_l in t) and len(t) >= 4:
-                            skip = True
-                            break
-                    if skip:
-                        continue
-                    # compute mean surprisal of this candidate across all sentences
-                    ssum = 0.0
-                    count = 0
-                    for i in range(len(self.probs)):
-                        try:
-                            dist_surp = candidate_surprisal(i, dist)
-                        except Exception:
-                            dist_surp = None
-                        if dist_surp is None:
+                def _find_best_match(sub_pool):
+                    best_diff = float('inf')
+                    best_cand = None
+                    for dist in sub_pool:
+                        dist_l = strip_punct(dist).lower()
+                        if dist_l in banned_l or dist_l in avoid or dist_l in global_exclude:
                             continue
-                        ssum += dist_surp
-                        count += 1
-                    if count == 0:
-                        continue
-                    mean_surp = ssum / float(count)
-                    diff = abs(mean_surp - target_mean)
-                    if diff < best_diff:
-                        best_diff = diff
-                        best_candidate = dist
-                if best_candidate:
-                    try:
-                        cand = dictionary.canonical_case(best_candidate)
-                    except Exception:
-                        cand = best_candidate
-                    try:
-                        if target_is_noun:
+                        if not candidate_length_ok(dist):
+                            continue
+                        if is_propn_candidate(dist):
+                            continue
+                        # light continuation filter: skip if candidate literally contains the target
+                        skip = False
+                        for target in self.words:
+                            t = strip_punct(target).lower()
+                            if t and (t in dist_l or dist_l in t) and len(t) >= 4:
+                                skip = True
+                                break
+                        if skip:
+                            continue
+                        # compute mean surprisal of this candidate across all sentences
+                        ssum = 0.0
+                        count = 0
+                        for i in range(len(self.probs)):
                             try:
-                                title_var = dictionary.get_titlecase_variant(best_candidate)
+                                dist_surp = candidate_surprisal(i, dist)
                             except Exception:
-                                title_var = None
-                            if title_var:
-                                cand = title_var
-                            else:
-                                cand = cand[0:1].upper() + cand[1:]
-                        else:
-                            cand = cand.lower()
-                    except Exception:
-                        pass
-                    self.distractor = cand
+                                dist_surp = None
+                            if dist_surp is None:
+                                continue
+                            ssum += dist_surp
+                            count += 1
+                        if count == 0:
+                            continue
+                        mean_surp = ssum / float(count)
+                        diff = abs(mean_surp - target_mean)
+                        if diff < best_diff:
+                            best_diff = diff
+                            best_cand = dist
+                    return best_cand
+
+                best_candidate = None
+                if target_pos and match_noun_pos:
+                    exact_pool = [c for c in distractor_opts if get_candidate_pos(c) == target_pos]
+                    best_candidate = _find_best_match(exact_pool)
+                    
+                    if not best_candidate and not target_is_noun:
+                        best_candidate = _find_best_match(distractor_opts)
+                else:
+                    best_candidate = _find_best_match(distractor_opts)
+
+                if best_candidate:
+                    # Apply grammatical casing based on the DISTRACTOR'S class
+                    self.distractor = _get_german_grammatical_case(best_candidate, dictionary)
                     return self.distractor
 
-        # fall back to previous "best worst-case surprisal" strategy
+        # 1. Pre-filter candidates (cheap checks: length, banned, POS, repeat)
+        qualified_candidates = []
         for dist in distractor_opts:
             dist_l = strip_punct(dist).lower()
-            if dist_l in banned_l or dist_l in avoid:
+            if dist_l in banned_l or dist_l in avoid or dist_l in global_exclude:
                 continue
             if not candidate_length_ok(dist):
                 continue
-            if is_propn_candidate(dist):
+            if is_propn_candidate(dist) and params.get("exclude_propn_candidates", False):
                 continue
-            # light continuation filter: skip if candidate literally contains the target
+            # light continuation filter
             skip = False
             for target in self.words:
                 t = strip_punct(target).lower()
@@ -515,57 +698,65 @@ class Label:
                     break
             if skip:
                 continue
-            # compute minimum surprisal of this candidate across all sentences
-            min_surp_val = candidate_min_surprisal(dist)
-            if min_surp_val is None:
-                continue
-            if min_surp_val > best_min_surp:
-                best_min_surp = min_surp_val
-                best_word = dist
-            # In Mode B + early positions: also track the best candidate that
-            # meets the boosted threshold.  After the loop we prefer this over
-            # the unconstrained best, making the boost effective in Mode B.
-            if force_max_surprisal and is_early and early_boost > 0:
-                meets_boosted = all(
-                    candidate_surprisal(j, dist) >= self.surprisal_targets[j]
-                    for j in range(len(self.probs))
-                )
-                if meets_boosted and min_surp_val > best_qualified_surp:
-                    best_qualified_surp = min_surp_val
-                    best_qualified_word = dist
-            if force_max_surprisal:
-                continue
-            # if any candidate already meets all surprisal targets, take it immediately
-            meets_all = True
-            for i in range(len(self.probs)):
-                if candidate_surprisal(i, dist) < self.surprisal_targets[i]:
-                    meets_all = False
+            qualified_candidates.append(dist)
+            
+        if not qualified_candidates:
+            # handle empty pool via fallback logic below
+            target_rep = self.words[0] if self.words else "???"
+            print(f"  [Batch] Scoring 0 candidates for target '{target_rep}'...")
+        else:
+            # 2. Batch score the qualified pool for all sentence contexts
+            target_rep = self.words[0] if self.words else "???"
+            print(f"  [Batch] Scoring {len(qualified_candidates)} candidates for target '{target_rep}'...")
+            
+            candidate_scores = []
+            for j in range(len(self.probs)):
+                hidden = self.hiddens[j]
+                # --- CUDA OOM PREVENTION ---
+                # Now set to 256 for maximum throughput on the memory-efficient engine.
+                chunk_size = 256
+                all_scores = []
+                for i in range(0, len(qualified_candidates), chunk_size):
+                    chunk = qualified_candidates[i : i + chunk_size]
+                    try:
+                        chunk_scores = model.get_surprisal_batch_from_hidden(hidden, chunk, batch_size=256)
+                        all_scores.extend(chunk_scores)
+                    except Exception as e:
+                        logging.error(f"Batch scoring failed for chunk {i}: {e}")
+                        # Fallback to slower single scoring for this chunk if GPU fails
+                        for c in chunk:
+                            all_scores.append(model.get_surprisal(self.probs[j], c))
+                
+                # Map them back to the words
+                candidate_scores.append(dict(zip(qualified_candidates, all_scores)))
+                
+            # 3. Iterate through candidates and apply surprisal filters/selection
+            for dist in qualified_candidates:
+                # Get the min surprisal across contexts (min of surprisals = worst case)
+                vals = [candidate_scores[j][dist] for j in range(len(self.probs))]
+                min_surp_val = min(vals)
+                
+                # Check if it meets all thresholds
+                meets_all = True
+                for j in range(len(self.probs)):
+                    if candidate_scores[j][dist] < self.surprisal_targets[j]:
+                        meets_all = False
+                        break
+                
+                # Update best_word trackers
+                if meets_all and min_surp_val > best_min_surp:
+                    best_min_surp = min_surp_val
+                    best_word = dist
+
+                if force_max_surprisal and is_early and early_boost > 0:
+                    if meets_all and min_surp_val > best_qualified_surp:
+                        best_qualified_surp = min_surp_val
+                        best_qualified_word = dist
+
+                if not force_max_surprisal and meets_all:
+                    # Apply grammatical casing based on the DISTRACTOR'S class
+                    best_word = dist
                     break
-            if meets_all:
-                # apply canonical casing from the dictionary before assigning
-                try:
-                    cand = dictionary.canonical_case(dist)
-                except Exception:
-                    cand = dist
-                # if target is a noun, prefer an exact Titlecase variant from the
-                # dictionary (falls back to simple capitalization); otherwise
-                # return lowercase
-                try:
-                    if target_is_noun:
-                        try:
-                            title_var = dictionary.get_titlecase_variant(dist)
-                        except Exception:
-                            title_var = None
-                        if title_var:
-                            cand = title_var
-                        else:
-                            cand = cand[0:1].upper() + cand[1:]
-                    else:
-                        cand = cand.lower()
-                except Exception:
-                    pass
-                self.distractor = cand
-                return self.distractor
         # Mode B + early position boost: prefer the best candidate that meets
         # the boosted threshold.  Falls back to the unconstrained best_word if
         # nothing passed the threshold.
@@ -606,7 +797,12 @@ class Label:
                     cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True, relax_length=True)
             if cand is None:
                 try:
-                    emergency_pool = [w.text for w in getattr(dict, 'words', [])]
+                    # Fix: use 'dictionary' instead of 'dict'. Enforce POS guard to prevent cross-contamination.
+                    def emergency_pos_ok(w_pos):
+                        if not match_noun_pos: return True
+                        return (w_pos == 'NOUN' or w_pos == 'PROPN') if target_is_noun else (w_pos != 'NOUN' and w_pos != 'PROPN')
+                    
+                    emergency_pool = [w.text for w in getattr(dictionary, 'words', []) if emergency_pos_ok(getattr(w, 'pos', None))]
                 except Exception:
                     emergency_pool = []
                 if emergency_pool:
@@ -625,38 +821,54 @@ class Label:
                 cand_surp = float('-inf')
             best_word = cand
             best_min_surp = cand_surp
-        # apply canonical casing from the dictionary before assigning
-        try:
-            best_word = dictionary.canonical_case(best_word)
-        except Exception:
-            best_word = best_word
-        # if target isn't a noun, prefer lowercased fallback
-        try:
-            if not target_is_noun:
-                best_word = best_word.lower()
-        except Exception:
-            pass
-        # if target is noun and a Titlecase variant exists in the static JSON,
-        # prefer that exact variant (use dictionary helper if available).
-        try:
-            if target_is_noun:
-                # attempt to fetch a precise titlecase variant from the dict
-                title_var = None
-                try:
-                    title_var = dictionary.get_titlecase_variant(best_word)
-                except Exception:
-                    title_var = None
-                if title_var:
-                    best_word = title_var
-                else:
-                    # as a fallback, capitalize first letter
-                    best_word = best_word[0:1].upper() + best_word[1:]
-        except Exception:
-            pass
+        if best_word is None:
+            # Last ditch attempt: ignore POS constraints entirely
+            fallback_pool = list(distractor_opts)
+            random.shuffle(fallback_pool)
+            # Find the absolute best available word regardless of threshold
+            cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=False, relax_length=True)
+            if cand is None:
+                cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=True, relax_length=True)
+            
+            if cand is not None:
+                best_word = cand
+                best_min_surp = cand_surp
+
+        if best_word is None:
+            # If still nothing, pick ANY real word of correct length from dictionary
+            try:
+                # Avoid 'wort' if any other word exists in the dictionary pool
+                emergency_pool = [w.text for w in getattr(dictionary, 'words', []) 
+                                if abs(len(w.text) - (target_exact_len or 5)) <= 2 
+                                and w.text.lower() not in banned_l]
+                if emergency_pool:
+                    random.shuffle(emergency_pool)
+                    for w_text in emergency_pool:
+                        if not match_noun_pos:
+                            best_word = w_text
+                            break
+                        
+                        is_n = dictionary.has_titlecase_variant(w_text)
+                        if target_is_noun and is_n:
+                            best_word = w_text
+                            break
+                        elif not target_is_noun and not is_n:
+                            best_word = w_text
+                            break
+                
+                if best_word is None:
+                    best_word = "wort"
+            except Exception:
+                best_word = "wort"
+                
+            best_min_surp = float('-inf')
+
+        # Final casing pass based on DISTRACTOR category
+        self.distractor = _get_german_grammatical_case(best_word, dictionary)
+
         if not force_max_surprisal:
             logging.warning("Could not find a word to meet threshold for item %s, label %s, returning %s with %f min surp instead",
-                self.id, self.lab, best_word, best_min_surp)
-        self.distractor = best_word
+                self.id, self.lab, self.distractor, best_min_surp)
         return self.distractor
 
 
@@ -703,25 +915,27 @@ class Sentence_Set:
         if nlp_sp is not None:
             for sentence in self.sentences:
                 try:
-                    doc = nlp_sp(sentence.word_sentence)
+                    # Use the words list directly as tokens for alignment
+                    from spacy.tokens import Doc
+                    doc = Doc(nlp_sp.vocab, words=sentence.words)
+                    # Run the tagger/parser on the pre-tokenized doc
+                    for name, proc in nlp_sp.pipeline:
+                        if name not in ["tok2vec", "tagger", "attribute_ruler", "lemmatizer"]:
+                            # We only strictly need the tagger for POS
+                            if name != "tagger" and name != "attribute_ruler":
+                                continue
+                        doc = proc(doc)
                     pos_tags = [t.pos_ for t in doc]
-                    if len(pos_tags) == len(sentence.words):
-                        sentence.pos_tags = pos_tags
-                    else:
-                        sentence.pos_tags = None
+                    sentence.pos_tags = pos_tags
                 except Exception:
                     sentence.pos_tags = None
         else:
             for sentence in self.sentences:
                 sentence.pos_tags = None
 
-        # --- DYNAMIC LENGTH ALIGNMENT FIX ---
-        # Instead of rigidly assigning all words in a column to a single generator label (which breaks
-        # when condition targets possess different character counts like `wurde` vs `wurden`),
-        # we append the word's specific target length to its internal label tag!
-        # E.g. '6' splits gracefully into '6_L5' and '6_L6'. The system safely interprets them as
-        # different categories, giving `wurde` a 5-letter word and `wurden` a 6-letter word implicitly!
-        new_label_ids = set()
+        # --- DYNAMIC LENGTH ALIGNMENT FIX (ORDERED) ---
+        new_label_ids = []
+        seen_labs = set()
         for sentence in self.sentences:
             for i in range(1, len(sentence.labels)):
                 orig_lab = sentence.labels[i]
@@ -731,6 +945,10 @@ class Sentence_Set:
                 else:
                     new_lab = orig_lab
                 
+                if new_lab not in seen_labs:
+                    new_label_ids.append(new_lab)
+                    seen_labs.add(new_lab)
+                
                 if new_lab != orig_lab:
                     sentence.labels[i] = new_lab
                     if orig_lab in sentence.probs:
@@ -739,7 +957,6 @@ class Sentence_Set:
                         sentence.hiddens[new_lab] = sentence.hiddens.pop(orig_lab)
                     if hasattr(sentence, 'surprisal') and orig_lab in sentence.surprisal:
                         sentence.surprisal[new_lab] = sentence.surprisal.pop(orig_lab)
-                new_label_ids.add(new_lab)
                 
         self.label_ids = new_label_ids
         # ------------------------------------
@@ -782,8 +999,28 @@ class Sentence_Set:
             target_len = len(target)
             banned_l = set([strip_punct(b).lower() for b in banned])
 
-            min_length, max_length, min_freq, max_freq = threshold_func([sentence.words[0]])
-            opts = d.get_potential_distractors(min_length, max_length, min_freq, max_freq, params)
+            min_length, max_length, min_freq, max_freq = threshold_func([sentence.words[0]], params)
+            # detect if target is a noun
+            target_is_noun_first = False
+            if hasattr(sentence, 'pos_tags') and sentence.pos_tags and sentence.pos_tags[0] in ('NOUN', 'PROPN'):
+                target_is_noun_first = True
+            
+            pos_filter = None
+            if params.get('match_noun_pos', False):
+                pos_filter = 'NOUN' if target_is_noun_first else '!NOUN'
+            
+            print(f"  [First] Finding first-word distractor for '{target}'...")
+            opts = d.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
+            
+            if pos_filter == '!NOUN':
+                num_req = int(params.get('num_to_test', 100))
+                if len(opts) < (num_req // 2):
+                    fallback_opts = d.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=None)
+                    existing = set(opts)
+                    for opt in fallback_opts:
+                        if opt not in existing:
+                            opts.append(opt)
+                            
             random.shuffle(opts)
             for cand in opts:
                 base = strip_punct(cand)
@@ -855,7 +1092,9 @@ class Sentence_Set:
                     apply_postcase = ('german' in model_loc) or ('german' in dict_cls) or ('dbmdz' in hf_name)
                 except Exception:
                     apply_postcase = False
-            if apply_postcase:
+            # Read match_target_case param
+            match_target_case = bool(params.get('match_target_case', False))
+            if apply_postcase and not match_target_case:
                 try:
                     for j in range(len(sentence.distractors)):
                         # Use the original word's POS tag (from full-sentence
@@ -871,6 +1110,26 @@ class Sentence_Set:
                             sentence.distractors[j], d, lang=lang, source_pos=src_pos)
                 except Exception:
                     pass
+            # match_target_case: copy the target word's casing onto the distractor
+            if match_target_case:
+                for j in range(len(sentence.distractors)):
+                    if j >= len(sentence.words):
+                        break
+                    if _is_x_placeholder_token(sentence.distractors[j]):
+                        continue
+                    target_tok = sentence.words[j]
+                    dist_tok = sentence.distractors[j]
+                    _, t_body, _ = _split_punct(target_tok)
+                    d_prefix, d_body, d_suffix = _split_punct(dist_tok)
+                    if not d_body or not t_body:
+                        continue
+                    if t_body.isupper():
+                        new_body = d_body.upper()
+                    elif t_body[0].isupper():
+                        new_body = d_body[0:1].upper() + d_body[1:].lower()
+                    else:
+                        new_body = d_body.lower()
+                    sentence.distractors[j] = d_prefix + new_body + d_suffix
             # Keep first placeholder shape stable (no auto-capitalization side effects).
             if use_first_placeholder and sentence.distractors:
                 first_len = len(strip_punct(sentence.words[0]))

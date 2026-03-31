@@ -41,26 +41,47 @@ python distract.py -i arabic_sample.txt -o output_ar.txt -p params_ar.txt -f del
 - **Three languages** — English (`gpt2-medium`), German (`dbmdz/german-gpt2`), and Arabic (`aubmindlab/aragpt2-medium`)
 - **Two selection modes** — threshold-first (Mode A) or max-implausibility ranking (Mode B)
 - **Two output formats** — `delim` (semicolon-delimited table) and `ibex` (PCIbex-ready lines)
-- **Length matching** — distractors match target word length
-- **Dynamic length alignment** — automatically assigns separate proper distractors when target words occupy the identical structural position across condition variants but differ in character length (e.g., *wurde* vs *wurden*).
-- **Frequency filtering** — candidate pools built from Zipf-frequency dictionaries with configurable floors
+- **Length matching** — distractors match target word length (with optional `len_tolerance`)
+- **POS-Aware Noun Matching** — (German) target nouns receive noun distractors for grammatical capitalization
+- **Frequency Matching** — distractors fall within a tight Zipf frequency band (`freq_tolerance`)
+- **Proper-noun filtering** — `exclude_propn_candidates` uses spaCy POS tags (English and German)
 - **German noun casing** — automatic post-processing capitalizes German nouns (via spaCy POS tagging)
 - **Arabic diacritics handling** — tashkeel stripped for consistent frequency lookups and candidate matching
 - **Quality assessment** — built-in `assess_output.py` validates placeholder policy, word form, length, and surprisal margins
 - **Set-level distractor reuse** — distractors are chosen once per label within an item-set and reused across its condition variants; this preserves controlled comparisons (e.g., Latin-square style designs) and reduces compute time
 
-## CLI Usage
+## German "Gold Standard" Configuration
+
+For maximum accuracy and linguistic control in German experiments, use the following validated "Gold Standard" parameters in your `params_de.txt`:
+
+- **`min_abs: 15` / `min_delta: 8`**: The proven baseline for target/distractor surprisal gaps.
+- **`len_tolerance: 1`**: Allows $\pm 1$ character matching, critical for German compound words.
+- **`force_max_surprisal: True`**: (Mode B) Ensures the absolute worst-fitting word is chosen as the distractor.
+- **`num_to_test: 1000`**: High-quality candidate pool for better scoring.
+- **`freq_tolerance: 0.2`** & **`min_zipf: 3.0`**: Stricter frequency bounds for natural-sounding distractors.
+- **`max_freq_widen: 15`**: Generous fallback to prevent "wort" placeholders.
+
+## Performance / Batch Mode
+
+The German Maze pipeline (and future models) now supports **Parallel Batch Scoring**. Instead of calculating surprisals for one candidate word at a time, the model processes **256 candidates simultaneously** on your GPU or CPU.
+
+### **Speed Features:**
+- **Hyper-Speed Execution**: Reduces generation time from hours to minutes for large stimulus sets.
+- **Focused Context Window (64 tokens)**: Intelligently limits history look-back to ensure constant high performance, even in long sentences.
+- **GPU-Accelerated**: Automatically detects and utilizes NVIDIA CUDA for maximum throughput.
+
+## Usage
 
 ```
-python distract.py -i INPUT -o OUTPUT [-p PARAMS] [-f {delim,ibex}]
+python distract.py [INPUT] [OUTPUT] [PARAMS] [-f {delim,ibex}]
 ```
 
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `-i` | yes | — | Input file (semicolon-delimited) |
-| `-o` | yes | — | Output file path |
-| `-p` | no | `params_en.txt` | Parameters file |
-| `-f` | no | `delim` | Output format: `delim` or `ibex` |
+| `INPUT`  | yes | — | Input file (or use `-i`) |
+| `OUTPUT` | yes | — | Output file (or use `-o`) |
+| `PARAMS` | no | `params_en.txt` | Configuration file (or use `-p`) |
+| `-f` | no | `delim` | Output format (`delim` or `ibex`) |
 
 ## Input Format
 
@@ -79,11 +100,14 @@ sample;3;القطة جلست على السجادة
 | `min_delta` | *(required)* | Surprisal margin over target word |
 | `min_abs` | *(required)* | Absolute surprisal floor |
 | `num_to_test` | *(required)* | Candidate pool size per position |
-| `force_max_surprisal` | `False` | `True` = rank by implausibility; `False` = threshold-first |
-| `enforce_length_match` | `True` | Require same-length distractors |
+| `force_max_surprisal` | `False` | `True` = rank by implausibility (Mode B); `False` = threshold-first (Mode A). **Note:** Both modes now strictly respect `min_delta` and `min_abs` before selecting a candidate. |
+| `enforce_length_match` | `True` | Require character-count consistency for distractors |
+| `len_tolerance` | `0` | Allowed character-length difference between target and distractor (e.g. `1` allows target ±1) |
 | `first_token_placeholder` | `True` | Use `x-x-x` placeholder for sentence-initial position |
 | `early_position_boost` | `0` | Extra surprisal for early positions (reduces plausible distractors at sentence start) |
-| `apply_postcase` | auto | German noun casing post-processing (auto-enabled for German configs) |
+| `match_noun_pos` | `False` | (German-specific) If `True`, distractors for target nouns must also be nouns. |
+| `apply_postcase` | auto | German noun casing post-processing (auto-enabled for German configs). |
+| `match_target_case` | `False` | If `True`, each distractor copies the target word's capitalization (uppercase→uppercase, Titlecase→Titlecase, lowercase→lowercase); bypasses `apply_postcase` spaCy noun logic |
 
 See the [Config Reference](https://github.com/mohamedsaid2710/Distractor_software-/wiki/Config-Reference) for the full parameter catalog.
 

@@ -30,56 +30,128 @@ class wordfreq_dict(distractor_dict):
     """General class of dictionaries"""
 
     def __init__(self, params={}):
-        pass
+        self.words = []
+        self.words_by_len = {}
+
+    def _build_length_index(self):
+        """Internal helper to organize words by length for fast lookup."""
+        self.words_by_len = {}
+        for w in self.words:
+            l = w.len
+            if l not in self.words_by_len:
+                self.words_by_len[l] = []
+            self.words_by_len[l].append(w)
+
     def canonical_case(self, token):
         """Return a preferred-cased form of `token` if available (override in subclasses)."""
         return token
+
     def in_dict(self, test_word):
         """Test to see if word is in dictionary"""
-        for word in self.words:
+        # Minor optimization: first check length
+        l = len(utils.strip_punct(test_word))
+        word_pool = self.words_by_len.get(l, [])
+        for word in word_pool:
             if word.text == test_word:
                 return word
         return False
 
-    def get_words(self, length_low, length_high, freq_low, freq_high):
-        """Returns a list of words within specified ranges"""
+    def get_words(self, length_low, length_high, freq_low, freq_high, pos_filter=None, use_spacy=False):
+        """Returns a list of words within specified ranges using length-based indexing."""
         matches = []
-        for word in self.words:
-            # basic range checks
-            if not (freq_low <= word.freq <= freq_high and length_low <= word.len <= length_high):
-                continue
-            matches.append(word.text)
+        
+        # Iterate only over the relevant length buckets
+        for l in range(length_low, length_high + 1):
+            word_pool = self.words_by_len.get(l, [])
+            for word in word_pool:
+                # Basic frequency check
+                if not (freq_low <= word.freq <= freq_high):
+                    continue
+                
+                if pos_filter:
+                    p_tag = getattr(word, 'pos', None)
+                    # For German, lazy-evaluation is now handled via batch processing in get_potential_distractors.
+                    # This fallback is kept for robustness but should rarely be bottlenecked now.
+                    if use_spacy and hasattr(self, 'has_titlecase_variant'):
+                        if p_tag != pos_filter:
+                            is_noun = self.has_titlecase_variant(word.text)
+                            p_tag = "NOUN" if is_noun else None
+
+                    if pos_filter.startswith('!'):
+                        if p_tag == pos_filter[1:]:
+                            continue
+                    elif p_tag != pos_filter:
+                        continue
+                matches.append(word.text)
         return matches
 
-    def get_potential_distractors(self, min_length, max_length, min_freq, max_freq, params):
-        """returns list of n words, if possible from between threshold values
-        if not tries things nearby -- higher frequency and then lower"""
-        distractor_opts = self.get_words(min_length, max_length, min_freq, max_freq)
+    def batch_tag_words(self, words):
+        """Tag a list of words in bulk using SpaCy's batch processing (nlp.pipe)."""
+        if self.nlp_sp is None or not words:
+            return
+        
+        # Filter for words not yet in the case_map
+        unique_words = list(set(w.lower() for w in words if w.lower() not in self.case_map))
+        if not unique_words:
+            return
+        
+        # Prepare framed context for improved German tagging to avoid "isolated capitalization" bug
+        # e.g., 'Das Gehässig ist hier.' forces SpaCy to evaluate grammar rather than just capping rule.
+        framed_texts = [f"Das {w.capitalize()} ist hier." for w in unique_words]
+        
+        # Process in batches
+        try:
+            # Using nlp.pipe is significantly faster than nlp() in a loop
+            docs = self.nlp_sp.pipe(framed_texts)
+            for word_l, doc in zip(unique_words, docs):
+                if len(doc) > 1 and doc[1].pos_ in ('NOUN', 'PROPN'):
+                    self.case_map[word_l] = word_l.capitalize()
+                else:
+                    self.case_map[word_l] = None
+        except Exception as e:
+            logging.error(f"SpaCy batch tagging failed: {e}")
+
+    def get_potential_distractors(self, min_length, max_length, min_freq, max_freq, params, pos_filter=None):
+        """Returns list of candidates, using heuristic first, then widening, then batch SpaCy validation."""
+        n = params.get('num_to_test', 200)
+        target_pool_size = max(n * 2, 500)
+        
+        # 1. Fetch search pool (using heuristic only)
+        # We fetch MORE so that after POS filtering we still have 'n' candidates.
+        distractor_opts = self.get_words(min_length, max_length, min_freq, max_freq, pos_filter=None, use_spacy=False)
+        
+        # 2. Widening frequency range if needed (still heuristic/raw)
+        if len(distractor_opts) < target_pool_size:
+            max_widen = int(params.get('max_freq_widen', 15))
+            for i in range(1, max_widen + 1):
+                lower = self.get_words(min_length, max_length, min_freq - i, min_freq - i + 1, pos_filter=None, use_spacy=False)
+                higher = self.get_words(min_length, max_length, max_freq + i - 1, max_freq + i, pos_filter=None, use_spacy=False)
+                distractor_opts.extend(lower)
+                distractor_opts.extend(higher)
+                if len(distractor_opts) >= target_pool_size:
+                    break
+
+        # 3. --- HYPER-SPEED OPTIMIZATION: BATCH TAGGING ---
+        # Instead of tagging words one-by-one in the loop, we tag the entire pool at once!
+        if self.nlp_sp is not None:
+            self.batch_tag_words(distractor_opts)
+            
+        # 4. Filter the pool using the now-cached high-quality POS tags
+        if pos_filter:
+            filtered = []
+            for w in distractor_opts:
+                is_noun = self.has_titlecase_variant(w)
+                p_tag = "NOUN" if is_noun else "!NOUN" # simplified tag based on noun-check
+                
+                if pos_filter.startswith('!'):
+                    if p_tag == pos_filter[1:]: continue
+                elif p_tag != pos_filter:
+                    continue
+                filtered.append(w)
+            distractor_opts = filtered
+
         random.shuffle(distractor_opts)
-        n=params['num_to_test']
-        if len(distractor_opts) >= n:
-            return distractor_opts[:n]
-        else:
-            logging.info("Having to widen distractor option search")
-            still_need = n - len(distractor_opts)
-            i = 1
-            while i < 10:
-                new = []
-                lower = self.get_words(min_length, max_length, min_freq - i, min_freq - i + 1)
-                higher = self.get_words(min_length, max_length, max_freq + i - 1, max_freq + i)
-                new.extend(lower)
-                new.extend(higher)
-                random.shuffle(new)
-                if len(new) >= still_need:
-                    distractor_opts.extend(new)
-                    return distractor_opts[:n]
-                distractor_opts.extend(new)
-                i += 1
-        logging.warning(
-            "Could not find enough distractors for requested num_to_test; "
-            "continuing with smaller candidate pool (non-fatal)"
-        )
-        return distractor_opts
+        return distractor_opts[:n]
 
 
 
@@ -154,6 +226,7 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
             freq_val = z * math.log(10)
             self.words.append(distractor(token, freq_val))
             seen.add(low)
+        self._build_length_index()
 
 
 # ---------------------------------------------------------------------------
@@ -161,24 +234,25 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
 # ---------------------------------------------------------------------------
 # Well-known derivational suffixes that almost exclusively form nouns.
 _GERMAN_NOUN_SUFFIXES = (
-    'ung', 'heit', 'keit', 'schaft', 'tion', 'sion', 'nis', 'tum',
-    'ling', 'tät', 'ment', 'chen', 'lein', 'ismus', 'eur', 'ant',
-    'ent', 'ist', 'enz', 'anz',
+    'ung', 'heit', 'keit', 'schaft', 'tion', 'sion', 'nis', 'tum', 'ling', 
+    'tät', 'ment', 'chen', 'lein', 'ismus', 'eur', 'ant', 'ent', 'ist', 'enz', 'anz',
+    'ität', 'ik', 'ur', 'ade', 'age', 'ie', 'elle', 'ette', 'ine', 'ive', 'ose',
+    'um', 'form', 'werk', 'zeug', 'haus', 'raum', 'platz', 'zeit', 'kraft', 'land',
+    # Additional common German endings
+    'er', 'el', 'en', 'e' 
 )
 
 def _is_likely_german_noun(word):
-    """Heuristic: return True if *word* looks like a German noun.
-
-    Uses a curated list of derivational suffixes that almost exclusively
-    produce nouns in German.  This is a reliable fallback when no spaCy
-    model is installed.
-    """
+    """Refined heuristic for German nouns using common suffixes and patterns."""
     lw = word.lower()
-    if len(lw) < 3:
+    if len(lw) < 2:
         return False
-    for suffix in _GERMAN_NOUN_SUFFIXES:
-        if lw.endswith(suffix) and len(lw) > len(suffix):
-            return True
+    # Check suffixes
+    if lw.endswith(_GERMAN_NOUN_SUFFIXES):
+        # A significant portion of words ending in er/el/en/e are nouns,
+        # but many are verbs/adj. For the heuristic used in candidate pooling, 
+        # we lean towards "potentially a noun" to trigger SpaCy validation later.
+        return True
     return False
 
 
@@ -229,12 +303,17 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         if include is not None and os.path.exists(include):
             try:
                 with open(include, "r", encoding="utf-8") as f:
-                    include_words = [line.strip() for line in f if line.strip()]
+                    include_words = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
             except Exception:
                 include_words = None
 
         freq_dict = wordfreq.get_frequency_dict("de")
-        source_words = include_words if include_words is not None else freq_dict.keys()
+        # Merge include_words INTO the main dictionary instead of replacing it.
+        # This ensures short curated words are always available as candidates
+        # without losing the full wordfreq pool for longer positions.
+        source_words = list(freq_dict.keys())
+        if include_words is not None:
+            source_words = list(include_words) + source_words
 
         self.words = []
         seen = set()
@@ -264,10 +343,15 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 z = wordfreq.zipf_frequency(lw, "de")
             except Exception:
                 continue
-            if z < min_zipf:
+            # Apply length-dependent zipf thresholding to weed out short acronyms
+            # but allow rare long compound nouns
+            effective_min_zipf = min_zipf if len(lw) >= 5 else max(min_zipf, 3.5)
+            if z < effective_min_zipf:
                 continue
             freq_val = z * math.log(10)
-            self.words.append(distractor(lw, freq_val))
+            # Tag as NOUN (heuristic) to support pos_filter matching.
+            pos_tag = 'NOUN' if _is_likely_german_noun(lw) else None
+            self.words.append(distractor(lw, freq_val, pos=pos_tag))
             seen.add(lw)
 
         # Build case_map: identify which distractor words are German nouns
@@ -275,6 +359,8 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         self.case_map = {}
         self.nlp_sp = None
         self._init_spacy()
+        self._build_length_index()
+
 
     def _init_spacy(self):
         try:
@@ -293,17 +379,9 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         """Evaluate a single word on the fly for noun candidacy using SpaCy if available."""
         if self.nlp_sp is not None:
             w_cap = token_lower.capitalize()
-            iso_text = w_cap
-            nt_text = f'Das {w_cap} ist hier.'
-            vt_text = f'Er will {token_lower} gehen.'
-            
-            votes = 0
-            for text, offset in [(iso_text, 0), (nt_text, 1), (vt_text, 2)]:
-                doc = self.nlp_sp(text)
-                if len(doc) > offset and doc[offset].pos_ in ('NOUN', 'PROPN'):
-                    votes += 1
-                    
-            if votes >= 2:
+            # Wrap in neutral context to prevent SpaCy from blindly tagging isolated capitals as Nouns
+            doc = self.nlp_sp(f"Das {w_cap} ist hier.")
+            if len(doc) > 1 and doc[1].pos_ in ('NOUN', 'PROPN'):
                 self.case_map[token_lower] = w_cap
             else:
                 self.case_map[token_lower] = None
@@ -314,6 +392,20 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 self.case_map[token_lower] = None
                 
         return self.case_map[token_lower]
+
+    def has_titlecase_variant(self, token):
+        """Public check for noun/titlecase status of a token (lowercase or otherwise)."""
+        t_lower = token.lower()
+        if t_lower not in self.case_map:
+            self._eval_single_word_case(t_lower)
+        return self.case_map.get(t_lower) is not None
+
+    def get_titlecase_variant(self, token):
+        """Returns the TitleCase form if the token is a known noun."""
+        t_lower = token.lower()
+        if t_lower not in self.case_map:
+            self._eval_single_word_case(t_lower)
+        return self.case_map.get(t_lower)
 
     def canonical_case(self, token):
         """Return Titlecased form if known noun, else token as-is."""
@@ -343,8 +435,13 @@ def get_frequency_en(word):
 
 
 
-def get_thresholds_de(words):
-    """German thresholds based on German frequency."""
+def get_thresholds_de(words, params=None):
+    """German thresholds based on German frequency.
+
+    When *params* contains ``freq_tolerance`` (in Zipf units), the frequency
+    band is tightened to mean_target_freq ± tolerance (converted to natural-log
+    units).  This ensures distractors closely match the target word's frequency.
+    """
     lengths = []
     freqs = []
     for word in words:
@@ -354,13 +451,27 @@ def get_thresholds_de(words):
         freqs.append(get_frequency_de(stripped))
     min_length = min(lengths)
     max_length = max(lengths)
-    min_freq = min(min(freqs), 11)
-    max_freq = max(max(freqs), 3)
+
+    # --- Tight frequency band matching ---
+    if params and 'freq_tolerance' in params:
+        tol_zipf = float(params['freq_tolerance'])
+        tol_natlog = tol_zipf * math.log(10)
+        mean_freq = sum(freqs) / len(freqs)
+        min_freq = mean_freq - tol_natlog
+        max_freq = mean_freq + tol_natlog
+    else:
+        # Legacy wide-range behavior
+        min_freq = min(min(freqs), 11)
+        max_freq = max(max(freqs), 3)
+
     return min_length, max_length, min_freq, max_freq
 
 
-def get_thresholds_en(words):
-    """English thresholds based on English frequency."""
+def get_thresholds_en(words, params=None):
+    """English thresholds based on English frequency.
+
+    Supports tight frequency band matching via ``freq_tolerance`` in *params*.
+    """
     lengths = []
     freqs = []
     for word in words:
@@ -370,8 +481,17 @@ def get_thresholds_en(words):
         freqs.append(get_frequency_en(stripped))
     min_length = min(lengths)
     max_length = max(lengths)
-    min_freq = min(min(freqs), 11)
-    max_freq = max(max(freqs), 3)
+
+    if params and 'freq_tolerance' in params:
+        tol_zipf = float(params['freq_tolerance'])
+        tol_natlog = tol_zipf * math.log(10)
+        mean_freq = sum(freqs) / len(freqs)
+        min_freq = mean_freq - tol_natlog
+        max_freq = mean_freq + tol_natlog
+    else:
+        min_freq = min(min(freqs), 11)
+        max_freq = max(max(freqs), 3)
+
     return min_length, max_length, min_freq, max_freq
 
 
@@ -457,6 +577,7 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
             freq_val = z * math.log(10)
             self.words.append(distractor(token, freq_val))
             seen.add(token)
+        self._build_length_index()
 
     def canonical_case(self, token):
         """Arabic has no casing; return as-is."""
@@ -472,8 +593,11 @@ def get_frequency_ar(word):
     return wordfreq.zipf_frequency(strip_arabic_diacritics(word), 'ar') * math.log(10)
 
 
-def get_thresholds_ar(words):
-    """Arabic thresholds based on Arabic frequency."""
+def get_thresholds_ar(words, params=None):
+    """Arabic thresholds based on Arabic frequency.
+
+    Supports tight frequency band matching via ``freq_tolerance`` in *params*.
+    """
     lengths = []
     freqs = []
     for word in words:
@@ -483,7 +607,16 @@ def get_thresholds_ar(words):
         freqs.append(get_frequency_ar(stripped))
     min_length = min(lengths)
     max_length = max(lengths)
-    min_freq = min(min(freqs), 11)
-    max_freq = max(max(freqs), 3)
+
+    if params and 'freq_tolerance' in params:
+        tol_zipf = float(params['freq_tolerance'])
+        tol_natlog = tol_zipf * math.log(10)
+        mean_freq = sum(freqs) / len(freqs)
+        min_freq = mean_freq - tol_natlog
+        max_freq = mean_freq + tol_natlog
+    else:
+        min_freq = min(min(freqs), 11)
+        max_freq = max(max(freqs), 3)
+
     return min_length, max_length, min_freq, max_freq
 

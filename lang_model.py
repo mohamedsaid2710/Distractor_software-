@@ -25,3 +25,9 @@ class lang_model:
         """Given a probability distribution, and a word
         Return its surprisal (bits), or use -1 as error/surprisal not trusted  code"""
         pass
+
+    def get_surprisal_batch_from_hidden(self, hidden, words):
+        """Given a hidden state and a list of words, 
+        return a list of surprisals. 
+        Base implementation is sequential for compatibility."""
+        return [self.get_surprisal_from_hidden(hidden, w) for w in words]
