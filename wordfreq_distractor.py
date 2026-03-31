@@ -279,6 +279,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         lowercase_only = bool(params.get("lowercase_only", True))
         min_word_len = int(params.get("min_word_len", 3))
         min_zipf = float(params.get("min_zipf", 3.0))
+        short_word_min_zipf = float(params.get("short_word_min_zipf", 3.5))
 
         exclusions_lower = set()
         if exclude is not None:
@@ -344,8 +345,9 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             except Exception:
                 continue
             # Apply length-dependent zipf thresholding to weed out short acronyms
-            # but allow rare long compound nouns
-            effective_min_zipf = min_zipf if len(lw) >= 5 else max(min_zipf, 3.5)
+            # but allow rare long compound nouns. 
+            # We cover words up to length 5 (under 6) to ensure fallback candidates are also clean.
+            effective_min_zipf = min_zipf if len(lw) >= 6 else max(min_zipf, short_word_min_zipf)
             if z < effective_min_zipf:
                 continue
             freq_val = z * math.log(10)

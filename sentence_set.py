@@ -714,12 +714,12 @@ class Label:
                 hidden = self.hiddens[j]
                 # --- CUDA OOM PREVENTION ---
                 # Now set to 256 for maximum throughput on the memory-efficient engine.
-                chunk_size = 256
+                chunk_size = 512
                 all_scores = []
                 for i in range(0, len(qualified_candidates), chunk_size):
                     chunk = qualified_candidates[i : i + chunk_size]
                     try:
-                        chunk_scores = model.get_surprisal_batch_from_hidden(hidden, chunk, batch_size=256)
+                        chunk_scores = model.get_surprisal_batch_from_hidden(hidden, chunk, batch_size=512)
                         all_scores.extend(chunk_scores)
                     except Exception as e:
                         logging.error(f"Batch scoring failed for chunk {i}: {e}")
@@ -802,7 +802,10 @@ class Label:
                         if not match_noun_pos: return True
                         return (w_pos == 'NOUN' or w_pos == 'PROPN') if target_is_noun else (w_pos != 'NOUN' and w_pos != 'PROPN')
                     
-                    emergency_pool = [w.text for w in getattr(dictionary, 'words', []) if emergency_pos_ok(getattr(w, 'pos', None))]
+                    target_len = target_exact_len or desired_len or 5
+                    emergency_pool = [w.text for w in getattr(dictionary, 'words', []) 
+                                      if emergency_pos_ok(getattr(w, 'pos', None))
+                                      and abs(len(w.text) - target_len) <= (len_tol if enforce_length_match else 10)]
                 except Exception:
                     emergency_pool = []
                 if emergency_pool:

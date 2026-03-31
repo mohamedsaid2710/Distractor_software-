@@ -5,7 +5,7 @@
 # --- Core Scorer & Generation Settings ---
 min_delta: 8
 min_abs: 15
-num_to_test: 1500
+num_to_test: 2000
 force_max_surprisal: True
 match_surprisal: True
 absolute_threshold_only: False
@@ -13,12 +13,13 @@ absolute_threshold_only: False
 # --- Linguistic & POS Matching ---
 language: "de"
 match_noun_pos: True
-len_tolerance: 3
+len_tolerance: 1
 min_zipf: 1.0
+short_word_min_zipf: 3.5
 freq_tolerance: 0.3
 max_freq_widen: 20
 min_word_len: 2
-exclude_propn_candidates: False
+exclude_propn_candidates: True
 enforce_length_match: True
 apply_postcase: True
 match_target_case: False
