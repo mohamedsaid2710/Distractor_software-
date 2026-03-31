@@ -52,31 +52,31 @@ PROPN_CACHE = {}
 
 def is_propn_candidate(cand):
     """Returns True if the candidate is likely a Proper Noun (PROPN).
-    Uses a cache to avoid redundant SpaCy calls.
+    Uses a contextual frame to improve SpaCy's accuracy.
     """
     clean_cand = strip_punct(cand)
     if not clean_cand:
         return False
         
-    if clean_cand in PROPN_CACHE:
-        return PROPN_CACHE[clean_cand]
+    key = clean_cand.lower()
+    if key in PROPN_CACHE:
+        return PROPN_CACHE[key]
         
     try:
-        lang = 'de' # Default to German for now given context
+        lang = 'de' # Default to German
         nlp_sp = _get_spacy_nlp(lang)
         if nlp_sp is not None:
-            # We capitalize to test if it behaves as a noun/proper noun
-            doc2 = nlp_sp(clean_cand.capitalize())
-            is_propn = len(doc2) > 0 and doc2[0].pos_ == 'PROPN'
-            PROPN_CACHE[clean_cand] = is_propn
+            # Wrap in neutral context to force Proper Noun recognition for brands/names
+            w_cap = clean_cand.capitalize()
+            doc = nlp_sp(f"Das {w_cap} ist hier.")
+            # If the word at index 1 is PROPN, it's a proper noun
+            is_propn = len(doc) > 1 and doc[1].pos_ == 'PROPN'
+            PROPN_CACHE[key] = is_propn
             return is_propn
     except Exception:
         pass
     
-    # Heuristic fallback if SpaCy fails
-    is_propn = clean_cand[0].isupper() and len(clean_cand) > 1
-    PROPN_CACHE[clean_cand] = is_propn
-    return is_propn
+    return False
 
 
 def _is_x_placeholder_token(token):
@@ -797,29 +797,42 @@ class Label:
                     cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True, relax_length=True)
             if cand is None:
                 try:
-                    # Fix: use 'dictionary' instead of 'dict'. Enforce POS guard to prevent cross-contamination.
+                    # Enforce POS guard to prevent cross-contamination.
                     def emergency_pos_ok(w_pos):
                         if not match_noun_pos: return True
                         return (w_pos == 'NOUN' or w_pos == 'PROPN') if target_is_noun else (w_pos != 'NOUN' and w_pos != 'PROPN')
                     
-                    target_len = target_exact_len or desired_len or 5
-                    emergency_pool = [w.text for w in getattr(dictionary, 'words', []) 
-                                      if emergency_pos_ok(getattr(w, 'pos', None))
-                                      and abs(len(w.text) - target_len) <= (len_tol if enforce_length_match else 10)]
-                except Exception:
-                    emergency_pool = []
-                if emergency_pool:
-                    sample_n = min(800, len(emergency_pool))
-                    fallback_emerg = random.sample(emergency_pool, sample_n)
-                    cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=False)
-                    if cand is None and allow_banned_fallback:
-                        cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=True)
-                    if cand is None:
-                        cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=False, relax_length=True)
+                    # Relax: allowing ANY length from dict.
+                    potential_words = getattr(dictionary, 'words', [])
+                    emergency_pool = [w.text for w in potential_words if emergency_pos_ok(getattr(w, 'pos', None))]
+                    if emergency_pool:
+                        # Try exact or near-match length first if the pool allows it
+                        target_len = target_exact_len or desired_len or 5
+                        near_len_pool = [w for w in emergency_pool if abs(len(w) - target_len) <= 2]
+                        active_pool = near_len_pool if (near_len_pool and enforce_length_match) else emergency_pool
+                        
+                        sample_n = min(800, len(active_pool))
+                        fallback_emerg = random.sample(active_pool, sample_n)
+                        cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=False)
                         if cand is None and allow_banned_fallback:
-                            cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=True, relax_length=True)
+                            cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=True)
+                        if cand is None:
+                            cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=False, relax_length=True)
+                            if cand is None and allow_banned_fallback:
+                                cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=True, relax_length=True)
+                except Exception as e:
+                    logging.error(f"Emergency pool construction failed: {e}")
+            
             if cand is None:
-                # Final defensive fallback: force a real word token.
+                # desperation: any word from distractor_opts
+                fallback_pool = list(distractor_opts)
+                if fallback_pool:
+                    random.shuffle(fallback_pool)
+                    cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=False, relax_length=True)
+                    if cand is None and allow_banned_fallback:
+                        cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=True, relax_length=True)
+
+            if cand is None:
                 cand = "wort"
                 cand_surp = float('-inf')
             best_word = cand

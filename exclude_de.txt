@@ -477,3 +477,27 @@ L
 C
 D
 M
+# Problem 3 Noise and Proper Noun Purge
+Abi
+Uno
+Oo
+Ui
+Ao
+Ou
+Quo
+Eig
+Blick
+Aldi
+Mozilla
+Mootz
+Wii
+Ipad
+Oecd
+Olaf
+Mia
+Özil
+Kalkbrenner
+Johst
+Osnabrücker
+Schlesien
+Aktivitäten

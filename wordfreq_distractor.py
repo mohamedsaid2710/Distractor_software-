@@ -242,18 +242,6 @@ _GERMAN_NOUN_SUFFIXES = (
     'er', 'el', 'en', 'e' 
 )
 
-def _is_likely_german_noun(word):
-    """Refined heuristic for German nouns using common suffixes and patterns."""
-    lw = word.lower()
-    if len(lw) < 2:
-        return False
-    # Check suffixes
-    if lw.endswith(_GERMAN_NOUN_SUFFIXES):
-        # A significant portion of words ending in er/el/en/e are nouns,
-        # but many are verbs/adj. For the heuristic used in candidate pooling, 
-        # we lean towards "potentially a noun" to trigger SpaCy validation later.
-        return True
-    return False
 
 
 class wordfreq_German_zipf_dict(wordfreq_dict):
@@ -346,14 +334,14 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 continue
             # Apply length-dependent zipf thresholding to weed out short acronyms
             # but allow rare long compound nouns. 
-            # We cover words up to length 5 (under 6) to ensure fallback candidates are also clean.
-            effective_min_zipf = min_zipf if len(lw) >= 6 else max(min_zipf, short_word_min_zipf)
+            # Reverted to len < 5 to ensure short non-nouns have enough fallback candidates.
+            effective_min_zipf = min_zipf if len(lw) >= 5 else max(min_zipf, short_word_min_zipf)
             if z < effective_min_zipf:
                 continue
             freq_val = z * math.log(10)
-            # Tag as NOUN (heuristic) to support pos_filter matching.
-            pos_tag = 'NOUN' if _is_likely_german_noun(lw) else None
-            self.words.append(distractor(lw, freq_val, pos=pos_tag))
+            # The word is added; its POS and CASE will be determined 100% by SpaCy on demand
+            # in eval_single_word_case, which uses the contextual frame '"Das {word} ist hier."'
+            self.words.append(distractor(lw, freq_val, pos=None))
             seen.add(lw)
 
         # Build case_map: identify which distractor words are German nouns
@@ -378,20 +366,20 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.nlp_sp = None
 
     def _eval_single_word_case(self, token_lower):
-        """Evaluate a single word on the fly for noun candidacy using SpaCy if available."""
+        """Evaluate a single word on the fly for noun candidacy using SpaCy inside its context."""
         if self.nlp_sp is not None:
             w_cap = token_lower.capitalize()
             # Wrap in neutral context to prevent SpaCy from blindly tagging isolated capitals as Nouns
             doc = self.nlp_sp(f"Das {w_cap} ist hier.")
+            # Noun check must skip the first word 'Das' (index 0) and check the word at index 1
             if len(doc) > 1 and doc[1].pos_ in ('NOUN', 'PROPN'):
                 self.case_map[token_lower] = w_cap
             else:
                 self.case_map[token_lower] = None
         else:
-            if _is_likely_german_noun(token_lower):
-                self.case_map[token_lower] = token_lower.capitalize()
-            else:
-                self.case_map[token_lower] = None
+            # Fallback if SpaCy failed to load: assume anything starting with cap in dict is noun?
+            # Better to just be safe and assume lowercase if SpaCy is broken.
+            self.case_map[token_lower] = None
                 
         return self.case_map[token_lower]
 
