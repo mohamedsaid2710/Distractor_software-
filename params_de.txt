@@ -22,7 +22,6 @@ min_word_len: 2
 exclude_propn_candidates: True
 enforce_length_match: True
 apply_postcase: True
-match_target_case: False
 
 # --- Model & Hardware Settings ---
 hf_model_name: "dbmdz/german-gpt2"

@@ -68,12 +68,7 @@ def is_propn_candidate(cand):
         if nlp_sp is not None:
             # Contextual frame check
             w_cap = clean_cand.capitalize()
-            # Double-check: ensure it's NOT a verb/adj in lowercase first
-            doc_l = nlp_sp(key)
-            if len(doc_l) > 0 and doc_l[0].pos_ in ('VERB', 'AUX', 'ADJ', 'ADV', 'PRON', 'DET', 'ADP', 'CONJ', 'SCONJ'):
-                PROPN_CACHE[key] = False
-                return False
-                
+            
             # Now test in a natural sentence frame to find brands/names
             doc_c = nlp_sp(f"Das ist {w_cap}.")
             # Using index 2 for the word
@@ -163,14 +158,31 @@ def _detect_language(params):
     return 'en'
 
 
-def _get_german_grammatical_case(token, dict_obj):
-    """Determine correct German casing based on the token's own linguistic class."""
+def _get_german_grammatical_case(token, dict_obj, source_token=None):
+    """Determine correct German casing based on the token's own linguistic class
+    and the source token's casing (for start-of-sentence words)."""
     if _is_x_placeholder_token(token):
         return token
     prefix, body, suffix = _split_punct(token)
     if not body:
         return token
 
+    # Determine if source token is TitleCased (signal for start of sentence)
+    source_is_title = False
+    if source_token:
+        s_prefix, s_body, s_suffix = _split_punct(source_token)
+        if s_body and s_body[0].isupper():
+            source_is_title = True
+
+    # Hard-coded Preposition/Function Word Guard
+    func_word_guard = {
+        'aus', 'auf', 'in', 'an', 'mit', 'von', 'für', 'um', 'bei', 
+        'pro', 'per', 'contra', 'via', 'und', 'oder', 'aber', 'denn',
+        'doch', 'als', 'wie', 'so', 'da', 'wenn', 'ob', 'weil', 'dass'
+    }
+    
+    is_func = body.lower() in func_word_guard
+    
     # Check if it's a noun/proper noun in the dictionary
     title_var = None
     try:
@@ -181,16 +193,23 @@ def _get_german_grammatical_case(token, dict_obj):
 
     if title_var:
         new_body = title_var
+    elif is_func:
+        new_body = body.lower()
     else:
         # Not a noun -> lowercase (Standard German rule)
         new_body = body.lower()
     
+    # --- MIRROR CASING ---
+    # if the source was TitleCased (start of sentence), forceTitleCase the distractor
+    if source_is_title:
+        new_body = new_body[0].upper() + new_body[1:]
+    
     return prefix + new_body + suffix
 
-def _normalize_distractor_token(token, dict_obj, lang='de', source_pos=None):
+def _normalize_distractor_token(token, dict_obj, lang='de', source_token=None):
     """Normalize casing for a single distractor token."""
     if lang == 'de':
-        return _get_german_grammatical_case(token, dict_obj)
+        return _get_german_grammatical_case(token, dict_obj, source_token=source_token)
     
     # Non-German fallback (e.g. English as before)
     if _is_x_placeholder_token(token):
@@ -377,15 +396,85 @@ class Label:
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
 
+        # --- GERMAN STRICKT CASING FILTER ---
+        # If the target is lowercase, we MUST NOT pick a distractor that is 
+        # naturally a noun (Capitalized), to avoid string cues.
+        if lang == 'de' and distractor_opts:
+            source_word = strip_punct(self.words[0]) if self.words else ""
+            target_is_lower = source_word[0].islower() if source_word else True
+            
+            # Identify if target is a noun
+            target_is_noun_dict = False
+            try:
+                if hasattr(dictionary, 'has_titlecase_variant'):
+                    target_is_noun_dict = dictionary.has_titlecase_variant(source_word)
+            except Exception:
+                pass
+
+            filtered = []
+            for d in distractor_opts:
+                is_noun_dict = False
+                try:
+                    if hasattr(dictionary, 'has_titlecase_variant'):
+                        is_noun_dict = dictionary.has_titlecase_variant(d)
+                except Exception:
+                    pass
+                
+                # Filter Logic:
+                # 1. Target is lowercase -> Dist MUST not be a noun.
+                # 2. Target is TitleCase AND is a Noun -> Dist MUST be a noun.
+                # 3. Target is TitleCase AND NOT a noun (Start of Sentence) -> Dist MUST NOT be a noun.
+                if target_is_lower:
+                    if not is_noun_dict:
+                        filtered.append(d)
+                else:
+                    if target_is_noun_dict:
+                        if is_noun_dict:
+                            filtered.append(d)
+                    else:
+                        if not is_noun_dict:
+                            filtered.append(d)
+            
+            # Strict fallback: if filtered is empty, broadening search is better 
+            # than returning a pool that breaks the capitalization rules.
+            distractor_opts = filtered
+
         # --- ADAPTIVE LENGTH SEARCH (Fix for 0-candidate long words) ---
         # If no candidates found for exact length, widen search recursively.
         if not distractor_opts:
             for extra_len in range(1, 11): # Try widening up to +/- 10 characters
-                logging.info(f"0 candidates for {self.words} at exact length. Widening search by +/- {extra_len}")
+                logging.info(f"0 candidates for {self.words} after casing filter. Widening search by +/- {extra_len}")
                 distractor_opts = dictionary.get_potential_distractors(
                     min_length - extra_len, max_length + extra_len, 
                     min_freq, max_freq, params, pos_filter=pos_filter
                 )
+                
+                # Apply the casing filter to the widened pool!
+                if distractor_opts and lang == 'de':
+                    source_word = strip_punct(self.words[0]) if self.words else ""
+                    target_is_lower = source_word[0].islower() if source_word else True
+                    target_is_noun_dict = False
+                    try:
+                        if hasattr(dictionary, 'has_titlecase_variant'):
+                            target_is_noun_dict = dictionary.has_titlecase_variant(source_word)
+                    except Exception: pass
+                    
+                    filtered = []
+                    for d in distractor_opts:
+                        is_noun_dict = False
+                        try:
+                            if hasattr(dictionary, 'has_titlecase_variant'):
+                                is_noun_dict = dictionary.has_titlecase_variant(d)
+                        except Exception: pass
+                        if target_is_lower:
+                            if not is_noun_dict: filtered.append(d)
+                        else:
+                            if target_is_noun_dict:
+                                if is_noun_dict: filtered.append(d)
+                            else:
+                                if not is_noun_dict: filtered.append(d)
+                    distractor_opts = filtered
+
                 if distractor_opts:
                     break
                 
@@ -682,8 +771,9 @@ class Label:
                     best_candidate = _find_best_match(distractor_opts)
 
                 if best_candidate:
-                    # Apply grammatical casing based on the DISTRACTOR'S class
-                    self.distractor = _get_german_grammatical_case(best_candidate, dictionary)
+                    # Apply grammatical casing based on the DISTRACTOR'S class OR mirror source
+                    source_token = self.words[0] if self.words else None
+                    self.distractor = _normalize_distractor_token(best_candidate, dictionary, lang=lang, source_token=source_token)
                     return self.distractor
 
         # 1. Pre-filter candidates (cheap checks: length, banned, POS, repeat)
@@ -887,7 +977,8 @@ class Label:
             best_min_surp = float('-inf')
 
         # Final casing pass based on DISTRACTOR category
-        self.distractor = _get_german_grammatical_case(best_word, dictionary)
+        source_token = self.words[0] if self.words else None
+        self.distractor = _normalize_distractor_token(best_word, dictionary, lang=lang, source_token=source_token)
 
         if not force_max_surprisal:
             logging.warning("Could not find a word to meet threshold for item %s, label %s, returning %s with %f min surp instead",

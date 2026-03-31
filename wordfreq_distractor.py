@@ -369,16 +369,10 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         """Ultimate POS check: compares lowercase and titlecase results inside natural context."""
         if self.nlp_sp is not None:
             w_cap = token_lower.capitalize()
-            
-            # Step 1: Lowercase check (Is it naturally a verb/adj/etc?)
-            doc_l = self.nlp_sp(token_lower)
-            if len(doc_l) > 0 and doc_l[0].pos_ in ('VERB', 'AUX', 'ADJ', 'ADV', 'PRON', 'DET', 'ADP', 'CONJ', 'SCONJ'):
-                # It's a common non-noun; keep it lowercase.
-                self.case_map[token_lower] = None
-                return None
                 
-            # Step 2: Titlecase context check (Is it a legitimate noun in 'Natural' context?)
-            # Using 'Ich habe {word} gelesen.' is much better for distinguishing nouns from nominalized verbs.
+            # Trust the Context Frame: If it's a noun in this frame, it's a noun in German.
+            # Using 'Ich habe {word} gelesen.' is much better for distinguishing nouns 
+            # from nominalized verbs like 'Üben' or 'Essen' unless they are used as nouns.
             doc_c = self.nlp_sp(f"Ich habe {w_cap} gelesen.")
             # Index 2 is the word
             if len(doc_c) > 2 and doc_c[2].pos_ in ('NOUN', 'PROPN'):
@@ -411,13 +405,6 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self._eval_single_word_case(t_lower)
         ans = self.case_map.get(t_lower, None)
         return ans if ans is not None else token
-
-    def get_titlecase_variant(self, token):
-        """Return Titlecased variant if the word is a known German noun."""
-        t_lower = token.lower()
-        if t_lower not in self.case_map:
-            self._eval_single_word_case(t_lower)
-        return self.case_map.get(t_lower, None)
 
 
 def get_frequency_de(word):
