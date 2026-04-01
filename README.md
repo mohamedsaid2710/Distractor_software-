@@ -42,6 +42,7 @@ python distract.py -i arabic_sample.txt -o output_ar.txt -p params_ar.txt -f del
 - **Two selection modes** — threshold-first (Mode A) or max-implausibility ranking (Mode B)
 - **Two output formats** — `delim` (semicolon-delimited table) and `ibex` (PCIbex-ready lines)
 - **Length matching** — distractors match target word length (with optional `len_tolerance`)
+- **Semantic dissimilarity filtering** — optional fastText embeddings reject semantically similar candidates, ensuring distractors come from unrelated semantic domains (e.g., "Musikerin" → "Stoffwechsel" not "Sängerin")
 - **POS-Aware Noun Matching** — (German) target nouns receive noun distractors for grammatical capitalization
 - **Frequency Matching** — distractors fall within a tight Zipf frequency band (`freq_tolerance`)
 - **Proper-noun filtering** — `exclude_propn_candidates` uses spaCy POS tags (English and German)

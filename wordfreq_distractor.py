@@ -86,7 +86,13 @@ class wordfreq_dict(distractor_dict):
         return matches
 
     def batch_tag_words(self, words):
-        """Tag a list of words in bulk with hybrid approach: whitelist + SpaCy."""
+        """Tag a list of words in bulk using contextual framing for accuracy.
+        
+        Uses grammatical context to help SpaCy distinguish inflected adjectives
+        from nouns/verbs. For example:
+        - "Die fränkischen Gebiete" → fränkischen = ADJ
+        - "Das Parlament" → Parlament = NOUN
+        """
         if self.nlp_sp is None or not words:
             return
         
@@ -102,6 +108,10 @@ class wordfreq_dict(distractor_dict):
             'pro', 'per', 'ach', 'oh'
         }
         
+        # Initialize POS cache if not exists
+        if not hasattr(self, 'pos_cache'):
+            self.pos_cache = {}
+        
         # Filter for words not yet in case_map
         unique_words = list(set(w.lower() for w in words if w.lower() not in self.case_map))
         if not unique_words:
@@ -111,19 +121,44 @@ class wordfreq_dict(distractor_dict):
         for w in unique_words:
             if w in FUNCTION_WORDS:
                 self.case_map[w] = None
+                self.pos_cache[w] = 'ADP'  # Function words are typically prepositions/determiners
         
-        # Second pass: SpaCy tagging for content words (use capitalized form for noun detection)
+        # Second pass: SpaCy tagging with CONTEXTUAL FRAMING for better accuracy
         content_words = [w for w in unique_words if w not in FUNCTION_WORDS]
         if content_words:
-            framed_texts = [f"Das {w.capitalize()} ist hier." for w in content_words]
+            # Create two contexts for each word:
+            # 1. Adjective context: "Die <word> Sachen sind gut" 
+            # 2. Noun context: "Das <word> ist hier"
+            # Use lowercase first to get natural POS, then check capitalized for noun verification
+            
+            adj_contexts = [f"Die {w} Sachen sind gut." for w in content_words]
             
             try:
-                docs = self.nlp_sp.pipe(framed_texts)
-                for word_l, doc in zip(content_words, docs):
-                    if len(doc) > 1 and doc[1].pos_ in ('NOUN', 'PROPN'):
-                        self.case_map[word_l] = word_l.capitalize()
-                    else:
-                        self.case_map[word_l] = None
+                # Process adjective contexts to detect ADJ tags
+                adj_docs = list(self.nlp_sp.pipe(adj_contexts))
+                
+                for word_l, adj_doc in zip(content_words, adj_docs):
+                    # Check position 1 (the word in question)
+                    if len(adj_doc) > 1:
+                        pos_in_adj_context = adj_doc[1].pos_
+                        
+                        # If it's clearly an adjective in adjective context, tag as ADJ
+                        if pos_in_adj_context == 'ADJ':
+                            self.pos_cache[word_l] = 'ADJ'
+                            self.case_map[word_l] = None  # Adjectives stay lowercase
+                            continue
+                    
+                    # Otherwise, test as potential noun with capitalized form
+                    noun_doc = self.nlp_sp(f"Das {word_l.capitalize()} ist hier.")
+                    if len(noun_doc) > 1:
+                        pos_in_noun_context = noun_doc[1].pos_
+                        self.pos_cache[word_l] = pos_in_noun_context
+                        
+                        if pos_in_noun_context in ('NOUN', 'PROPN'):
+                            self.case_map[word_l] = word_l.capitalize()
+                        else:
+                            self.case_map[word_l] = None
+                            
             except Exception as e:
                 logging.error(f"SpaCy batch tagging failed: {e}")
 
@@ -182,8 +217,16 @@ class wordfreq_dict(distractor_dict):
         if pos_filter:
             filtered = []
             for w in distractor_opts:
-                is_noun = self.has_titlecase_variant(w)
-                p_tag = "NOUN" if is_noun else "!NOUN" # simplified tag based on noun-check
+                # Use actual SpaCy POS tag from cache if available
+                w_lower = w.lower()
+                if hasattr(self, 'pos_cache') and w_lower in self.pos_cache:
+                    spacy_pos = self.pos_cache[w_lower]
+                    # Convert SpaCy POS to simplified NOUN/!NOUN tag
+                    p_tag = "NOUN" if spacy_pos in ('NOUN', 'PROPN') else "!NOUN"
+                else:
+                    # Fallback to titlecase heuristic if POS not cached
+                    is_noun = self.has_titlecase_variant(w)
+                    p_tag = "NOUN" if is_noun else "!NOUN"
                 
                 if pos_filter.startswith('!'):
                     if p_tag == pos_filter[1:]: continue
@@ -392,15 +435,19 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
 
     def _init_spacy(self):
+        """Load SpaCy model with preference for larger models (better POS accuracy)."""
         try:
             import spacy
-            try:
-                self.nlp_sp = spacy.load('de_core_news_sm')
-            except Exception:
+            # Try large model first (best accuracy ~96%), then medium, then small
+            for model_name in ['de_core_news_lg', 'de_core_news_md', 'de_core_news_sm']:
                 try:
-                    self.nlp_sp = spacy.load('de_core_news_md')
+                    self.nlp_sp = spacy.load(model_name)
+                    logging.info(f"Loaded SpaCy model: {model_name}")
+                    return
                 except Exception:
-                    self.nlp_sp = None
+                    continue
+            self.nlp_sp = None
+            logging.warning("No German SpaCy model found. Install with: python -m spacy download de_core_news_lg")
         except Exception:
             self.nlp_sp = None
 

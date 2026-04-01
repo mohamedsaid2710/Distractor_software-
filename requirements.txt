@@ -7,6 +7,17 @@ spacy>=3.5.0
 numpy>=2.0.0
 wordfreq>=3.0.0
 
-# German model for spaCy
-de_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.8.0/de_core_news_sm-3.8.0-py3-none-any.whl
+# Semantic filtering (optional, ~7GB model per language)
+# Uncomment to enable semantic_filter feature:
+# fasttext>=0.9.2
+
+# German SpaCy models (install largest available for best POS accuracy)
+# Large model: ~500MB, ~96% POS accuracy (RECOMMENDED for 16GB+ RAM)
+de_core_news_lg @ https://github.com/explosion/spacy-models/releases/download/de_core_news_lg-3.8.0/de_core_news_lg-3.8.0-py3-none-any.whl
+
+# Medium model: ~100MB, ~94% POS accuracy (fallback)
+# de_core_news_md @ https://github.com/explosion/spacy-models/releases/download/de_core_news_md-3.8.0/de_core_news_md-3.8.0-py3-none-any.whl
+
+# Small model: ~15MB, ~91% POS accuracy (minimal)
+# de_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.8.0/de_core_news_sm-3.8.0-py3-none-any.whl
 
