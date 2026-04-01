@@ -85,8 +85,14 @@ class wordfreq_dict(distractor_dict):
                 matches.append(word.text)
         return matches
 
-    def batch_tag_words(self, words, batch_size=500):
-        """Tag a list of words in bulk by checking their capitalized standalone form."""
+    def batch_tag_words(self, words):
+        """Tag a list of words in bulk using contextual framing for accuracy.
+        
+        Uses grammatical context to help SpaCy distinguish inflected adjectives
+        from nouns/verbs. For example:
+        - "Die fränkischen Gebiete" → fränkischen = ADJ
+        - "Das Parlament" → Parlament = NOUN
+        """
         if self.nlp_sp is None or not words:
             return
         
@@ -117,63 +123,38 @@ class wordfreq_dict(distractor_dict):
                 self.case_map[w] = None
                 self.pos_cache[w] = 'ADP'  # Function words are typically prepositions/determiners
         
-        # Second pass: Hybrid SpaCy + morphological suffix analysis
-        # German SpaCy heavily relies on capitalization. We tag CAPITALIZED words
-        # but cross-check against known verb/adjective suffixes to reject false positives.
+        # Second pass: SpaCy tagging with CONTEXTUAL FRAMING for better accuracy
         content_words = [w for w in unique_words if w not in FUNCTION_WORDS]
         if content_words:
-            # Known German verb suffixes (conjugated forms)
-            VERB_SUFFIXES = (
-                'te', 'ten', 'tet', 'test',  # past tense
-                'en', 'ern', 'eln',           # infinitive
-                'st', 'est',                  # 2nd person
-                'end', 'ends',                # present participle
-            )
-            # Known German adjective suffixes
-            ADJ_SUFFIXES = (
-                'isch', 'sche', 'schen', 'scher', 'sches',  # -isch variants
-                'lich', 'liche', 'lichen', 'licher', 'liches',  # -lich variants
-                'ig', 'ige', 'igen', 'iger', 'iges',  # -ig variants
-                'bar', 'bare', 'baren', 'barer', 'bares',  # -bar variants
-                'sam', 'same', 'samen', 'samer', 'sames',  # -sam variants
-                'haft', 'hafte', 'haften', 'hafter', 'haftes',  # -haft variants
-                'los', 'lose', 'losen', 'loser', 'loses',  # -los variants
-                'voll', 'volle', 'vollen', 'voller', 'volles',  # -voll variants
-                'reich', 'reiche', 'reichen', 'reicher', 'reiches',  # -reich
-                'arm', 'arme', 'armen', 'armer', 'armes',  # -arm
-                'wert', 'werte', 'werten', 'werter', 'wertes',  # -wert
-                'mäßig', 'mäßige', 'mäßigen',  # -mäßig
-                'artig', 'artige', 'artigen',  # -artig
-            )
+            # Create two contexts for each word:
+            # 1. Adjective context: "Die <word> Sachen sind gut" 
+            # 2. Noun context: "Das <word> ist hier"
+            # Use lowercase first to get natural POS, then check capitalized for noun verification
             
-            # Tag CAPITALIZED forms (SpaCy needs this for German)
-            capitalized_words = [w.capitalize() for w in content_words]
+            adj_contexts = [f"Die {w} Sachen sind gut." for w in content_words]
             
             try:
-                docs = list(self.nlp_sp.pipe(capitalized_words, batch_size=batch_size))
+                # Process adjective contexts to detect ADJ tags
+                adj_docs = list(self.nlp_sp.pipe(adj_contexts))
                 
-                for word_l, word_doc in zip(content_words, docs):
-                    if len(word_doc) > 0:
-                        token = word_doc[0]
-                        spacy_pos = token.pos_
+                for word_l, adj_doc in zip(content_words, adj_docs):
+                    # Check position 1 (the word in question)
+                    if len(adj_doc) > 1:
+                        pos_in_adj_context = adj_doc[1].pos_
                         
-                        # Start with SpaCy's judgment
-                        is_noun = spacy_pos in ('NOUN', 'PROPN')
+                        # If it's clearly an adjective in adjective context, tag as ADJ
+                        if pos_in_adj_context == 'ADJ':
+                            self.pos_cache[word_l] = 'ADJ'
+                            self.case_map[word_l] = None  # Adjectives stay lowercase
+                            continue
+                    
+                    # Otherwise, test as potential noun with capitalized form
+                    noun_doc = self.nlp_sp(f"Das {word_l.capitalize()} ist hier.")
+                    if len(noun_doc) > 1:
+                        pos_in_noun_context = noun_doc[1].pos_
+                        self.pos_cache[word_l] = pos_in_noun_context
                         
-                        # OVERRIDE: If word has clear verb/adjective suffix, it's NOT a noun
-                        # This catches SpaCy's false positives from capitalization
-                        if is_noun:
-                            if word_l.endswith(ADJ_SUFFIXES):
-                                is_noun = False
-                                spacy_pos = 'ADJ'
-                            elif word_l.endswith(VERB_SUFFIXES) and len(word_l) > 4:
-                                # Extra check: very short words might be noun stems
-                                is_noun = False
-                                spacy_pos = 'VERB'
-                        
-                        self.pos_cache[word_l] = spacy_pos
-                        
-                        if is_noun:
+                        if pos_in_noun_context in ('NOUN', 'PROPN'):
                             self.case_map[word_l] = word_l.capitalize()
                         else:
                             self.case_map[word_l] = None
@@ -230,7 +211,7 @@ class wordfreq_dict(distractor_dict):
         # 3. --- HYPER-SPEED OPTIMIZATION: BATCH TAGGING ---
         # Instead of tagging words one-by-one in the loop, we tag the entire pool at once!
         if self.nlp_sp is not None:
-            self.batch_tag_words(distractor_opts, batch_size=int(params.get("spacy_batch_size", 500)))
+            self.batch_tag_words(distractor_opts)
             
         # 4. Filter the pool using the now-cached high-quality POS tags
         if pos_filter:
@@ -490,10 +471,10 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.case_map[token_lower] = None  # Force lowercase
             return None
 
-        # For content words: use SpaCy with CAPITALIZED form isolated
+        # For content words: use SpaCy with CAPITALIZED form (preserves noun detection)
         if self.nlp_sp is not None:
-            doc_c = self.nlp_sp(w_cap)
-            if len(doc_c) > 0 and doc_c[0].pos_ in ('NOUN', 'PROPN'):
+            doc_c = self.nlp_sp(f"Das {w_cap} ist hier.")
+            if len(doc_c) > 1 and doc_c[1].pos_ in ('NOUN', 'PROPN'):
                 self.case_map[token_lower] = w_cap
             else:
                 self.case_map[token_lower] = None

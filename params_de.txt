@@ -34,9 +34,9 @@ semantic_threshold: 0.35
 # --- Model & Hardware Settings ---
 hf_model_name: "benjamin/gerpt2"
 device: "cuda"
-model_batch_size: 1024  # GPT-2 parallel scoring batch size (256=default, 1024-2048=high-RAM systems)
-spacy_batch_size: 2000  # SpaCy POS tagging batch size (500=default, 2000-5000=high-RAM systems)
-chunk_size: 2048        # Candidate generation chunk size (512=default, 2048-4096=high-RAM systems)
+model_batch_size: 256  # GPT-2 parallel scoring batch size (256=default, 1024-2048=high-RAM systems)
+spacy_batch_size: 500  # SpaCy POS tagging batch size (500=default, 2000-5000=high-RAM systems)
+chunk_size: 512        # Candidate generation chunk size (512=default, 2048-4096=high-RAM systems)
 
 # --- File Paths & Resources ---
 exclude_words: "exclude_de.txt"

@@ -1049,10 +1049,8 @@ class Sentence_Set:
                     doc = Doc(nlp_sp.vocab, words=sentence.words)
                     # Run the tagger/parser on the pre-tokenized doc
                     for name, proc in nlp_sp.pipeline:
-                        if name not in ["tok2vec", "tagger", "attribute_ruler", "lemmatizer"]:
-                            # We only strictly need the tagger for POS
-                            if name != "tagger" and name != "attribute_ruler":
-                                continue
+                        if name not in ["tok2vec", "tagger", "morphologizer", "attribute_ruler", "lemmatizer"]:
+                            continue
                         doc = proc(doc)
                     pos_tags = [t.pos_ for t in doc]
                     sentence.pos_tags = pos_tags
@@ -1233,8 +1231,15 @@ class Sentence_Set:
                                 src_pos = sentence.pos_tags[j]
                             except (IndexError, TypeError):
                                 src_pos = None
+                        
+                        src_word = None
+                        try:
+                            src_word = sentence.words[j]
+                        except IndexError:
+                            pass
+                        
                         sentence.distractors[j] = _normalize_distractor_token(
-                            sentence.distractors[j], d, lang=lang, source_pos=src_pos, is_first_word=(j==0))
+                            sentence.distractors[j], d, lang=lang, source_token=src_word, source_pos=src_pos, is_first_word=(j==0))
                 except Exception:
                     pass
             # Keep first placeholder shape stable (no auto-capitalization side effects).
