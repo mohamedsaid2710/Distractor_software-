@@ -16,6 +16,8 @@ Based on the original [Maze repository](https://github.com/vboyce/Maze) by Victo
 pip install -r requirements.txt
 ```
 
+> **Note:** By default, this installs the **large German SpaCy model** (`de_core_news_lg`, ~500MB) for optimal POS accuracy (~96%). If you have limited disk space, you can edit `requirements.txt` to use the medium (~100MB) or small (~15MB) models instead, though POS filtering accuracy will decrease.
+
 ### English
 
 ```bash
@@ -43,7 +45,7 @@ python distract.py -i arabic_sample.txt -o output_ar.txt -p params_ar.txt -f del
 - **Two output formats** — `delim` (semicolon-delimited table) and `ibex` (PCIbex-ready lines)
 - **Length matching** — distractors match target word length (with optional `len_tolerance`)
 - **Semantic dissimilarity filtering** — optional fastText embeddings reject semantically similar candidates, ensuring distractors come from unrelated semantic domains (e.g., "Musikerin" → "Stoffwechsel" not "Sängerin")
-- **POS-Aware Noun Matching** — (German) target nouns receive noun distractors for grammatical capitalization
+- **POS-Aware Noun Matching** — (German) target nouns receive noun distractors for grammatical capitalization; uses contextual framing for accurate detection of inflected adjectives
 - **Frequency Matching** — distractors fall within a tight Zipf frequency band (`freq_tolerance`)
 - **Proper-noun filtering** — `exclude_propn_candidates` uses spaCy POS tags (English and German)
 - **German noun casing** — automatic post-processing capitalizes German nouns (via spaCy POS tagging)
