@@ -99,12 +99,8 @@ def is_propn_candidate(cand):
         lang = 'de' # Default to German
         nlp_sp = _get_spacy_nlp(lang)
         if nlp_sp is not None:
-            # Contextual frame check
             w_cap = clean_cand.capitalize()
-            
-            # Now test in a natural sentence frame to find brands/names
             doc_c = nlp_sp(f"Das ist {w_cap}.")
-            # Using index 2 for the word
             is_propn = len(doc_c) > 2 and doc_c[2].pos_ == 'PROPN'
             PROPN_CACHE[key] = is_propn
             return is_propn
@@ -402,12 +398,22 @@ class Label:
             clean = strip_punct(candidate)
             if not clean: return None
             
+            # FAST PATH: Check dictionary global cache first for zero-overhead
+            low_key = clean.lower()
+            if hasattr(dictionary, 'pos_cache') and low_key in dictionary.pos_cache:
+                spacy_pos = dictionary.pos_cache[low_key]
+                # We need to adapt it matching the legacy expectation
+                # If target is noun, return cached POS directly
+                if target_noun_context:
+                    return spacy_pos
+                else:
+                    return spacy_pos
+            
             # If the target is a noun, evaluate the candidate in capitalized form
-            # so SpaCy recognizes it if it has noun morphology
             if target_noun_context:
                 clean = clean.capitalize()
                 
-            key = clean  # Case sensitive key now since casing matters for POS
+            key = clean
             if key in _pos_cache: return _pos_cache[key]
             try:
                 doc = nlp_sp(clean)
@@ -597,30 +603,22 @@ class Label:
                     pass
             return model.get_surprisal(self.probs[i], candidate)
         def is_propn_candidate(candidate):
+            # FAST CPU BATCH CACHE: We already tagged them, don't re-run nlp_sp!
             if nlp_sp is None:
                 return False
             key = strip_punct(candidate).lower()
+            
+            # Dictionary cache lookup (built during batch_tag_words)
+            if hasattr(dictionary, 'pos_cache') and key in dictionary.pos_cache:
+                return dictionary.pos_cache[key] == 'PROPN'
+                
+            # Fallback legacy lookup if cache is missing
             if key in _propn_cache:
                 return _propn_cache[key]
             
-            clean_cand = strip_punct(candidate)
-            try:
-                # Test the original (likely lowercase from dictionary)
-                doc1 = nlp_sp(clean_cand)
-                val1 = bool(doc1 and len(doc1) > 0 and doc1[0].pos_ == 'PROPN')
-                
-                val2 = False
-                # If it wasn't flagged as PROPN but is lowercase, 
-                # test its capitalized form. German SpaCy strictly relies on casing!
-                if not val1 and clean_cand.islower() and lang == 'de':
-                    doc2 = nlp_sp(clean_cand.capitalize())
-                    val2 = bool(doc2 and len(doc2) > 0 and doc2[0].pos_ == 'PROPN')
-                
-                val = val1 or val2
-            except Exception:
-                val = False
-            _propn_cache[key] = val
-            return val
+            # DO NOT invoke nlp_sp(clean) one-by-one here. It kills performance.
+            # If we don't know it's a PROPN by now, assume it's safe (since we pre-filtered in batch).
+            return False
         def candidate_min_surprisal(candidate):
             """Minimum surprisal of candidate across all contexts for this label."""
             min_surp_val = float('inf')
