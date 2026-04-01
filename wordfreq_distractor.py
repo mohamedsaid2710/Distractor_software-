@@ -158,9 +158,9 @@ class wordfreq_dict(distractor_dict):
             return 'X'
 
         try:
-            noun_docs = list(self.nlp_sp.pipe(noun_frames, disable=['ner', 'lemmatizer'], batch_size=5000))
-            verb_docs = list(self.nlp_sp.pipe(verb_frames, disable=['ner', 'lemmatizer'], batch_size=5000))
-            adj_docs  = list(self.nlp_sp.pipe(adj_frames,  disable=['ner', 'lemmatizer'], batch_size=5000))
+            noun_docs = list(self.nlp_sp.pipe(noun_frames, disable=['ner'], batch_size=5000))
+            verb_docs = list(self.nlp_sp.pipe(verb_frames, disable=['ner'], batch_size=5000))
+            adj_docs  = list(self.nlp_sp.pipe(adj_frames,  disable=['ner'], batch_size=5000))
 
             for word_l, noun_doc, verb_doc, adj_doc in zip(content_words, noun_docs, verb_docs, adj_docs):
                 noun_pos = _extract_pos(noun_doc, word_l)
