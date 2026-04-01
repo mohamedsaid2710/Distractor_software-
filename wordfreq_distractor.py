@@ -117,10 +117,36 @@ class wordfreq_dict(distractor_dict):
                 self.case_map[w] = None
                 self.pos_cache[w] = 'ADP'  # Function words are typically prepositions/determiners
         
-        # Second pass: SpaCy tagging WITHOUT false contextual framing
+        # Second pass: Hybrid SpaCy + morphological suffix analysis
+        # German SpaCy heavily relies on capitalization. We tag CAPITALIZED words
+        # but cross-check against known verb/adjective suffixes to reject false positives.
         content_words = [w for w in unique_words if w not in FUNCTION_WORDS]
         if content_words:
-            # Capitalize to give SpaCy the chance to recognize nouns based on morphology, not syntax
+            # Known German verb suffixes (conjugated forms)
+            VERB_SUFFIXES = (
+                'te', 'ten', 'tet', 'test',  # past tense
+                'en', 'ern', 'eln',           # infinitive
+                'st', 'est',                  # 2nd person
+                'end', 'ends',                # present participle
+            )
+            # Known German adjective suffixes
+            ADJ_SUFFIXES = (
+                'isch', 'sche', 'schen', 'scher', 'sches',  # -isch variants
+                'lich', 'liche', 'lichen', 'licher', 'liches',  # -lich variants
+                'ig', 'ige', 'igen', 'iger', 'iges',  # -ig variants
+                'bar', 'bare', 'baren', 'barer', 'bares',  # -bar variants
+                'sam', 'same', 'samen', 'samer', 'sames',  # -sam variants
+                'haft', 'hafte', 'haften', 'hafter', 'haftes',  # -haft variants
+                'los', 'lose', 'losen', 'loser', 'loses',  # -los variants
+                'voll', 'volle', 'vollen', 'voller', 'volles',  # -voll variants
+                'reich', 'reiche', 'reichen', 'reicher', 'reiches',  # -reich
+                'arm', 'arme', 'armen', 'armer', 'armes',  # -arm
+                'wert', 'werte', 'werten', 'werter', 'wertes',  # -wert
+                'mäßig', 'mäßige', 'mäßigen',  # -mäßig
+                'artig', 'artige', 'artigen',  # -artig
+            )
+            
+            # Tag CAPITALIZED forms (SpaCy needs this for German)
             capitalized_words = [w.capitalize() for w in content_words]
             
             try:
@@ -128,10 +154,26 @@ class wordfreq_dict(distractor_dict):
                 
                 for word_l, word_doc in zip(content_words, docs):
                     if len(word_doc) > 0:
-                        pos_in_noun_context = word_doc[0].pos_
-                        self.pos_cache[word_l] = pos_in_noun_context
+                        token = word_doc[0]
+                        spacy_pos = token.pos_
                         
-                        if pos_in_noun_context in ('NOUN', 'PROPN'):
+                        # Start with SpaCy's judgment
+                        is_noun = spacy_pos in ('NOUN', 'PROPN')
+                        
+                        # OVERRIDE: If word has clear verb/adjective suffix, it's NOT a noun
+                        # This catches SpaCy's false positives from capitalization
+                        if is_noun:
+                            if word_l.endswith(ADJ_SUFFIXES):
+                                is_noun = False
+                                spacy_pos = 'ADJ'
+                            elif word_l.endswith(VERB_SUFFIXES) and len(word_l) > 4:
+                                # Extra check: very short words might be noun stems
+                                is_noun = False
+                                spacy_pos = 'VERB'
+                        
+                        self.pos_cache[word_l] = spacy_pos
+                        
+                        if is_noun:
                             self.case_map[word_l] = word_l.capitalize()
                         else:
                             self.case_map[word_l] = None
