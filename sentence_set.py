@@ -227,16 +227,19 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=
     # Determine if the *distractor* is a noun via pos_cache (most reliable)
     distractor_is_noun = False
     t_lower = body.lower()
+    pos_source = 'none'
 
     # Primary: SpaCy batch-tagged pos_cache (built by batch_tag_words in the
     # dictionary during get_potential_distractors — uses SpaCy large).
     if hasattr(dict_obj, 'pos_cache') and t_lower in dict_obj.pos_cache:
         distractor_is_noun = dict_obj.pos_cache[t_lower] in ('NOUN', 'PROPN')
+        pos_source = f"pos_cache={dict_obj.pos_cache[t_lower]}"
     # Secondary: case_map / titlecase variant (lazy single-word SpaCy eval)
     elif hasattr(dict_obj, 'get_titlecase_variant'):
         try:
             tv = dict_obj.get_titlecase_variant(body)
             distractor_is_noun = isinstance(tv, str)
+            pos_source = f"titlecase_variant={'NOUN' if distractor_is_noun else 'non-NOUN'}"
         except Exception:
             pass
 
@@ -244,6 +247,13 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=
         new_body = body[0].upper() + body[1:].lower()
     else:
         new_body = body.lower()
+
+    # Diagnostic: log first few casing decisions
+    if not hasattr(_get_german_grammatical_case, '_log_count'):
+        _get_german_grammatical_case._log_count = 0
+    if _get_german_grammatical_case._log_count < 20:
+        logging.debug(f"[CASING] '{body}' -> '{new_body}' (is_noun={distractor_is_noun}, source={pos_source})")
+        _get_german_grammatical_case._log_count += 1
 
     # German rule: sentence-initial word is always capitalized.
     if is_first_word and new_body:
