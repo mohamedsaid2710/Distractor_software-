@@ -403,14 +403,35 @@ class Label:
         _pos_cache = {}
         
         def get_candidate_pos(candidate):
+            """Get POS tag for a candidate word using the dictionary's cached POS if available."""
             if nlp_sp is None: return None
             clean = strip_punct(candidate)
             if not clean: return None
             key = clean.lower()
             if key in _pos_cache: return _pos_cache[key]
+            
+            # First check if dictionary has cached POS from batch_tag_words
+            if hasattr(dictionary, 'pos_cache') and key in dictionary.pos_cache:
+                val = dictionary.pos_cache[key]
+                _pos_cache[key] = val
+                return val
+            
+            # Fallback: use contextual framing for accurate POS
             try:
-                doc = nlp_sp(clean)
-                val = doc[0].pos_ if doc and len(doc) > 0 else None
+                # Use adjective context first to detect ADJs
+                adj_doc = nlp_sp(f"Die {clean} Sachen sind gut.")
+                if len(adj_doc) > 1 and adj_doc[1].pos_ == 'ADJ':
+                    # Verify with suffix check for German adjectives
+                    if any(key.endswith(suff) for suff in 
+                        ['isch', 'ischen', 'ischer', 'isches', 'liche', 'licher', 'liches', 'lichen', 
+                         'bar', 'sam', 'haft', 'los', 'voll', 'arm', 'reich', 'ner']):
+                        val = 'ADJ'
+                        _pos_cache[key] = val
+                        return val
+                
+                # Check noun context
+                noun_doc = nlp_sp(f"Das {clean.capitalize()} ist hier.")
+                val = noun_doc[1].pos_ if len(noun_doc) > 1 else None
             except Exception:
                 val = None
             _pos_cache[key] = val

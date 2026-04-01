@@ -86,7 +86,13 @@ class wordfreq_dict(distractor_dict):
         return matches
 
     def batch_tag_words(self, words, batch_size=500):
-        """Tag a list of words in bulk by checking their capitalized standalone form."""
+        """Tag a list of words in bulk using contextual framing for accuracy.
+        
+        Uses grammatical context to help SpaCy distinguish inflected adjectives
+        from nouns/verbs. For example:
+        - "Die fränkischen Gebiete" → fränkischen = ADJ
+        - "Das Parlament" → Parlament = NOUN
+        """
         if self.nlp_sp is None or not words:
             return
         
@@ -117,18 +123,35 @@ class wordfreq_dict(distractor_dict):
                 self.case_map[w] = None
                 self.pos_cache[w] = 'ADP'  # Function words are typically prepositions/determiners
         
-        # Second pass: SpaCy tagging WITHOUT false contextual framing
+        # Second pass: SpaCy tagging with CONTEXTUAL FRAMING for better accuracy
         content_words = [w for w in unique_words if w not in FUNCTION_WORDS]
         if content_words:
-            # Capitalize to give SpaCy the chance to recognize nouns based on morphology, not syntax
-            capitalized_words = [w.capitalize() for w in content_words]
+            # Create adjective contexts to detect ADJ tags accurately
+            # Use lowercase to prevent SpaCy from assuming it's a noun just because it's capitalized
+            adj_contexts = [f"Die {w} Sachen sind gut." for w in content_words]
             
             try:
-                docs = list(self.nlp_sp.pipe(capitalized_words, batch_size=batch_size))
+                # Process adjective contexts to detect ADJ tags
+                adj_docs = list(self.nlp_sp.pipe(adj_contexts, batch_size=batch_size))
                 
-                for word_l, word_doc in zip(content_words, docs):
-                    if len(word_doc) > 0:
-                        pos_in_noun_context = word_doc[0].pos_
+                for word_l, adj_doc in zip(content_words, adj_docs):
+                    # Check position 1 (the word in question)
+                    if len(adj_doc) > 1:
+                        pos_in_adj_context = adj_doc[1].pos_
+                        
+                        # If it's clearly an adjective in adjective context, tag as ADJ
+                        # Only trust ADJ tag if it's a strong signal (word ends in typical adj suffixes)
+                        if pos_in_adj_context == 'ADJ' and any(word_l.endswith(suff) for suff in 
+                            ['isch', 'ischen', 'ischer', 'isches', 'liche', 'licher', 'liches', 'lichen', 
+                             'bar', 'sam', 'haft', 'los', 'voll', 'arm', 'reich', 'ner']):
+                            self.pos_cache[word_l] = 'ADJ'
+                            self.case_map[word_l] = None  # Adjectives stay lowercase
+                            continue
+                    
+                    # Otherwise, test as potential noun with capitalized form
+                    noun_doc = self.nlp_sp(f"Das {word_l.capitalize()} ist hier.")
+                    if len(noun_doc) > 1:
+                        pos_in_noun_context = noun_doc[1].pos_
                         self.pos_cache[word_l] = pos_in_noun_context
                         
                         if pos_in_noun_context in ('NOUN', 'PROPN'):
@@ -446,15 +469,36 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         
         if token_lower in FUNCTION_WORDS:
             self.case_map[token_lower] = None  # Force lowercase
+            if not hasattr(self, 'pos_cache'):
+                self.pos_cache = {}
+            self.pos_cache[token_lower] = 'ADP'
             return None
 
-        # For content words: use SpaCy with CAPITALIZED form isolated
+        # Initialize pos_cache if needed
+        if not hasattr(self, 'pos_cache'):
+            self.pos_cache = {}
+
+        # For content words: use contextual framing for accurate POS
         if self.nlp_sp is not None:
-            doc_c = self.nlp_sp(w_cap)
-            if len(doc_c) > 0 and doc_c[0].pos_ in ('NOUN', 'PROPN'):
+            # First check adjective context
+            adj_doc = self.nlp_sp(f"Die {token_lower} Sachen sind gut.")
+            if len(adj_doc) > 1 and adj_doc[1].pos_ == 'ADJ':
+                # Verify with suffix check for German adjectives
+                if any(token_lower.endswith(suff) for suff in 
+                    ['isch', 'ischen', 'ischer', 'isches', 'liche', 'licher', 'liches', 'lichen', 
+                     'bar', 'sam', 'haft', 'los', 'voll', 'arm', 'reich', 'ner']):
+                    self.case_map[token_lower] = None
+                    self.pos_cache[token_lower] = 'ADJ'
+                    return None
+            
+            # Check noun context with capitalized form
+            noun_doc = self.nlp_sp(f"Das {w_cap} ist hier.")
+            if len(noun_doc) > 1 and noun_doc[1].pos_ in ('NOUN', 'PROPN'):
                 self.case_map[token_lower] = w_cap
+                self.pos_cache[token_lower] = noun_doc[1].pos_
             else:
                 self.case_map[token_lower] = None
+                self.pos_cache[token_lower] = noun_doc[1].pos_ if len(noun_doc) > 1 else None
         else:
             self.case_map[token_lower] = None
                 
