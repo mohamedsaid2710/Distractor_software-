@@ -24,7 +24,7 @@ enforce_length_match: True
 apply_postcase: True
 
 # --- Model & Hardware Settings ---
-hf_model_name: "dbmdz/german-gpt2"
+hf_model_name: "benjamin/gerpt2"
 device: "cuda"
 
 # --- File Paths & Resources ---

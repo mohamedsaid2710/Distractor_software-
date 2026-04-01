@@ -6,8 +6,8 @@ from huggingface_hub import snapshot_download
 
 MODEL_SPECS = {
     "german": {
-        "repo_id": "dbmdz/german-gpt2",
-        "local_dir": "models/dbmdz-german-gpt2",
+        "repo_id": "benjamin/gerpt2",
+        "local_dir": "models/benjamin-gerpt2",
     },
     "english": {
         "repo_id": "openai-community/gpt2-medium",
@@ -65,7 +65,7 @@ def download_model(name: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download local model files for this repo")
     parser.add_argument("--english", action="store_true", help="download openai-community/gpt2-medium")
-    parser.add_argument("--german", action="store_true", help="download dbmdz/german-gpt2")
+    parser.add_argument("--german", action="store_true", help="download benjamin/gerpt2")
     parser.add_argument("--arabic", action="store_true", help="download aubmindlab/aragpt2-medium")
     parser.add_argument("--all", action="store_true", help="download all models")
     args = parser.parse_args()

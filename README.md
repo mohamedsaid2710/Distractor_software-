@@ -38,7 +38,7 @@ python distract.py -i arabic_sample.txt -o output_ar.txt -p params_ar.txt -f del
 
 ## Features
 
-- **Three languages** — English (`gpt2-medium`), German (`dbmdz/german-gpt2`), and Arabic (`aubmindlab/aragpt2-medium`)
+- **Three languages** — English (`gpt2-medium`), German (`benjamin/gerpt2`), and Arabic (`aubmindlab/aragpt2-medium`)
 - **Two selection modes** — threshold-first (Mode A) or max-implausibility ranking (Mode B)
 - **Two output formats** — `delim` (semicolon-delimited table) and `ibex` (PCIbex-ready lines)
 - **Length matching** — distractors match target word length (with optional `len_tolerance`)

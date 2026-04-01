@@ -35,16 +35,16 @@ requirements_working.txt
 
 # Large Model Files (Over 100MB) - MUST IGNORE THESE
 
-models/dbmdz-german-gpt2/
+models/benjamin-gerpt2/
 models/openai-community-gpt2-medium/
 models/aubmindlab-aragpt2-medium/
-models/dbmdz-german-gpt2/onnx/
+models/benjamin-gerpt2/onnx/
 models/openai-community-gpt2-medium/onnx/
-models/dbmdz-german-gpt2/pytorch_model.bin
-models/dbmdz-german-gpt2/model.safetensors
-models/dbmdz-german-gpt2/flax_model.msgpack
-models/dbmdz-german-gpt2/tf_model.h5
-models/dbmdz-german-gpt2/*blobs*
+models/benjamin-gerpt2/pytorch_model.bin
+models/benjamin-gerpt2/model.safetensors
+models/benjamin-gerpt2/flax_model.msgpack
+models/benjamin-gerpt2/tf_model.h5
+models/benjamin-gerpt2/*blobs*
 models/openai-community-gpt2-medium/pytorch_model.bin
 models/openai-community-gpt2-medium/model.safetensors
 models/openai-community-gpt2-medium/flax_model.msgpack
@@ -57,7 +57,7 @@ models/aubmindlab-aragpt2-medium/tf_model.h5
 models/aubmindlab-aragpt2-medium/*blobs*
 
 # Ignore any large numbered blob files (cached from HuggingFace)
-models/dbmdz-german-gpt2/[0-9a-f]*[0-9a-f]
+models/benjamin-gerpt2/[0-9a-f]*[0-9a-f]
 models/openai-community-gpt2-medium/[0-9a-f]*[0-9a-f]
 models/aubmindlab-aragpt2-medium/[0-9a-f]*[0-9a-f]
 
@@ -68,3 +68,4 @@ Untitled spreadsheet - Sheet1.csv
 notes.txt
 txt.txt 
 3.5zipf.txt
+txt1.txt 

@@ -170,7 +170,7 @@ def _detect_language(params):
     model_loc = (params.get('model_loc', '') or '').lower()
     dict_cls = (params.get('dictionary_class', '') or '').lower()
     hf_name = (params.get('hf_model_name', '') or '').lower()
-    if ('german' in model_loc) or ('german' in dict_cls) or ('dbmdz' in hf_name):
+    if ('german' in model_loc) or ('german' in dict_cls) or ('benjamin' in hf_name) or ('gerpt2' in hf_name):
         return 'de'
     if ('arabic' in model_loc) or ('arabic' in dict_cls) or ('aragpt' in hf_name) or ('aubmindlab' in hf_name):
         return 'ar'
@@ -1165,7 +1165,7 @@ class Sentence_Set:
                     model_loc = (params.get('model_loc', '') or '').lower()
                     dict_cls = (params.get('dictionary_class', '') or '').lower()
                     hf_name = (params.get('hf_model_name', '') or '').lower()
-                    apply_postcase = ('german' in model_loc) or ('german' in dict_cls) or ('dbmdz' in hf_name)
+                    apply_postcase = ('german' in model_loc) or ('german' in dict_cls) or ('benjamin' in hf_name) or ('gerpt2' in hf_name)
                 except Exception:
                     apply_postcase = False
             # Read match_target_case param
