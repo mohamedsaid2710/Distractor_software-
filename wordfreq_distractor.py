@@ -85,7 +85,7 @@ class wordfreq_dict(distractor_dict):
                 matches.append(word.text)
         return matches
 
-    def batch_tag_words(self, words):
+    def batch_tag_words(self, words, batch_size=500):
         """Tag a list of words in bulk using contextual framing for accuracy.
         
         Uses grammatical context to help SpaCy distinguish inflected adjectives
@@ -135,7 +135,10 @@ class wordfreq_dict(distractor_dict):
             
             try:
                 # Process adjective contexts to detect ADJ tags
-                adj_docs = list(self.nlp_sp.pipe(adj_contexts))
+                adj_docs = list(self.nlp_sp.pipe(adj_contexts, batch_size=batch_size))
+                
+                noun_contexts = []
+                noun_words = []
                 
                 for word_l, adj_doc in zip(content_words, adj_docs):
                     # Check position 1 (the word in question)
@@ -149,15 +152,20 @@ class wordfreq_dict(distractor_dict):
                             continue
                     
                     # Otherwise, test as potential noun with capitalized form
-                    noun_doc = self.nlp_sp(f"Das {word_l.capitalize()} ist hier.")
-                    if len(noun_doc) > 1:
-                        pos_in_noun_context = noun_doc[1].pos_
-                        self.pos_cache[word_l] = pos_in_noun_context
-                        
-                        if pos_in_noun_context in ('NOUN', 'PROPN'):
-                            self.case_map[word_l] = word_l.capitalize()
-                        else:
-                            self.case_map[word_l] = None
+                    noun_contexts.append(f"Das {word_l.capitalize()} ist hier.")
+                    noun_words.append(word_l)
+                    
+                if noun_contexts:
+                    noun_docs = list(self.nlp_sp.pipe(noun_contexts, batch_size=batch_size))
+                    for word_l, noun_doc in zip(noun_words, noun_docs):
+                        if len(noun_doc) > 1:
+                            pos_in_noun_context = noun_doc[1].pos_
+                            self.pos_cache[word_l] = pos_in_noun_context
+                            
+                            if pos_in_noun_context in ('NOUN', 'PROPN'):
+                                self.case_map[word_l] = word_l.capitalize()
+                            else:
+                                self.case_map[word_l] = None
                             
             except Exception as e:
                 logging.error(f"SpaCy batch tagging failed: {e}")
@@ -211,7 +219,7 @@ class wordfreq_dict(distractor_dict):
         # 3. --- HYPER-SPEED OPTIMIZATION: BATCH TAGGING ---
         # Instead of tagging words one-by-one in the loop, we tag the entire pool at once!
         if self.nlp_sp is not None:
-            self.batch_tag_words(distractor_opts)
+            self.batch_tag_words(distractor_opts, batch_size=int(params.get("spacy_batch_size", 500)))
             
         # 4. Filter the pool using the now-cached high-quality POS tags
         if pos_filter:

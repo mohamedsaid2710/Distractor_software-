@@ -66,7 +66,7 @@ For maximum accuracy and linguistic control in German experiments, use the follo
 
 ## Performance / Batch Mode
 
-The German Maze pipeline (and future models) now supports **Parallel Batch Scoring**. Instead of calculating surprisals for one candidate word at a time, the model processes **256 candidates simultaneously** on your GPU or CPU.
+The Maze pipeline now supports **Parallel Batch Scoring**. Instead of calculating surprisals for one candidate word at a time, the model processes **batches of candidates simultaneously** on your GPU or CPU (configured via `batch_size`).
 
 ### **Speed Features:**
 - **Hyper-Speed Execution**: Reduces generation time from hours to minutes for large stimulus sets.

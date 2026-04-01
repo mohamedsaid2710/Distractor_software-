@@ -29,6 +29,9 @@ class GermanScorer(lang_model):
 
         device = params.get("device", None)
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Store model_batch_size from params (default 256 for backward compatibility)
+        self.model_batch_size = int(params.get("model_batch_size", params.get("batch_size", 256)))
 
         self.tokenizer = self._load_tokenizer(model_name)
         self.model = self._load_model(model_name).to(self.device)
@@ -181,14 +184,23 @@ class GermanScorer(lang_model):
             return 0.0
         return float(surprisals[token].item())
 
-    def get_surprisal_batch_from_hidden(self, hidden, words, batch_size=256):
+    def get_surprisal_batch_from_hidden(self, hidden, words, batch_size=None):
         """Score a list of words in parallel batches using 'Hyper-Speed v4' (Selective Slicing).
         
         This version is 100% stable and provides a 60x speedup by only calculating 
         the probabilities for the target token, keeping memory usage at ~50MB per batch.
+        
+        Args:
+            hidden: Context token IDs
+            words: List of words to score
+            batch_size: Override instance batch_size (default uses self.batch_size from params)
         """
         if not words:
             return []
+        
+        # Use instance model_batch_size if not overridden
+        if batch_size is None:
+            batch_size = self.model_batch_size
             
         ctx_ids = list(hidden) if isinstance(hidden, (list, tuple)) else list(hidden)
         ctx_len = len(ctx_ids)

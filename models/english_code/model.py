@@ -29,6 +29,9 @@ class EnglishScorer(lang_model):
 
         device = params.get("device", None)
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Store model_batch_size from params (default 256 for backward compatibility)
+        self.model_batch_size = int(params.get("model_batch_size", params.get("batch_size", 256)))
 
         self.tokenizer = self._load_tokenizer(model_name)
         self.model = self._load_model(model_name).to(self.device)
