@@ -1,5 +1,5 @@
 sample;1;Das ist ein Test.
-sample;2;Die katze saß auf der Matte.
+sample;2;Die Katze saß auf der Matte.
 sample;3;Sie bestellte Kaffee im Café.
 sample;4;Berlin ist eine große Stadt.
 sample;5;Wissenschaftler entdeckten eine neue Art.

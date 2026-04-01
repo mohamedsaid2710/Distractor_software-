@@ -18,7 +18,12 @@ exclude_propn_candidates: True
 enforce_length_match: True
 lowercase_only: True
 apply_postcase: False
-match_target_case: False
+
+# --- Semantic Filtering ---
+# Rejects candidates that are semantically similar to the target word.
+# Uses fastText embeddings. Requires: pip install fasttext
+semantic_filter: True
+semantic_threshold: 0.35
 
 # --- Model & Hardware Settings ---
 hf_model_name: "openai-community/gpt2-medium"

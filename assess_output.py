@@ -244,20 +244,41 @@ def main():
             if nlp_sp and lang == 'de':
                 clean_w = strip_punct(dtoks[i])
                 if clean_w:
-                    doc = nlp_sp(clean_w)
-                    pos = doc[0].pos_ if len(doc) > 0 else None
+                    # German function words whitelist
+                    FUNCTION_WORDS = {
+                        'ins', 'im', 'am', 'ans', 'zum', 'zur', 'vom', 'beim', 'durchs', 'fürs',
+                        'ums', 'aufs', 'übers', 'unters', 'hinters', 'vors',
+                        'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einem', 'eines', 'einer', 'einen',
+                        'mein', 'dein', 'sein', 'ihr', 'unser', 'euer',
+                        'ab', 'an', 'auf', 'aus', 'bei', 'bis', 'durch', 'für', 'gegen',
+                        'hinter', 'in', 'mit', 'nach', 'neben', 'ohne', 'über', 'um',
+                        'unter', 'von', 'vor', 'zu', 'zwischen',
+                        'pro', 'per', 'ach', 'oh'
+                    }
+                    
                     is_cap = dtoks[i][0].isupper()
-                    if pos in ('NOUN', 'PROPN'):
-                        if not is_cap:
+                    
+                    # Function words must be lowercase
+                    if clean_w.lower() in FUNCTION_WORDS:
+                        if is_cap:
                             casing_errors += 1
                             if len(examples) < args.max_examples:
-                                examples.append((item_id, i, f"casing-NOUN-not-capped:{pos}", dtoks[i]))
+                                examples.append((item_id, i, f"casing-function-word-capped", dtoks[i]))
                     else:
-                        # Non-nouns should be lowercase unless they are specific formal pronouns
-                        if is_cap and clean_w.lower() not in ('sie', 'ihr', 'ihnen', 'ihre'):
-                            casing_errors += 1
-                            if len(examples) < args.max_examples:
-                                examples.append((item_id, i, f"casing-NonNoun-is-capped:{pos}", dtoks[i]))
+                        # Content words: use SpaCy with capitalized form (preserves noun detection)
+                        doc = nlp_sp(f"Das {clean_w.capitalize()} ist hier.")
+                        pos = doc[1].pos_ if len(doc) > 1 else None
+                        if pos in ('NOUN', 'PROPN'):
+                            if not is_cap:
+                                casing_errors += 1
+                                if len(examples) < args.max_examples:
+                                    examples.append((item_id, i, f"casing-NOUN-not-capped:{pos}", dtoks[i]))
+                        else:
+                            # Non-nouns should be lowercase unless they are specific formal pronouns
+                            if is_cap and clean_w.lower() not in ('sie', 'ihr', 'ihnen', 'ihre'):
+                                casing_errors += 1
+                                if len(examples) < args.max_examples:
+                                    examples.append((item_id, i, f"casing-NonNoun-is-capped:{pos}", dtoks[i]))
 
             # 3. Surprisal checks
             try:

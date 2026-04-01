@@ -16,12 +16,20 @@ match_noun_pos: True
 len_tolerance: 1
 min_zipf: 3.5
 short_word_min_zipf: 4.5
-freq_tolerance: 0.3
+short_word_boost: 5
+short_word_max_len: 3
+freq_tolerance: 1.0
 max_freq_widen: 20
 min_word_len: 2
 exclude_propn_candidates: True
 enforce_length_match: True
 apply_postcase: True
+
+# --- Semantic Filtering (NEW) ---
+# Rejects candidates that are semantically similar to the target word.
+# Uses fastText embeddings. Requires: pip install fasttext
+semantic_filter: True
+semantic_threshold: 0.35
 
 # --- Model & Hardware Settings ---
 hf_model_name: "benjamin/gerpt2"

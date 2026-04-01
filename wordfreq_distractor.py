@@ -86,30 +86,46 @@ class wordfreq_dict(distractor_dict):
         return matches
 
     def batch_tag_words(self, words):
-        """Tag a list of words in bulk using SpaCy's batch processing (nlp.pipe)."""
+        """Tag a list of words in bulk with hybrid approach: whitelist + SpaCy."""
         if self.nlp_sp is None or not words:
             return
         
-        # Filter for words not yet in the case_map
+        # German function words - ALWAYS lowercase
+        FUNCTION_WORDS = {
+            'ins', 'im', 'am', 'ans', 'zum', 'zur', 'vom', 'beim', 'durchs', 'fürs',
+            'ums', 'aufs', 'übers', 'unters', 'hinters', 'vors',
+            'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einem', 'eines', 'einer', 'einen',
+            'mein', 'dein', 'sein', 'ihr', 'unser', 'euer',
+            'ab', 'an', 'auf', 'aus', 'bei', 'bis', 'durch', 'für', 'gegen',
+            'hinter', 'in', 'mit', 'nach', 'neben', 'ohne', 'über', 'um',
+            'unter', 'von', 'vor', 'zu', 'zwischen',
+            'pro', 'per', 'ach', 'oh'
+        }
+        
+        # Filter for words not yet in case_map
         unique_words = list(set(w.lower() for w in words if w.lower() not in self.case_map))
         if not unique_words:
             return
         
-        # Prepare framed context for improved German tagging to avoid "isolated capitalization" bug
-        # e.g., 'Das Gehässig ist hier.' forces SpaCy to evaluate grammar rather than just capping rule.
-        framed_texts = [f"Das {w.capitalize()} ist hier." for w in unique_words]
+        # First pass: mark function words
+        for w in unique_words:
+            if w in FUNCTION_WORDS:
+                self.case_map[w] = None
         
-        # Process in batches
-        try:
-            # Using nlp.pipe is significantly faster than nlp() in a loop
-            docs = self.nlp_sp.pipe(framed_texts)
-            for word_l, doc in zip(unique_words, docs):
-                if len(doc) > 1 and doc[1].pos_ in ('NOUN', 'PROPN'):
-                    self.case_map[word_l] = word_l.capitalize()
-                else:
-                    self.case_map[word_l] = None
-        except Exception as e:
-            logging.error(f"SpaCy batch tagging failed: {e}")
+        # Second pass: SpaCy tagging for content words (use capitalized form for noun detection)
+        content_words = [w for w in unique_words if w not in FUNCTION_WORDS]
+        if content_words:
+            framed_texts = [f"Das {w.capitalize()} ist hier." for w in content_words]
+            
+            try:
+                docs = self.nlp_sp.pipe(framed_texts)
+                for word_l, doc in zip(content_words, docs):
+                    if len(doc) > 1 and doc[1].pos_ in ('NOUN', 'PROPN'):
+                        self.case_map[word_l] = word_l.capitalize()
+                    else:
+                        self.case_map[word_l] = None
+            except Exception as e:
+                logging.error(f"SpaCy batch tagging failed: {e}")
 
     def get_potential_distractors(self, min_length, max_length, min_freq, max_freq, params, pos_filter=None):
         """Returns list of candidates, using heuristic first, then widening, then batch SpaCy validation."""
@@ -389,13 +405,28 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.nlp_sp = None
 
     def _eval_single_word_case(self, token_lower):
-        """Ultimate POS check: compares lowercase and titlecase results inside natural context."""
+        """Ultimate POS check with hybrid approach: whitelist function words, SpaCy for content words."""
         w_cap = token_lower.capitalize()
         
+        # German function words (contractions, articles, pronouns) - ALWAYS lowercase
+        FUNCTION_WORDS = {
+            'ins', 'im', 'am', 'ans', 'zum', 'zur', 'vom', 'beim', 'durchs', 'fürs',
+            'ums', 'aufs', 'übers', 'unters', 'hinters', 'vors',
+            'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einem', 'eines', 'einer', 'einen',
+            'mein', 'dein', 'sein', 'ihr', 'unser', 'euer',
+            'ab', 'an', 'auf', 'aus', 'bei', 'bis', 'durch', 'für', 'gegen',
+            'hinter', 'in', 'mit', 'nach', 'neben', 'ohne', 'über', 'um',
+            'unter', 'von', 'vor', 'zu', 'zwischen',
+            'pro', 'per', 'ach', 'oh'
+        }
+        
+        if token_lower in FUNCTION_WORDS:
+            self.case_map[token_lower] = None  # Force lowercase
+            return None
 
-        # 2. Use stable SpaCy frame (same as batch tagger)
+        # For content words: use SpaCy with CAPITALIZED form (preserves noun detection)
         if self.nlp_sp is not None:
-            doc_c = self.nlp_sp(f"das {token_lower} ist hier.")
+            doc_c = self.nlp_sp(f"Das {w_cap} ist hier.")
             if len(doc_c) > 1 and doc_c[1].pos_ in ('NOUN', 'PROPN'):
                 self.case_map[token_lower] = w_cap
             else:

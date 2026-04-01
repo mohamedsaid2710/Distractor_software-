@@ -5,6 +5,20 @@ import re
 import random
 import os
 
+# Lazy import for semantic filtering
+_semantic_filter_module = None
+
+def _get_semantic_filter():
+    """Lazy-load semantic filter module."""
+    global _semantic_filter_module
+    if _semantic_filter_module is None:
+        try:
+            import semantic_filter
+            _semantic_filter_module = semantic_filter
+        except ImportError:
+            _semantic_filter_module = False  # Mark as unavailable
+    return _semantic_filter_module if _semantic_filter_module else None
+
 
 def _levenshtein_distance(s1, s2):
     """Compute edit distance between two strings."""
@@ -319,6 +333,20 @@ class Label:
         except (ValueError, TypeError):
             pass
 
+        # --- Short word boost ---
+        # For very short words (≤3 chars), require higher surprisal since
+        # short function words have many plausible alternatives
+        short_word_boost = float(params.get('short_word_boost', 0))
+        short_word_max_len = int(params.get('short_word_max_len', 3))
+        is_short_word = False
+        if self.words:
+            # Check if any target word is short
+            for w in self.words:
+                clean_w = strip_punct(w)
+                if clean_w and len(clean_w) <= short_word_max_len:
+                    is_short_word = True
+                    break
+        
         for surprisal in self.surprisals:  # calculate desired surprisal thresholds
             if absolute_threshold_only:
                 base = params["min_abs"]
@@ -326,6 +354,8 @@ class Label:
                 base = max(params["min_abs"], surprisal + params["min_delta"])
             if is_early:
                 base += early_boost
+            if is_short_word:
+                base += short_word_boost
             self.surprisal_targets.append(base)
 
         # decide whether this label refers to nouns (use POS info if available)
@@ -740,6 +770,18 @@ class Label:
             if skip:
                 continue
             qualified_candidates.append(dist)
+        
+        # Apply semantic dissimilarity filter if enabled
+        if params.get('semantic_filter', False) and qualified_candidates:
+            sem_filter = _get_semantic_filter()
+            if sem_filter:
+                target_word = strip_punct(self.words[0]) if self.words else ""
+                pre_filter_count = len(qualified_candidates)
+                qualified_candidates = sem_filter.apply_semantic_filter(
+                    target_word, qualified_candidates, params
+                )
+                if len(qualified_candidates) < pre_filter_count:
+                    print(f"    [Semantic] Filtered {pre_filter_count} → {len(qualified_candidates)} candidates")
             
         if not qualified_candidates:
             # handle empty pool via fallback logic below
@@ -1168,9 +1210,7 @@ class Sentence_Set:
                     apply_postcase = ('german' in model_loc) or ('german' in dict_cls) or ('benjamin' in hf_name) or ('gerpt2' in hf_name)
                 except Exception:
                     apply_postcase = False
-            # Read match_target_case param
-            match_target_case = bool(params.get('match_target_case', False))
-            if apply_postcase and not match_target_case:
+            if apply_postcase:
                 try:
                     for j in range(len(sentence.distractors)):
                         # Use the original word's POS tag (from full-sentence
@@ -1186,26 +1226,6 @@ class Sentence_Set:
                             sentence.distractors[j], d, lang=lang, source_pos=src_pos, is_first_word=(j==0))
                 except Exception:
                     pass
-            # match_target_case: copy the target word's casing onto the distractor
-            if match_target_case:
-                for j in range(len(sentence.distractors)):
-                    if j >= len(sentence.words):
-                        break
-                    if _is_x_placeholder_token(sentence.distractors[j]):
-                        continue
-                    target_tok = sentence.words[j]
-                    dist_tok = sentence.distractors[j]
-                    _, t_body, _ = _split_punct(target_tok)
-                    d_prefix, d_body, d_suffix = _split_punct(dist_tok)
-                    if not d_body or not t_body:
-                        continue
-                    if t_body.isupper():
-                        new_body = d_body.upper()
-                    elif t_body[0].isupper():
-                        new_body = d_body[0:1].upper() + d_body[1:].lower()
-                    else:
-                        new_body = d_body.lower()
-                    sentence.distractors[j] = d_prefix + new_body + d_suffix
             # Keep first placeholder shape stable (no auto-capitalization side effects).
             if use_first_placeholder and sentence.distractors:
                 first_len = len(strip_punct(sentence.words[0]))

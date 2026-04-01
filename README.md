@@ -107,7 +107,6 @@ sample;3;القطة جلست على السجادة
 | `early_position_boost` | `0` | Extra surprisal for early positions (reduces plausible distractors at sentence start) |
 | `match_noun_pos` | `False` | (German-specific) If `True`, distractors for target nouns must also be nouns. |
 | `apply_postcase` | auto | German noun casing post-processing (auto-enabled for German configs). |
-| `match_target_case` | `False` | If `True`, each distractor copies the target word's capitalization (uppercase→uppercase, Titlecase→Titlecase, lowercase→lowercase); bypasses `apply_postcase` spaCy noun logic |
 
 See the [Config Reference](https://github.com/mohamedsaid2710/Distractor_software-/wiki/Config-Reference) for the full parameter catalog.
 

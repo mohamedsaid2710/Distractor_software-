@@ -155,6 +155,32 @@ class GermanScorer(lang_model):
             logging.info("Word %s is multi-token; using first subtoken for surprisal.", word)
         return float(surprisals[token].item())
 
+    def get_surprisal_from_hidden(self, hidden, word):
+        """Compute surprisal of a word given context (hidden state = token IDs)."""
+        ctx_ids = list(hidden) if isinstance(hidden, (list, tuple)) else list(hidden)
+        if not ctx_ids:
+            # No context - use model's internal handling
+            return self.get_surprisal_batch_from_hidden([], [word], batch_size=1)[0]
+        
+        allowed_ctx = max(0, self.max_len - 1)
+        ctx = ctx_ids[-allowed_ctx:] if len(ctx_ids) > allowed_ctx else ctx_ids
+        
+        input_ids = torch.tensor([ctx], device=self.device)
+        with torch.no_grad():
+            outputs = self.model(input_ids)
+            logits = outputs.logits
+            last_logits = logits[0, -1, :]
+            probs = F.softmax(last_logits, dim=-1).clamp(min=1e-12)
+            surprisals = -torch.log2(probs)
+        
+        parts = self.tokenizer.encode(word, add_special_tokens=False)
+        if len(parts) == 0:
+            return 0.0
+        token = parts[0]
+        if token >= surprisals.size(0):
+            return 0.0
+        return float(surprisals[token].item())
+
     def get_surprisal_batch_from_hidden(self, hidden, words, batch_size=256):
         """Score a list of words in parallel batches using 'Hyper-Speed v4' (Selective Slicing).
         
