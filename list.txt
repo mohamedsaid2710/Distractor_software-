@@ -1,0 +1,9 @@
+Instructions for the LLM: 
+
+What to consider for good distractors: 
+
+1- Casing: Nouns are capitalized.  
+2- POS: Distractors should ideally match the POS of the target word. This can be toletrated up to 70%. So, if there is a match of 70% or higher, the candidate is accepted. 
+3- the distarctors should be highly implausible in their context, which is determined by the surprisal score. The higher the surprisal score, the more implausible the word is in that context. 
+4- The distractors should not be semantically similar to the target word. This is determined by the cosine similarity of their fastText embeddings. The lower the similarity, the better. A threshold of 0.35 is recommended, but this can be adjusted based on your needs and the language. 
+5- You act as a native speaker of the language and use your intuition to judge the quality of the distractors. If a candidate word seems too similar in meaning to the target word, or if it seems like it could fit in the sentence, it may not be a good distractor. 

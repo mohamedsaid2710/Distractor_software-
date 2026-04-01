@@ -208,11 +208,19 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=
     except Exception:
         pass
 
-    if title_var:
+    if isinstance(title_var, str):
         new_body = title_var
     else:
         # Not a noun -> lowercase (Standard German rule)
-        new_body = body.lower()
+        # Wait, if we matched noun pos, it could be that title_var was not reliably populated in the dictionary.
+        # Check source_pos if available or target_is_noun:
+        # If the target was a noun/propn or the token starts capitalized and we are forcing matches, we might want to capitalize it.
+        # But wait, earlier we capitalized exact matches! If it comes in capitalized, we should keep it capitalized if it's supposed to be a noun.
+        # Even better: if source_pos is NOUN/PROPN or source_token is capitalized, we mimic it for nouns.
+        if source_pos in ('NOUN', 'PROPN') or (source_token and source_token[0].isupper()):
+            new_body = body.capitalize()
+        else:
+            new_body = body.lower()
     
     if is_first_word and new_body:
         new_body = new_body[0].upper() + new_body[1:]
