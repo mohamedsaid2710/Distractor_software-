@@ -452,29 +452,13 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.nlp_sp = None
 
     def _eval_single_word_case(self, token_lower):
-        """Ultimate POS check with hybrid approach: whitelist function words, SpaCy for content words."""
+        """Ultimate POS check using standalone SpaCy evaluation."""
         w_cap = token_lower.capitalize()
         
-        # German function words (contractions, articles, pronouns) - ALWAYS lowercase
-        FUNCTION_WORDS = {
-            'ins', 'im', 'am', 'ans', 'zum', 'zur', 'vom', 'beim', 'durchs', 'fürs',
-            'ums', 'aufs', 'übers', 'unters', 'hinters', 'vors',
-            'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einem', 'eines', 'einer', 'einen',
-            'mein', 'dein', 'sein', 'ihr', 'unser', 'euer',
-            'ab', 'an', 'auf', 'aus', 'bei', 'bis', 'durch', 'für', 'gegen',
-            'hinter', 'in', 'mit', 'nach', 'neben', 'ohne', 'über', 'um',
-            'unter', 'von', 'vor', 'zu', 'zwischen',
-            'pro', 'per', 'ach', 'oh'
-        }
-        
-        if token_lower in FUNCTION_WORDS:
-            self.case_map[token_lower] = None  # Force lowercase
-            return None
-
-        # For content words: use SpaCy with CAPITALIZED form (preserves noun detection)
+        # For all words: use SpaCy with CAPITALIZED form isolated
         if self.nlp_sp is not None:
-            doc_c = self.nlp_sp(f"Das {w_cap} ist hier.")
-            if len(doc_c) > 1 and doc_c[1].pos_ in ('NOUN', 'PROPN'):
+            doc_c = self.nlp_sp(w_cap)
+            if len(doc_c) > 0 and doc_c[0].pos_ in ('NOUN', 'PROPN'):
                 self.case_map[token_lower] = w_cap
             else:
                 self.case_map[token_lower] = None

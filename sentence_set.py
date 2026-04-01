@@ -208,11 +208,14 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=
     except Exception:
         pass
 
-    if title_var:
+    if isinstance(title_var, str):
         new_body = title_var
     else:
         # Not a noun -> lowercase (Standard German rule)
-        new_body = body.lower()
+        if source_pos in ('NOUN', 'PROPN') or (source_token and source_token[0].isupper()):
+            new_body = body.capitalize()
+        else:
+            new_body = body.lower()
     
     if is_first_word and new_body:
         new_body = new_body[0].upper() + new_body[1:]
@@ -394,11 +397,17 @@ class Label:
         _propn_cache = {}
         _pos_cache = {}
         
-        def get_candidate_pos(candidate):
+        def get_candidate_pos(candidate, target_noun_context=False):
             if nlp_sp is None: return None
             clean = strip_punct(candidate)
             if not clean: return None
-            key = clean.lower()
+            
+            # If the target is a noun, evaluate the candidate in capitalized form
+            # so SpaCy recognizes it if it has noun morphology
+            if target_noun_context:
+                clean = clean.capitalize()
+                
+            key = clean  # Case sensitive key now since casing matters for POS
             if key in _pos_cache: return _pos_cache[key]
             try:
                 doc = nlp_sp(clean)
@@ -487,7 +496,7 @@ class Label:
                             others.append(c)
                 else:
                     for c in distractor_opts:
-                        c_pos = get_candidate_pos(c)
+                        c_pos = get_candidate_pos(c, target_noun_context=target_is_noun)
                         is_exact_match = (c_pos == target_pos) or (target_is_noun and c_pos == 'PROPN')
                         
                         if is_exact_match:
@@ -497,7 +506,7 @@ class Label:
             except Exception as e:
                 logging.error(f"Batch POS tagging failed: {e}")
                 for c in distractor_opts:
-                    c_pos = get_candidate_pos(c)
+                    c_pos = get_candidate_pos(c, target_noun_context=target_is_noun)
                     if c_pos == target_pos:
                         exact.append(c)
                     elif c_pos not in bad_pos:
@@ -643,7 +652,7 @@ class Label:
                 return local_best, local_best_surp
 
             if target_pos and match_noun_pos:
-                exact_pool = [c for c in pool if get_candidate_pos(c) == target_pos]
+                exact_pool = [c for c in pool if get_candidate_pos(c, target_noun_context=target_is_noun) == target_pos]
                 best_cand, best_surp = _find_best(exact_pool)
                 if best_cand is not None:
                     return best_cand, best_surp
@@ -745,7 +754,7 @@ class Label:
 
                 best_candidate = None
                 if target_pos and match_noun_pos:
-                    exact_pool = [c for c in distractor_opts if get_candidate_pos(c) == target_pos]
+                    exact_pool = [c for c in distractor_opts if get_candidate_pos(c, target_noun_context=target_is_noun) == target_pos]
                     best_candidate = _find_best_match(exact_pool)
                     
                     if not best_candidate and not target_is_noun:
