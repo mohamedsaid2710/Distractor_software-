@@ -87,13 +87,20 @@ class wordfreq_dict(distractor_dict):
 
     def batch_tag_words(self, words):
         """Tag a list of words in bulk using high-performance SpaCy batching.
-        
-        Evaluates capitalization mapping to safely identify valid German nouns.
+
+        Uses sentence-context framing to get reliable German POS tags.
+        SpaCy cannot reliably tag isolated words because in German,
+        capitalization signals noun status -- evaluating 'Argumentiert' in
+        isolation misleads SpaCy into tagging verbs/adjectives as nouns.
+
+        Strategy: evaluate each word in a carrier sentence where it appears
+        in lowercase so SpaCy uses syntax rather than capitalization:
+          'Sie kann gut {word} und machen.'
         """
         if self.nlp_sp is None or not words:
             return
-        
-        # German function words - ALWAYS lowercase
+
+        # German function words - ALWAYS lowercase, skip tagging
         FUNCTION_WORDS = {
             'ins', 'im', 'am', 'ans', 'zum', 'zur', 'vom', 'beim', 'durchs', 'fürs',
             'ums', 'aufs', 'übers', 'unters', 'hinters', 'vors',
@@ -102,43 +109,70 @@ class wordfreq_dict(distractor_dict):
             'ab', 'an', 'auf', 'aus', 'bei', 'bis', 'durch', 'für', 'gegen',
             'hinter', 'in', 'mit', 'nach', 'neben', 'ohne', 'über', 'um',
             'unter', 'von', 'vor', 'zu', 'zwischen',
-            'pro', 'per', 'ach', 'oh'
+            'pro', 'per', 'ach', 'oh',
         }
-        
+
         # Initialize POS cache if not exists
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
-        
+
         # Filter for words not yet in case_map
         unique_words = list(set(w.lower() for w in words if w.lower() not in self.case_map))
         if not unique_words:
             return
-        
-        # First pass: mark function words
+
+        # First pass: mark function words (no SpaCy needed)
         for w in unique_words:
             if w in FUNCTION_WORDS:
                 self.case_map[w] = None
                 self.pos_cache[w] = 'ADP'
-        
-        # Second pass: SpaCy tagging with CAPITALIZED mapping 
+
+        # Second pass: SpaCy tagging with SENTENCE CONTEXT framing
         content_words = [w for w in unique_words if w not in FUNCTION_WORDS]
         if content_words:
-            cap_words = [w.capitalize() for w in content_words]
+            # Use a neutral carrier sentence with the word in lowercase.
+            # The word sits in a syntactic slot where SpaCy can infer POS
+            # from context rather than capitalization.
+            # Frame: 'Ich sehe {word} hier .'
+            # Tokens: Ich(0) sehe(1) {word}(2) hier(3) .(4) -> target at index 2
+            framed_sentences = []
+            for w in content_words:
+                framed_sentences.append(f"Ich sehe {w} hier .")
+            target_idx = 2
+
             try:
-                # High-performance batched pipeline! 
-                docs = list(self.nlp_sp.pipe(cap_words, disable=['ner', 'parser', 'lemmatizer'], batch_size=5000))
-                for word_l, cap_word, doc in zip(content_words, cap_words, docs):
-                    if len(doc) > 0 and doc[0].pos_ in ('NOUN', 'PROPN'):
-                        self.pos_cache[word_l] = doc[0].pos_
-                        self.case_map[word_l] = cap_word
+                docs = list(self.nlp_sp.pipe(framed_sentences, disable=['ner', 'lemmatizer'], batch_size=5000))
+                for word_l, doc in zip(content_words, docs):
+                    # Extract POS of the target word at expected index
+                    pos_tag = 'X'
+                    if len(doc) > target_idx:
+                        tok = doc[target_idx]
+                        # Verify it's actually our word (tokenization can shift)
+                        if tok.text.lower() == word_l:
+                            pos_tag = tok.pos_
+                        else:
+                            # Tokenization mismatch -- search for it
+                            for t in doc:
+                                if t.text.lower() == word_l:
+                                    pos_tag = t.pos_
+                                    break
                     else:
-                        self.pos_cache[word_l] = doc[0].pos_ if len(doc) > 0 else 'X'
+                        for t in doc:
+                            if t.text.lower() == word_l:
+                                pos_tag = t.pos_
+                                break
+
+                    self.pos_cache[word_l] = pos_tag
+                    if pos_tag in ('NOUN', 'PROPN'):
+                        self.case_map[word_l] = word_l.capitalize()
+                    else:
                         self.case_map[word_l] = None
             except Exception as e:
                 import logging
                 logging.error(f"SpaCy batch tagging failed: {e}")
                 for word_l in content_words:
                     self.case_map[word_l] = None
+                    self.pos_cache[word_l] = 'X'
 
 
 
@@ -432,19 +466,35 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.nlp_sp = None
 
     def _eval_single_word_case(self, token_lower):
-        """Ultimate POS check using standalone SpaCy evaluation."""
-        w_cap = token_lower.capitalize()
-        
-        # For all words: use SpaCy with CAPITALIZED form isolated
+        """POS check using SpaCy with sentence-context framing.
+
+        Uses the same carrier sentence approach as batch_tag_words to avoid
+        the capitalization-as-noun bias that occurs with isolated words.
+        """
+        if not hasattr(self, 'pos_cache'):
+            self.pos_cache = {}
+
         if self.nlp_sp is not None:
-            doc_c = self.nlp_sp(w_cap)
-            if len(doc_c) > 0 and doc_c[0].pos_ in ('NOUN', 'PROPN'):
-                self.case_map[token_lower] = w_cap
+            # Use sentence context: 'Ich sehe {word} hier .'
+            frame = f"Ich sehe {token_lower} hier ."
+            doc = self.nlp_sp(frame)
+            pos_tag = 'X'
+            # Target word is at index 2: Ich(0) sehe(1) {word}(2) hier(3) .(4)
+            if len(doc) > 2 and doc[2].text.lower() == token_lower:
+                pos_tag = doc[2].pos_
+            else:
+                for t in doc:
+                    if t.text.lower() == token_lower:
+                        pos_tag = t.pos_
+                        break
+            self.pos_cache[token_lower] = pos_tag
+            if pos_tag in ('NOUN', 'PROPN'):
+                self.case_map[token_lower] = token_lower.capitalize()
             else:
                 self.case_map[token_lower] = None
         else:
             self.case_map[token_lower] = None
-                
+
         return self.case_map[token_lower]
 
     def has_titlecase_variant(self, token):
