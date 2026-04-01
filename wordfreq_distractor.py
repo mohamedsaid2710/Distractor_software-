@@ -86,12 +86,9 @@ class wordfreq_dict(distractor_dict):
         return matches
 
     def batch_tag_words(self, words):
-        """Tag a list of words in bulk using contextual framing for accuracy.
+        """Tag a list of words in bulk using high-performance SpaCy batching.
         
-        Uses grammatical context to help SpaCy distinguish inflected adjectives
-        from nouns/verbs. For example:
-        - "Die fränkischen Gebiete" → fränkischen = ADJ
-        - "Das Parlament" → Parlament = NOUN
+        Evaluates capitalization mapping to safely identify valid German nouns.
         """
         if self.nlp_sp is None or not words:
             return
@@ -121,52 +118,29 @@ class wordfreq_dict(distractor_dict):
         for w in unique_words:
             if w in FUNCTION_WORDS:
                 self.case_map[w] = None
-                self.pos_cache[w] = 'ADP'  # Function words are typically prepositions/determiners
+                self.pos_cache[w] = 'ADP'
         
-        # Second pass: SpaCy tagging with CONTEXTUAL FRAMING for better accuracy
+        # Second pass: SpaCy tagging with CAPITALIZED mapping 
         content_words = [w for w in unique_words if w not in FUNCTION_WORDS]
         if content_words:
-            # Create two contexts for each word:
-            # 1. Adjective context: "Die <word> Sachen sind gut" 
-            # 2. Noun context: "Das <word> ist hier"
-            # Use lowercase first to get natural POS, then check capitalized for noun verification
-            
-            adj_contexts = [f"Die {w} Sachen sind gut." for w in content_words]
-            
+            cap_words = [w.capitalize() for w in content_words]
             try:
                 # High-performance batched pipeline! 
-                # 1. Process ADJ contexts
-                adj_docs = list(self.nlp_sp.pipe(adj_contexts, disable=['ner', 'parser', 'lemmatizer'], batch_size=5000))
-                
-                # Filter out the words that failed the ADJ test
-                noun_words_needed = []
-                noun_contexts = []
-                
-                for word_l, adj_doc in zip(content_words, adj_docs):
-                    if len(adj_doc) > 1 and adj_doc[1].pos_ == 'ADJ':
-                        self.pos_cache[word_l] = 'ADJ'
-                        self.case_map[word_l] = None
+                docs = list(self.nlp_sp.pipe(cap_words, disable=['ner', 'parser', 'lemmatizer'], batch_size=5000))
+                for word_l, cap_word, doc in zip(content_words, cap_words, docs):
+                    if len(doc) > 0 and doc[0].pos_ in ('NOUN', 'PROPN'):
+                        self.pos_cache[word_l] = doc[0].pos_
+                        self.case_map[word_l] = cap_word
                     else:
-                        noun_words_needed.append(word_l)
-                        noun_contexts.append(f"Das {word_l.capitalize()} ist hier.")
-                
-                # 2. Process NOUN contexts for remaining candidates in one massive batch
-                if noun_contexts:
-                    noun_docs = list(self.nlp_sp.pipe(noun_contexts, disable=['ner', 'parser', 'lemmatizer'], batch_size=5000))
-                    for word_l, noun_doc in zip(noun_words_needed, noun_docs):
-                        if len(noun_doc) > 1:
-                            pos_in_noun_context = noun_doc[1].pos_
-                            self.pos_cache[word_l] = pos_in_noun_context
-                            if pos_in_noun_context in ('NOUN', 'PROPN'):
-                                self.case_map[word_l] = word_l.capitalize()
-                            else:
-                                self.case_map[word_l] = None
-                        else:
-                            self.pos_cache[word_l] = None
-                            self.case_map[word_l] = None
-                            
+                        self.pos_cache[word_l] = doc[0].pos_ if len(doc) > 0 else 'X'
+                        self.case_map[word_l] = None
             except Exception as e:
+                import logging
                 logging.error(f"SpaCy batch tagging failed: {e}")
+                for word_l in content_words:
+                    self.case_map[word_l] = None
+
+
 
     def get_potential_distractors(self, min_length, max_length, min_freq, max_freq, params, pos_filter=None):
         """Returns list of candidates, using heuristic first, then widening, then batch SpaCy validation."""
