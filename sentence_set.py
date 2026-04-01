@@ -1190,15 +1190,64 @@ class Sentence_Set:
                         # It's better to just pass the string and align.
                         doc = nlp_model(sentence.word_sentence)
                         pos_tags = []
-                        # Simplistic exact alignment fallback
-                        temp_tags = [word.upos for sent in doc.sentences for word in sent.words]
-                        if len(temp_tags) == len(sentence.words):
-                            pos_tags = temp_tags
+                        
+                        # Create character spans for the original words
+                        char_pos = 0
+                        word_spans = []
+                        for w in sentence.words:
+                            start = sentence.word_sentence.find(w, char_pos)
+                            if start == -1:
+                                start = char_pos
+                            end = start + len(w)
+                            word_spans.append((start, end))
+                            char_pos = end
+
+                        # Extract Stanza tokens with character positions
+                        stanza_word_tags = []
+                        for sent in doc.sentences:
+                            for token in sent.tokens:
+                                upos_list = [w.upos for w in token.words if w.upos != 'PUNCT']
+                                if not upos_list:
+                                    upos_list = ['PUNCT']
+                                
+                                main_pos = upos_list[0]
+                                for p in upos_list:
+                                    if p in ('NOUN', 'PROPN'):
+                                        main_pos = p
+                                        break
+                                
+                                # Use tuple of start_char, end_char, main_pos
+                                try:
+                                    stanza_word_tags.append((token.start_char, token.end_char, main_pos))
+                                except AttributeError:
+                                    # Fallback if Stanza version < 1.0 lacks start_char
+                                    pass
+
+                        if stanza_word_tags:
+                            # Align by character overlap
+                            for start, end in word_spans:
+                                overlapping_tags = []
+                                for t_start, t_end, t_pos in stanza_word_tags:
+                                    if t_start >= end or t_end <= start:
+                                        continue
+                                    if t_pos != 'PUNCT':
+                                        overlapping_tags.append(t_pos)
+                                
+                                if overlapping_tags:
+                                    if 'NOUN' in overlapping_tags: final_pos = 'NOUN'
+                                    elif 'PROPN' in overlapping_tags: final_pos = 'PROPN'
+                                    elif 'VERB' in overlapping_tags: final_pos = 'VERB'
+                                    else: final_pos = overlapping_tags[0]
+                                else:
+                                    final_pos = 'X'
+                                pos_tags.append(final_pos)
                         else:
-                            # If lengths mismatch, we won't have 1-to-1 mapping
+                            # Panic fallback if start_char doesn't exist
+                            temp_tags = [word.upos for sent in doc.sentences for word in sent.words]
                             pos_tags = temp_tags[:len(sentence.words)]
                             while len(pos_tags) < len(sentence.words):
                                 pos_tags.append('X')
+
                         sentence.pos_tags = pos_tags
                     else:
                         # SpaCy
