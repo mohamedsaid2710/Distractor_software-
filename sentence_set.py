@@ -47,30 +47,53 @@ _EN_ACRONYM_WHITELIST = {
 
 _X_PLACEHOLDER_RE = re.compile(r"^x(?:-x)*$", re.IGNORECASE)
 
-# lazy SpaCy pipeline (initialized on first use)
-_spacy_nlp = {}
+# lazy NLP pipeline (initialized on first use)
+_nlp_model = {}
 
-def _get_spacy_nlp(lang='de'):
-    """Return a loaded spaCy pipeline for `lang` ('de' or 'en'), else None."""
-    global _spacy_nlp
+def _get_nlp_model(lang='de', params=None):
+    """Return a loaded NLP pipeline (Stanza for 'de', SpaCy for 'en'), else None."""
+    global _nlp_model
     key = 'en' if str(lang or '').lower().startswith('en') else 'de'
-    if key in _spacy_nlp:
-        return _spacy_nlp[key]
-    try:
-        import spacy
-    except Exception:
-        _spacy_nlp[key] = None
-        return None
-
-    model_names = ['en_core_web_sm', 'en_core_web_md'] if key == 'en' else ['de_core_news_sm', 'de_core_news_md']
-    for model_name in model_names:
+    
+    if key in _nlp_model:
+        return _nlp_model[key]
+        
+    if key == 'de':
         try:
-            _spacy_nlp[key] = spacy.load(model_name)
-            return _spacy_nlp[key]
+            import stanza
+            # Use GPU if available, default to True
+            use_gpu = True
+            if params is not None:
+                use_gpu = str(params.get('use_gpu', True)).lower() in ('true', '1')
+            
+            try:
+                # Try to load; download if necessary
+                _nlp_model[key] = stanza.Pipeline('de', processors='tokenize,mwt,pos,lemma', use_gpu=use_gpu)
+            except Exception:
+                stanza.download('de')
+                _nlp_model[key] = stanza.Pipeline('de', processors='tokenize,mwt,pos,lemma', use_gpu=use_gpu)
+            return _nlp_model[key]
+        except ImportError:
+            logging.error("Stanza not found. Please install with: pip install stanza")
+            _nlp_model[key] = None
+            return None
+    
+    elif key == 'en':
+        try:
+            import spacy
         except Exception:
-            continue
-    _spacy_nlp[key] = None
-    return None
+            _nlp_model[key] = None
+            return None
+
+        model_names = ['en_core_web_sm', 'en_core_web_md']
+        for model_name in model_names:
+            try:
+                _nlp_model[key] = spacy.load(model_name)
+                return _nlp_model[key]
+            except Exception:
+                continue
+        _nlp_model[key] = None
+        return None
 
 
 def _split_punct(token):
@@ -433,13 +456,13 @@ class Label:
                 pass
 
         exclude_propn_candidates = bool(params.get('exclude_propn_candidates', False))
-        nlp_sp = _get_spacy_nlp(lang)
+        nlp_model = _get_nlp_model(lang, params=params)
 
         _propn_cache = {}
         _pos_cache = {}
         
         def get_candidate_pos(candidate, target_noun_context=False):
-            if nlp_sp is None: return None
+            if nlp_model is None: return None
             clean = strip_punct(candidate)
             if not clean: return None
             
@@ -447,22 +470,21 @@ class Label:
             low_key = clean.lower()
             if hasattr(dictionary, 'pos_cache') and low_key in dictionary.pos_cache:
                 spacy_pos = dictionary.pos_cache[low_key]
-                # We need to adapt it matching the legacy expectation
-                # If target is noun, return cached POS directly
-                if target_noun_context:
-                    return spacy_pos
-                else:
-                    return spacy_pos
+                return spacy_pos
             
-            # If the target is a noun, evaluate the candidate in capitalized form
             if target_noun_context:
                 clean = clean.capitalize()
                 
             key = clean
             if key in _pos_cache: return _pos_cache[key]
             try:
-                doc = nlp_sp(clean)
-                val = doc[0].pos_ if doc and len(doc) > 0 else None
+                if lang == 'de':
+                    # Stanza
+                    doc = nlp_model(clean)
+                    val = doc.sentences[0].words[0].upos if doc.sentences and doc.sentences[0].words else None
+                else:
+                    doc = nlp_model(clean)
+                    val = doc[0].pos_ if doc and len(doc) > 0 else None
             except Exception:
                 val = None
             _pos_cache[key] = val
@@ -540,9 +562,11 @@ class Label:
             # They are only used if exact + compatible are both exhausted.
                 
             # --- HYPER-SPEED CPU FIX: BATCH TAGGING WITH NATIVE SENTENCE CONTEXT ---
+            # --- HYPER-SPEED GPU FIX: BATCH TAGGING WITH NATIVE SENTENCE CONTEXT ---
             try:
-                if nlp_sp is not None and distractor_opts:
-                    if hasattr(self, 'context_words') and hasattr(self, 'target_idx') and self.target_idx >= 0:
+                if nlp_model is not None and distractor_opts:
+                    if hasattr(self, 'context_words') and hasattr(self, 'target_idx') and self.target_idx >= 0 and lang != 'de':
+                        # Spacy only for now on native context (Stanza natively modifies sentence strings so it's harder in batch)
                         from spacy.tokens import Doc
                         docs = []
                         valid_pairs = []
@@ -555,10 +579,10 @@ class Label:
                                 clean = clean.capitalize()
                             cw[idx] = clean
                             # Create a Doc natively in the exact original sentence context!
-                            docs.append(Doc(nlp_sp.vocab, words=cw))
+                            docs.append(Doc(nlp_model.vocab, words=cw))
                             valid_pairs.append(c)
                             
-                        docs_parsed = list(nlp_sp.pipe(docs, disable=['ner', 'parser', 'lemmatizer'], batch_size=int(params.get('spacy_batch_size', 5000))))
+                        docs_parsed = list(nlp_model.pipe(docs, disable=['ner', 'parser', 'lemmatizer'], batch_size=int(params.get('spacy_batch_size', 5000))))
                         for c, doc in zip(valid_pairs, docs_parsed):
                             c_pos = doc[idx].pos_ if len(doc) > idx else None
                             is_exact_match = (c_pos == target_pos) or (target_is_noun and c_pos == 'PROPN')
@@ -572,17 +596,9 @@ class Label:
                             elif c_pos not in bad_pos:
                                 others.append(c)
                     else:
-                        # Fallback if no context exists
-                        clean_opts = []
+                        # Fallback if no context exists OR we are using Stanza
                         for c in distractor_opts:
-                            clean = strip_punct(c)
-                            if target_is_noun:
-                                clean = clean.capitalize()
-                            clean_opts.append(clean)
-                        
-                        docs = list(nlp_sp.pipe(clean_opts, batch_size=int(params.get('spacy_batch_size', 5000))))
-                        for c, doc in zip(distractor_opts, docs):
-                            c_pos = doc[0].pos_ if doc and len(doc) > 0 else None
+                            c_pos = get_candidate_pos(c, target_noun_context=target_is_noun)
                             is_exact_match = (c_pos == target_pos) or (target_is_noun and c_pos == 'PROPN')
                             
                             if is_exact_match:
@@ -684,8 +700,8 @@ class Label:
                     pass
             return model.get_surprisal(self.probs[i], candidate)
         def is_propn_candidate(candidate):
-            # FAST CPU BATCH CACHE: We already tagged them, don't re-run nlp_sp!
-            if nlp_sp is None:
+            # FAST CPU BATCH CACHE: We already tagged them, don't re-run
+            if nlp_model is None:
                 return False
             key = strip_punct(candidate).lower()
             
@@ -1163,21 +1179,37 @@ class Sentence_Set:
         """Regroups the stuff in the sentence items into by-label groups"""
         params = params or {}
         lang = _detect_language(params)
-        # SpaCy-only POS tagging; else no POS
-        nlp_sp = _get_spacy_nlp(lang)
-        if nlp_sp is not None:
+        # Stanza/SpaCy POS tagging; else no POS
+        nlp_model = _get_nlp_model(lang, params=params)
+        if nlp_model is not None:
             for sentence in self.sentences:
                 try:
-                    # Use the words list directly as tokens for alignment
-                    from spacy.tokens import Doc
-                    doc = Doc(nlp_sp.vocab, words=sentence.words)
-                    # Run the tagger/parser on the pre-tokenized doc
-                    for name, proc in nlp_sp.pipeline:
-                        if name not in ["tok2vec", "tagger", "morphologizer", "attribute_ruler", "lemmatizer"]:
-                            continue
-                        doc = proc(doc)
-                    pos_tags = [t.pos_ for t in doc]
-                    sentence.pos_tags = pos_tags
+                    if lang == 'de':
+                        # Stanza processing. We join words to let Stanza tokenize natively
+                        # to avoid pipeline pretokenized conflicts, then map back roughly.
+                        # It's better to just pass the string and align.
+                        doc = nlp_model(sentence.word_sentence)
+                        pos_tags = []
+                        # Simplistic exact alignment fallback
+                        temp_tags = [word.upos for sent in doc.sentences for word in sent.words]
+                        if len(temp_tags) == len(sentence.words):
+                            pos_tags = temp_tags
+                        else:
+                            # If lengths mismatch, we won't have 1-to-1 mapping
+                            pos_tags = temp_tags[:len(sentence.words)]
+                            while len(pos_tags) < len(sentence.words):
+                                pos_tags.append('X')
+                        sentence.pos_tags = pos_tags
+                    else:
+                        # SpaCy
+                        from spacy.tokens import Doc
+                        doc = Doc(nlp_model.vocab, words=sentence.words)
+                        for name, proc in nlp_model.pipeline:
+                            if name not in ["tok2vec", "tagger", "morphologizer", "attribute_ruler", "lemmatizer"]:
+                                continue
+                            doc = proc(doc)
+                        pos_tags = [t.pos_ for t in doc]
+                        sentence.pos_tags = pos_tags
                 except Exception:
                     sentence.pos_tags = None
         else:

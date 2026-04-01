@@ -125,37 +125,18 @@ class wordfreq_dict(distractor_dict):
         if not unique_words:
             return
 
-        # First pass: mark function words (no SpaCy needed)
+        # First pass: mark function words (no Stanza needed)
         for w in unique_words:
             if w in FUNCTION_WORDS:
                 self.case_map[w] = None
                 self.pos_cache[w] = 'ADP'
 
-        # Second pass: SpaCy tagging with TRIPLE-CONTEXT majority voting
-        # Using 3 frames breaks the capitalization-as-noun bias that the
-        # single "Das {Word} ist hier" frame suffers from.
+        # Second pass: Stanza Tagging (German)
+        # We pass the raw words to Stanza. Since we are dealing with German morphology
+        # Stanza's neural net handles capitalization assumptions internally very well.
         content_words = [w for w in unique_words if w not in FUNCTION_WORDS]
         if not content_words:
             return
-
-        # All 3 frames place the target word at token index 1:
-        #   Frame 1: Das(0) {Word}(1) ist(2) hier(3) .(4)     — capitalized, noun slot
-        #   Frame 2: Ich(0) {word}(1) gerne(2) .(3)            — lowercase, verb slot
-        #   Frame 3: Die(0) {word}(1) Sachen(2) sind(3) gut(4) .(5) — lowercase, adj slot
-        noun_frames = [f"Das {w.capitalize()} ist hier ." for w in content_words]
-        verb_frames = [f"Ich {w} gerne ." for w in content_words]
-        adj_frames  = [f"Die {w} Sachen sind gut ." for w in content_words]
-        target_idx = 1
-
-        def _extract_pos(doc, word_lower):
-            """Extract POS tag for the target word from a SpaCy doc."""
-            if len(doc) > target_idx and doc[target_idx].text.lower() == word_lower:
-                return doc[target_idx].pos_
-            # Fallback: search all tokens (handles cases where SpaCy re-tokenized)
-            for t in doc:
-                if t.text.lower() == word_lower:
-                    return t.pos_
-            return 'X'
 
         batch_size = 5000
         if params is not None:
@@ -165,42 +146,44 @@ class wordfreq_dict(distractor_dict):
                 pass
 
         try:
-            noun_docs = list(self.nlp_sp.pipe(noun_frames, disable=['ner', 'parser', 'lemmatizer'], batch_size=batch_size))
-            verb_docs = list(self.nlp_sp.pipe(verb_frames, disable=['ner', 'parser', 'lemmatizer'], batch_size=batch_size))
-            adj_docs  = list(self.nlp_sp.pipe(adj_frames,  disable=['ner', 'parser', 'lemmatizer'], batch_size=batch_size))
+            # Prepare inputs as a single big document where each word is a "sentence" 
+            # to let Stanza process them quickly without connecting their syntax.
+            in_docs = []
+            import stanza
+            for w in content_words:
+                in_docs.append(stanza.Document([], text=w))
+            
+            # Batch process in chunks to prevent memory explosion
+            out_docs = []
+            for i in range(0, len(in_docs), batch_size):
+                chunk = in_docs[i:i + batch_size]
+                out_chunk = self.nlp_sp(chunk)
+                out_docs.extend(out_chunk)
 
-            for word_l, noun_doc, verb_doc, adj_doc in zip(content_words, noun_docs, verb_docs, adj_docs):
-                noun_pos = _extract_pos(noun_doc, word_l)
-                verb_pos = _extract_pos(verb_doc, word_l)
-                adj_pos  = _extract_pos(adj_doc,  word_l)
-
-                # Majority vote: how many frames think it's a NOUN?
-                noun_votes = sum(1 for p in [noun_pos, verb_pos, adj_pos]
-                                 if p in ('NOUN', 'PROPN'))
-
-                if noun_votes >= 2:
-                    # At least 2 of 3 frames agree → high confidence NOUN
-                    final_pos = 'NOUN'
+            for word_l, doc in zip(content_words, out_docs):
+                if doc.sentences and doc.sentences[0].words:
+                    upos = doc.sentences[0].words[0].upos
                 else:
-                    # Not a noun — use the most informative non-noun tag
-                    # Prefer verb/adj frame POS (unbiased by capitalization)
-                    if verb_pos not in ('NOUN', 'PROPN', 'X'):
-                        final_pos = verb_pos
-                    elif adj_pos not in ('NOUN', 'PROPN', 'X'):
-                        final_pos = adj_pos
-                    else:
-                        final_pos = noun_pos  # fallback to noun frame if others gave 'X'
+                    upos = 'X'
+                
+                # Stanza uses UPOS conventions (NOUN, VERB, ADJ, PROPN)
+                final_pos = upos
 
                 self.pos_cache[word_l] = final_pos
                 if final_pos in ('NOUN', 'PROPN'):
                     self.case_map[word_l] = word_l.capitalize()
                 else:
                     self.case_map[word_l] = None
+        except Exception as e:
+            print(f"[DIAG] batch_tag_words Stanza failed: {e}", flush=True)
+            for word_l in content_words:
+                self.case_map[word_l] = None
+                self.pos_cache[word_l] = 'X'
 
             # Diagnostic: HARD PRINT that bypasses logging config
             noun_count = sum(1 for w in content_words if self.pos_cache.get(w) in ('NOUN', 'PROPN'))
             non_noun_count = len(content_words) - noun_count
-            print(f"[DIAG] Batch tagged {len(content_words)} words (triple-frame): {noun_count} NOUN, {non_noun_count} non-NOUN", flush=True)
+            print(f"[DIAG] Batch tagged {len(content_words)} words: {noun_count} NOUN, {non_noun_count} non-NOUN", flush=True)
             noun_examples = [w for w in content_words if self.pos_cache.get(w) in ('NOUN', 'PROPN')][:5]
             non_noun_examples = [f"{w}({self.pos_cache.get(w)})" for w in content_words if self.pos_cache.get(w) not in ('NOUN', 'PROPN')][:5]
             if noun_examples:
@@ -506,57 +489,24 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.nlp_sp = None
 
     def _eval_single_word_case(self, token_lower):
-        """POS check using SpaCy with triple-context majority voting.
-
-        Uses 3 context frames to avoid capitalization-as-noun bias:
-          1. Noun context:      'Das {Word} ist hier.'   (capitalized)
-          2. Verb context:       'Ich {word} gerne.'      (lowercase)
-          3. Adjective context:  'Die {word} Sachen sind gut.'  (lowercase)
-
-        Tags as NOUN only if at least 2 of 3 frames agree.
-        """
+        """POS check using Stanza."""
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
 
         if self.nlp_sp is not None:
-            def _get_pos(doc, word_lower, target_idx=1):
-                if len(doc) > target_idx and doc[target_idx].text.lower() == word_lower:
-                    return doc[target_idx].pos_
-                for t in doc:
-                    if t.text.lower() == word_lower:
-                        return t.pos_
-                return 'X'
-
-            # Frame 1: Noun context (capitalized)
-            noun_doc = self.nlp_sp(f"Das {token_lower.capitalize()} ist hier .")
-            noun_pos = _get_pos(noun_doc, token_lower)
-
-            # Frame 2: Verb context (lowercase)
-            verb_doc = self.nlp_sp(f"Ich {token_lower} gerne .")
-            verb_pos = _get_pos(verb_doc, token_lower)
-
-            # Frame 3: Adjective context (lowercase)
-            adj_doc = self.nlp_sp(f"Die {token_lower} Sachen sind gut .")
-            adj_pos = _get_pos(adj_doc, token_lower)
-
-            # Majority vote
-            noun_votes = sum(1 for p in [noun_pos, verb_pos, adj_pos]
-                             if p in ('NOUN', 'PROPN'))
-
-            if noun_votes >= 2:
-                final_pos = 'NOUN'
-            else:
-                if verb_pos not in ('NOUN', 'PROPN', 'X'):
-                    final_pos = verb_pos
-                elif adj_pos not in ('NOUN', 'PROPN', 'X'):
-                    final_pos = adj_pos
+            try:
+                doc = self.nlp_sp(token_lower)
+                if doc.sentences and doc.sentences[0].words:
+                    final_pos = doc.sentences[0].words[0].upos
                 else:
-                    final_pos = noun_pos
-
-            self.pos_cache[token_lower] = final_pos
-            if final_pos in ('NOUN', 'PROPN'):
-                self.case_map[token_lower] = token_lower.capitalize()
-            else:
+                    final_pos = 'X'
+                
+                self.pos_cache[token_lower] = final_pos
+                if final_pos in ('NOUN', 'PROPN'):
+                    self.case_map[token_lower] = token_lower.capitalize()
+                else:
+                    self.case_map[token_lower] = None
+            except Exception:
                 self.case_map[token_lower] = None
         else:
             self.case_map[token_lower] = None
