@@ -134,29 +134,35 @@ class wordfreq_dict(distractor_dict):
             adj_contexts = [f"Die {w} Sachen sind gut." for w in content_words]
             
             try:
-                # Process adjective contexts to detect ADJ tags
-                adj_docs = list(self.nlp_sp.pipe(adj_contexts))
+                # High-performance batched pipeline! 
+                # 1. Process ADJ contexts
+                adj_docs = list(self.nlp_sp.pipe(adj_contexts, disable=['ner', 'parser', 'lemmatizer'], batch_size=5000))
+                
+                # Filter out the words that failed the ADJ test
+                noun_words_needed = []
+                noun_contexts = []
                 
                 for word_l, adj_doc in zip(content_words, adj_docs):
-                    # Check position 1 (the word in question)
-                    if len(adj_doc) > 1:
-                        pos_in_adj_context = adj_doc[1].pos_
-                        
-                        # If it's clearly an adjective in adjective context, tag as ADJ
-                        if pos_in_adj_context == 'ADJ':
-                            self.pos_cache[word_l] = 'ADJ'
-                            self.case_map[word_l] = None  # Adjectives stay lowercase
-                            continue
-                    
-                    # Otherwise, test as potential noun with capitalized form
-                    noun_doc = self.nlp_sp(f"Das {word_l.capitalize()} ist hier.")
-                    if len(noun_doc) > 1:
-                        pos_in_noun_context = noun_doc[1].pos_
-                        self.pos_cache[word_l] = pos_in_noun_context
-                        
-                        if pos_in_noun_context in ('NOUN', 'PROPN'):
-                            self.case_map[word_l] = word_l.capitalize()
+                    if len(adj_doc) > 1 and adj_doc[1].pos_ == 'ADJ':
+                        self.pos_cache[word_l] = 'ADJ'
+                        self.case_map[word_l] = None
+                    else:
+                        noun_words_needed.append(word_l)
+                        noun_contexts.append(f"Das {word_l.capitalize()} ist hier.")
+                
+                # 2. Process NOUN contexts for remaining candidates in one massive batch
+                if noun_contexts:
+                    noun_docs = list(self.nlp_sp.pipe(noun_contexts, disable=['ner', 'parser', 'lemmatizer'], batch_size=5000))
+                    for word_l, noun_doc in zip(noun_words_needed, noun_docs):
+                        if len(noun_doc) > 1:
+                            pos_in_noun_context = noun_doc[1].pos_
+                            self.pos_cache[word_l] = pos_in_noun_context
+                            if pos_in_noun_context in ('NOUN', 'PROPN'):
+                                self.case_map[word_l] = word_l.capitalize()
+                            else:
+                                self.case_map[word_l] = None
                         else:
+                            self.pos_cache[word_l] = None
                             self.case_map[word_l] = None
                             
             except Exception as e:
