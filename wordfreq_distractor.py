@@ -86,27 +86,9 @@ class wordfreq_dict(distractor_dict):
         return matches
 
     def batch_tag_words(self, words):
-        """Tag a list of words in bulk using contextual framing for accuracy.
-        
-        Uses grammatical context to help SpaCy distinguish inflected adjectives
-        from nouns/verbs. For example:
-        - "Die fränkischen Gebiete" → fränkischen = ADJ
-        - "Das Parlament" → Parlament = NOUN
-        """
+        """Tag a list of words in bulk by checking their capitalized standalone form."""
         if self.nlp_sp is None or not words:
             return
-        
-        # German function words - ALWAYS lowercase
-        FUNCTION_WORDS = {
-            'ins', 'im', 'am', 'ans', 'zum', 'zur', 'vom', 'beim', 'durchs', 'fürs',
-            'ums', 'aufs', 'übers', 'unters', 'hinters', 'vors',
-            'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einem', 'eines', 'einer', 'einen',
-            'mein', 'dein', 'sein', 'ihr', 'unser', 'euer',
-            'ab', 'an', 'auf', 'aus', 'bei', 'bis', 'durch', 'für', 'gegen',
-            'hinter', 'in', 'mit', 'nach', 'neben', 'ohne', 'über', 'um',
-            'unter', 'von', 'vor', 'zu', 'zwischen',
-            'pro', 'per', 'ach', 'oh'
-        }
         
         # Initialize POS cache if not exists
         if not hasattr(self, 'pos_cache'):
@@ -117,50 +99,25 @@ class wordfreq_dict(distractor_dict):
         if not unique_words:
             return
         
-        # First pass: mark function words
-        for w in unique_words:
-            if w in FUNCTION_WORDS:
-                self.case_map[w] = None
-                self.pos_cache[w] = 'ADP'  # Function words are typically prepositions/determiners
+        # SpaCy tagging WITHOUT false contextual framing
+        capitalized_words = [w.capitalize() for w in unique_words]
         
-        # Second pass: SpaCy tagging with CONTEXTUAL FRAMING for better accuracy
-        content_words = [w for w in unique_words if w not in FUNCTION_WORDS]
-        if content_words:
-            # Create two contexts for each word:
-            # 1. Adjective context: "Die <word> Sachen sind gut" 
-            # 2. Noun context: "Das <word> ist hier"
-            # Use lowercase first to get natural POS, then check capitalized for noun verification
+        try:
+            docs = list(self.nlp_sp.pipe(capitalized_words, batch_size=5000))
             
-            adj_contexts = [f"Die {w} Sachen sind gut." for w in content_words]
-            
-            try:
-                # Process adjective contexts to detect ADJ tags
-                adj_docs = list(self.nlp_sp.pipe(adj_contexts))
-                
-                for word_l, adj_doc in zip(content_words, adj_docs):
-                    # Check position 1 (the word in question)
-                    if len(adj_doc) > 1:
-                        pos_in_adj_context = adj_doc[1].pos_
-                        
-                        # If it's clearly an adjective in adjective context, tag as ADJ
-                        if pos_in_adj_context == 'ADJ':
-                            self.pos_cache[word_l] = 'ADJ'
-                            self.case_map[word_l] = None  # Adjectives stay lowercase
-                            continue
+            for word_l, word_doc in zip(unique_words, docs):
+                if len(word_doc) > 0:
+                    pos_in_noun_context = word_doc[0].pos_
+                    self.pos_cache[word_l] = pos_in_noun_context
                     
-                    # Otherwise, test as potential noun with capitalized form
-                    noun_doc = self.nlp_sp(f"Das {word_l.capitalize()} ist hier.")
-                    if len(noun_doc) > 1:
-                        pos_in_noun_context = noun_doc[1].pos_
-                        self.pos_cache[word_l] = pos_in_noun_context
+                    if pos_in_noun_context in ('NOUN', 'PROPN'):
+                        self.case_map[word_l] = word_l.capitalize()
+                    else:
+                        self.case_map[word_l] = None
                         
-                        if pos_in_noun_context in ('NOUN', 'PROPN'):
-                            self.case_map[word_l] = word_l.capitalize()
-                        else:
-                            self.case_map[word_l] = None
-                            
-            except Exception as e:
-                logging.error(f"SpaCy batch tagging failed: {e}")
+        except Exception as e:
+            import logging
+            logging.error(f"SpaCy batch tagging failed: {e}")
 
     def get_potential_distractors(self, min_length, max_length, min_freq, max_freq, params, pos_filter=None):
         """Returns list of candidates, using heuristic first, then widening, then batch SpaCy validation."""
