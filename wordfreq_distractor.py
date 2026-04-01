@@ -210,7 +210,6 @@ class wordfreq_dict(distractor_dict):
             if non_noun_examples:
                 logging.info(f"[POS CACHE] Non-NOUN examples: {non_noun_examples}")
         except Exception as e:
-            import logging
             logging.error(f"SpaCy batch tagging failed: {e}")
             for word_l in content_words:
                 self.case_map[word_l] = None
