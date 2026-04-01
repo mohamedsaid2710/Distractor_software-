@@ -467,7 +467,7 @@ class Label:
             try:
                 if nlp_sp is not None and distractor_opts:
                     clean_opts = [strip_punct(c) for c in distractor_opts]
-                    docs = list(nlp_sp.pipe(clean_opts, batch_size=int(self.params.get('spacy_batch_size', 500))))
+                    docs = list(nlp_sp.pipe(clean_opts, batch_size=int(params.get('spacy_batch_size', 500))))
                     for c, doc in zip(distractor_opts, docs):
                         c_pos = doc[0].pos_ if doc and len(doc) > 0 else None
                         is_exact_match = (c_pos == target_pos) or (target_is_noun and c_pos == 'PROPN')
@@ -797,8 +797,8 @@ class Label:
                 hidden = self.hiddens[j]
                 # --- CUDA OOM PREVENTION ---
                 # Use model_batch_size for scoring, and chunk_size for the batches sent to map back to words
-                m_batch_size = getattr(model, 'model_batch_size', int(self.params.get('model_batch_size', 256)))
-                chunk_size = int(self.params.get('chunk_size', 512))
+                m_batch_size = getattr(model, 'model_batch_size', int(params.get('model_batch_size', 256)))
+                chunk_size = int(params.get('chunk_size', 512))
                 
                 all_scores = []
                 for i in range(0, len(qualified_candidates), chunk_size):
