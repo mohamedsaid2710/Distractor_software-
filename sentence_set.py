@@ -466,7 +466,16 @@ class Label:
             # --- HYPER-SPEED CPU FIX: BATCH TAGGING ---
             try:
                 if nlp_sp is not None and distractor_opts:
-                    clean_opts = [strip_punct(c) for c in distractor_opts]
+                    clean_opts = []
+                    for c in distractor_opts:
+                        clean = strip_punct(c)
+                        # If the target is a noun, SpaCy NEEDS to see the candidate capitalized
+                        # to correctly identify it as a potential noun. If the target is NOT a noun,
+                        # it's safer to keep the candidate lowercase.
+                        if target_is_noun:
+                            clean = clean.capitalize()
+                        clean_opts.append(clean)
+                    
                     docs = list(nlp_sp.pipe(clean_opts, batch_size=int(params.get('spacy_batch_size', 500))))
                     for c, doc in zip(distractor_opts, docs):
                         c_pos = doc[0].pos_ if doc and len(doc) > 0 else None
