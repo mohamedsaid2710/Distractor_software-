@@ -472,23 +472,47 @@ class Label:
             if not target_is_noun:
                 bad_pos.add('NOUN')
                 
-            # --- HYPER-SPEED CPU FIX: BATCH TAGGING ---
+            # --- HYPER-SPEED CPU FIX: BATCH TAGGING WITH NATIVE SENTENCE CONTEXT ---
             try:
                 if nlp_sp is not None and distractor_opts:
-                    clean_opts = []
-                    for c in distractor_opts:
-                        clean = strip_punct(c)
-                        # If the target is a noun, SpaCy NEEDS to see the candidate capitalized
-                        # to correctly identify it as a potential noun. If the target is NOT a noun,
-                        # it's safer to keep the candidate lowercase.
-                        if target_is_noun:
-                            clean = clean.capitalize()
-                        clean_opts.append(clean)
-                    
-                    docs = list(nlp_sp.pipe(clean_opts, batch_size=int(params.get('spacy_batch_size', 500))))
-                    for c, doc in zip(distractor_opts, docs):
-                        c_pos = doc[0].pos_ if doc and len(doc) > 0 else None
-                        is_exact_match = (c_pos == target_pos) or (target_is_noun and c_pos == 'PROPN')
+                    if hasattr(self, 'context_words') and hasattr(self, 'target_idx') and self.target_idx >= 0:
+                        from spacy.tokens import Doc
+                        docs = []
+                        valid_pairs = []
+                        cw = self.context_words[:]
+                        idx = self.target_idx
+                        for c in distractor_opts:
+                            clean = strip_punct(c)
+                            if not clean: continue
+                            if target_is_noun:
+                                clean = clean.capitalize()
+                            cw[idx] = clean
+                            # Create a Doc natively in the exact original sentence context!
+                            docs.append(Doc(nlp_sp.vocab, words=cw))
+                            valid_pairs.append(c)
+                            
+                        docs_parsed = list(nlp_sp.pipe(docs, disable=['ner', 'parser', 'lemmatizer'], batch_size=int(params.get('spacy_batch_size', 5000))))
+                        for c, doc in zip(valid_pairs, docs_parsed):
+                            c_pos = doc[idx].pos_ if len(doc) > idx else None
+                            is_exact_match = (c_pos == target_pos) or (target_is_noun and c_pos == 'PROPN')
+                            
+                            if is_exact_match:
+                                exact.append(c)
+                            elif c_pos not in bad_pos:
+                                others.append(c)
+                    else:
+                        # Fallback if no context exists
+                        clean_opts = []
+                        for c in distractor_opts:
+                            clean = strip_punct(c)
+                            if target_is_noun:
+                                clean = clean.capitalize()
+                            clean_opts.append(clean)
+                        
+                        docs = list(nlp_sp.pipe(clean_opts, batch_size=int(params.get('spacy_batch_size', 5000))))
+                        for c, doc in zip(distractor_opts, docs):
+                            c_pos = doc[0].pos_ if doc and len(doc) > 0 else None
+                            is_exact_match = (c_pos == target_pos) or (target_is_noun and c_pos == 'PROPN')
                         
                         if is_exact_match:
                             exact.append(c)
@@ -922,7 +946,17 @@ class Label:
                     
                     # Relax: allowing ANY length from dict.
                     potential_words = getattr(dictionary, 'words', [])
-                    emergency_pool = [w.text for w in potential_words if emergency_pos_ok(getattr(w, 'pos', None))]
+                    # Use dictionary POS cache if available, else raw w.pos
+                    emergency_pool = []
+                    for w in potential_words:
+                        w_text = w.text
+                        w_pos = None
+                        if hasattr(dictionary, 'pos_cache') and w_text.lower() in dictionary.pos_cache:
+                            w_pos = dictionary.pos_cache[w_text.lower()]
+                        else:
+                            w_pos = getattr(w, 'pos', None)
+                        if emergency_pos_ok(w_pos):
+                            emergency_pool.append(w_text)
                     if emergency_pool:
                         # Try exact or near-match length first if the pool allows it
                         target_len = target_exact_len or desired_len or 5
@@ -1110,6 +1144,12 @@ class Sentence_Set:
                         pos = sentence.pos_tags[i]
                     except Exception:
                         pos = None
+                
+                # capture context for native tagging
+                if not hasattr(self.labels[lab], 'context_words'):
+                    self.labels[lab].context_words = sentence.words[:]
+                    self.labels[lab].target_idx = i
+
                 self.labels[lab].add_sentence(sentence.words[i], sentence.probs[lab], sentence.surprisal[lab], hidden)
                 # store pos into the last appended slot
                 try:
