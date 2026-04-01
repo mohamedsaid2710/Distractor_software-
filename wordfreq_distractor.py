@@ -231,7 +231,7 @@ class wordfreq_dict(distractor_dict):
             distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() not in exclude_words_set]
         
         # 2. Widening frequency range if needed (still heuristic/raw)
-        if len(distractor_opts) < target_pool_size:
+        if len(distractor_opts) < target_pool_size and min_freq is not None and max_freq is not None:
             max_widen = int(params.get('max_freq_widen', 15))
             for i in range(1, max_widen + 1):
                 lower = self.get_words(min_length, max_length, min_freq - i, min_freq - i + 1, pos_filter=None, use_spacy=False)
@@ -473,20 +473,22 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
 
     def _init_spacy(self):
-        """Load SpaCy model with preference for larger models (better POS accuracy)."""
+        """Load Stanza model for German NLP (replacing legacy SpaCy)."""
         try:
-            import spacy
-            # Try large model first (best accuracy ~96%), then medium, then small
-            for model_name in ['de_core_news_lg', 'de_core_news_md', 'de_core_news_sm']:
-                try:
-                    self.nlp_sp = spacy.load(model_name)
-                    logging.info(f"Loaded SpaCy model: {model_name}")
-                    return
-                except Exception:
-                    continue
+            import stanza
+            # Try to load; download if necessary
+            use_gpu = True
+            try:
+                self.nlp_sp = stanza.Pipeline('de', processors='tokenize,mwt,pos,lemma', use_gpu=use_gpu)
+            except Exception:
+                stanza.download('de')
+                self.nlp_sp = stanza.Pipeline('de', processors='tokenize,mwt,pos,lemma', use_gpu=use_gpu)
+            logging.info("Loaded Stanza model for DE token classification.")
+        except ImportError:
+            logging.error("Stanza not found. Please install with: pip install stanza")
             self.nlp_sp = None
-            logging.warning("No German SpaCy model found. Install with: python -m spacy download de_core_news_lg")
-        except Exception:
+        except Exception as e:
+            logging.error(f"Error loading Stanza: {e}")
             self.nlp_sp = None
 
     def _eval_single_word_case(self, token_lower):
