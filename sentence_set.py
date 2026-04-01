@@ -187,33 +187,68 @@ def _detect_language(params):
     return 'en'
 
 
+# ---------------------------------------------------------------------------
+# POS-aware fallback cascade for non-noun targets.
+# When the target is not a noun, try exact POS match first, then compatible
+# word classes, and only allow a NOUN distractor as the absolute last resort.
+# ---------------------------------------------------------------------------
+_POS_COMPATIBLE_CLASSES = {
+    'VERB': ['VERB', 'ADV', 'ADJ', 'ADP'],
+    'ADJ':  ['ADJ', 'ADV', 'VERB', 'ADP'],
+    'ADV':  ['ADV', 'ADJ', 'VERB', 'ADP'],
+    'ADP':  ['ADP', 'ADV', 'ADJ', 'VERB'],
+    'DET':  ['DET', 'ADP', 'ADV', 'ADJ'],
+    'PRON': ['PRON', 'DET', 'ADP', 'ADV'],
+    'PART': ['PART', 'ADV', 'ADP', 'ADJ'],
+    'CCONJ': ['CCONJ', 'SCONJ', 'ADP', 'ADV'],
+    'SCONJ': ['SCONJ', 'CCONJ', 'ADP', 'ADV'],
+}
+
+
 def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=None, is_first_word=False):
-    """Determine correct German casing based on the token's own linguistic class."""
+    """Determine correct German casing based on the distractor's own POS.
+
+    Uses the dictionary's pos_cache (built by SpaCy large batch tagging during
+    get_potential_distractors) as the primary POS source.  Falls back to
+    get_titlecase_variant (lazy single-word SpaCy evaluation) only when the
+    pos_cache entry is missing.
+
+    Rules (German orthography):
+      - Nouns (NOUN/PROPN) → Titlecase
+      - Everything else     → lowercase
+      - Sentence-initial     → capitalize first letter regardless of POS
+    """
     if _is_x_placeholder_token(token):
         return token
     prefix, body, suffix = _split_punct(token)
     if not body:
         return token
 
-    
-    # Check if it's a noun/proper noun in the dictionary
-    title_var = None
-    try:
-        if hasattr(dict_obj, 'get_titlecase_variant'):
-            title_var = dict_obj.get_titlecase_variant(body)
-    except Exception:
-        pass
+    # Determine if the *distractor* is a noun via pos_cache (most reliable)
+    distractor_is_noun = False
+    t_lower = body.lower()
 
-    if isinstance(title_var, str):
-        new_body = title_var
+    # Primary: SpaCy batch-tagged pos_cache (built by batch_tag_words in the
+    # dictionary during get_potential_distractors — uses SpaCy large).
+    if hasattr(dict_obj, 'pos_cache') and t_lower in dict_obj.pos_cache:
+        distractor_is_noun = dict_obj.pos_cache[t_lower] in ('NOUN', 'PROPN')
+    # Secondary: case_map / titlecase variant (lazy single-word SpaCy eval)
+    elif hasattr(dict_obj, 'get_titlecase_variant'):
+        try:
+            tv = dict_obj.get_titlecase_variant(body)
+            distractor_is_noun = isinstance(tv, str)
+        except Exception:
+            pass
+
+    if distractor_is_noun:
+        new_body = body[0].upper() + body[1:].lower()
     else:
-        # Not a noun -> always lowercase to prevent Adjectives/Verbs from masquerading as Nouns
-        # (Removed forced case mirroring from source_token)
         new_body = body.lower()
-    
+
+    # German rule: sentence-initial word is always capitalized.
     if is_first_word and new_body:
         new_body = new_body[0].upper() + new_body[1:]
-    
+
     return prefix + new_body + suffix
 
 def _normalize_distractor_token(token, dict_obj, lang='de', source_token=None, source_pos=None, is_first_word=False):
@@ -428,13 +463,21 @@ class Label:
         sw_target = strip_punct(self.words[0]) if self.words else ""
         target_is_lower = sw_target[0].islower() if sw_target else True
 
-        # get us some distractor candidates
-        # Strict POS matching: if target is a noun, dist must be a noun.
-        # If target is NOT a noun, dist must NOT be a noun.
+        # --- POS FALLBACK CASCADE ---
+        # For noun targets: NOUN candidates only.
+        # For non-noun targets: build a preference list from
+        # _POS_COMPATIBLE_CLASSES so nouns are the absolute last resort.
+        compatible_pos_list = None  # ordered list for non-noun cascade
         pos_filter = None
         if match_noun_pos:
-            pos_filter = 'NOUN' if target_is_noun else '!NOUN'
-        
+            if target_is_noun:
+                pos_filter = 'NOUN'
+            else:
+                pos_filter = '!NOUN'
+                # Build ordered preference list for later cascade sorting
+                compatible_pos_list = _POS_COMPATIBLE_CLASSES.get(
+                    target_pos, ['ADV', 'ADJ', 'VERB', 'ADP'])
+
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
         # --- ADAPTIVE LENGTH SEARCH (Fix for 0-candidate long words) ---
@@ -476,10 +519,13 @@ class Label:
 
         if match_noun_pos and target_pos:
             exact = []
+            compatible = []  # candidates matching a compatible POS class
+            noun_fallback = []  # NOUN candidates — absolute last resort for non-noun targets
             others = []
-            bad_pos = {'PROPN', 'X', 'SYM', 'INTJ'}
-            if not target_is_noun:
-                bad_pos.add('NOUN')
+            bad_pos = {'PROPN', 'X', 'SYM', 'INTJ', 'NUM', 'PUNCT'}
+
+            # For non-noun targets, NOUNs go into noun_fallback, not rejected.
+            # They are only used if exact + compatible are both exhausted.
                 
             # --- HYPER-SPEED CPU FIX: BATCH TAGGING WITH NATIVE SENTENCE CONTEXT ---
             try:
@@ -507,6 +553,10 @@ class Label:
                             
                             if is_exact_match:
                                 exact.append(c)
+                            elif not target_is_noun and c_pos == 'NOUN':
+                                noun_fallback.append(c)
+                            elif compatible_pos_list and c_pos in compatible_pos_list:
+                                compatible.append(c)
                             elif c_pos not in bad_pos:
                                 others.append(c)
                     else:
@@ -522,11 +572,15 @@ class Label:
                         for c, doc in zip(distractor_opts, docs):
                             c_pos = doc[0].pos_ if doc and len(doc) > 0 else None
                             is_exact_match = (c_pos == target_pos) or (target_is_noun and c_pos == 'PROPN')
-                        
-                        if is_exact_match:
-                            exact.append(c)
-                        elif c_pos not in bad_pos:
-                            others.append(c)
+                            
+                            if is_exact_match:
+                                exact.append(c)
+                            elif not target_is_noun and c_pos == 'NOUN':
+                                noun_fallback.append(c)
+                            elif compatible_pos_list and c_pos in compatible_pos_list:
+                                compatible.append(c)
+                            elif c_pos not in bad_pos:
+                                others.append(c)
                 else:
                     for c in distractor_opts:
                         c_pos = get_candidate_pos(c, target_noun_context=target_is_noun)
@@ -534,6 +588,10 @@ class Label:
                         
                         if is_exact_match:
                             exact.append(c)
+                        elif not target_is_noun and c_pos == 'NOUN':
+                            noun_fallback.append(c)
+                        elif compatible_pos_list and c_pos in compatible_pos_list:
+                            compatible.append(c)
                         elif c_pos not in bad_pos:
                             others.append(c)
             except Exception as e:
@@ -542,14 +600,22 @@ class Label:
                     c_pos = get_candidate_pos(c, target_noun_context=target_is_noun)
                     if c_pos == target_pos:
                         exact.append(c)
+                    elif not target_is_noun and c_pos == 'NOUN':
+                        noun_fallback.append(c)
+                    elif compatible_pos_list and c_pos in compatible_pos_list:
+                        compatible.append(c)
                     elif c_pos not in bad_pos:
                         others.append(c)
 
-            # Pre-sort exact matches first, fallback second. Drop bad POS completely!
+            # Priority ordering:
+            # Noun targets → exact only (strict)
+            # Non-noun targets → exact → compatible → others → noun_fallback (last)
             if target_is_noun:
                 distractor_opts = exact
             else:
-                distractor_opts = exact + others
+                distractor_opts = exact + compatible + others + noun_fallback
+                if noun_fallback and not exact and not compatible and not others:
+                    logging.info(f"POS cascade: using NOUN fallback for non-noun target '{self.words[0]}' (POS={target_pos})")
 
         enforce_length_match = bool(params.get('enforce_length_match', True))
         len_tolerance = int(params.get('len_tolerance', 0))
@@ -930,20 +996,22 @@ class Label:
                 if cand is None and allow_banned_fallback:
                     cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True, relax_length=True)
             if cand is None:
-                # Fallback stage 5: Emergency pool with stricter POS filtering
+                # Fallback stage 5: Emergency pool with POS-aware cascade
                 logging.warning(f"FALLBACK Stage 5: Emergency pool (800 random words) for item {self.id}, label {self.lab}")
                 try:
-                    # Enforce stricter POS guard to prevent garbage words.
+                    # POS cascade-aware guard: prefer compatible classes, allow nouns last.
                     def emergency_pos_ok(w_pos):
                         if not match_noun_pos:
                             # For non-POS-matched mode, accept standard word types only
                             return w_pos in ('NOUN', 'VERB', 'ADJ', 'ADV', 'ADP', 'DET', None)
-                        # For POS-matched mode, enforce noun/non-noun split
+                        # For POS-matched mode, enforce cascade
                         if target_is_noun:
                             return w_pos in ('NOUN', 'PROPN')  # STRICT: Do not accept None!
                         else:
-                            # Accept actual words but not symbols/punctuation/numbers
-                            return w_pos in ('VERB', 'ADJ', 'ADV', 'ADP', 'DET', None)
+                            # Allow compatible POS classes + NOUN as last resort
+                            ok_set = set(compatible_pos_list or ['ADV', 'ADJ', 'VERB', 'ADP'])
+                            ok_set.add('NOUN')  # noun is acceptable as emergency last resort
+                            return w_pos in ok_set
                     
                     # Relax: allowing ANY length from dict.
                     potential_words = getattr(dictionary, 'words', [])

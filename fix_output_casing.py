@@ -72,15 +72,24 @@ def process_file(infile='test_output.txt', outfile='test_output_fixed.txt'):
                     continue
 
                 # Decide casing based on the DISTRACTOR word's own POS.
-                # The dictionary's case_map was built during init by tagging
-                # every word with spaCy in 3 sentence contexts (majority vote).
+                # Primary source: pos_cache (built by SpaCy large batch
+                # tagging during get_potential_distractors).
+                # Secondary: get_titlecase_variant (lazy single-word eval).
                 if body.upper() in {'USA', 'EU', 'UN', 'CDU', 'SPD', 'FDP', 'NATO', 'EZB'}:
                     new_body = body.upper()
                 else:
-                    tv = d.get_titlecase_variant(body)
-                    if tv:
-                        # Dictionary says it's a noun → capitalize
-                        new_body = tv
+                    is_noun = False
+                    b_lower = body.lower()
+                    # Primary: check SpaCy batch-tagged pos_cache
+                    if hasattr(d, 'pos_cache') and b_lower in d.pos_cache:
+                        is_noun = d.pos_cache[b_lower] in ('NOUN', 'PROPN')
+                    else:
+                        # Secondary: get_titlecase_variant (lazy eval)
+                        tv = d.get_titlecase_variant(body)
+                        is_noun = tv is not None and isinstance(tv, str)
+                    if is_noun:
+                        # Noun → Titlecase
+                        new_body = body[0].upper() + body[1:].lower()
                     else:
                         # Not a noun → lowercase
                         new_body = body.lower()
