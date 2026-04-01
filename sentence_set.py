@@ -207,11 +207,9 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=
     if isinstance(title_var, str):
         new_body = title_var
     else:
-        # Not a noun -> lowercase (Standard German rule)
-        if source_pos in ('NOUN', 'PROPN') or (source_token and source_token[0].isupper()):
-            new_body = body.capitalize()
-        else:
-            new_body = body.lower()
+        # Not a noun -> always lowercase to prevent Adjectives/Verbs from masquerading as Nouns
+        # (Removed forced case mirroring from source_token)
+        new_body = body.lower()
     
     if is_first_word and new_body:
         new_body = new_body[0].upper() + new_body[1:]
@@ -440,12 +438,17 @@ class Label:
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
         # --- ADAPTIVE LENGTH SEARCH (Fix for 0-candidate long words) ---
-        # If no candidates found for exact length, widen search recursively.
+        # For Nouns, we PREFER shorter, actual nouns rather than long adjectives
+        # that barely fit the length profile. 
         if not distractor_opts:
             for extra_len in range(1, 11): # Try widening up to +/- 10 characters
                 logging.info(f"0 candidates for {self.words} after primary fetch. Widening search by +/- {extra_len}")
+                # Bias search downwards: it's better to have a shorter noun than no noun
+                min_len_search = max(2, min_length - extra_len)
+                max_len_search = max_length + (extra_len // 2) if target_is_noun else (max_length + extra_len)
+                
                 distractor_opts = dictionary.get_potential_distractors(
-                    min_length - extra_len, max_length + extra_len, 
+                    min_len_search, max_len_search, 
                     min_freq, max_freq, params, pos_filter=pos_filter
                 )
                 if distractor_opts:
@@ -454,7 +457,7 @@ class Label:
                 # If still nothing, try ignoring frequency thresholds for this length widening
                 logging.info(f"Still 0 candidates. Relaxing frequency constraints for +/- {extra_len}")
                 distractor_opts = dictionary.get_potential_distractors(
-                    min_length - extra_len, max_length + extra_len, 
+                    min_len_search, max_len_search, 
                     None, None, params, pos_filter=pos_filter
                 )
                 if distractor_opts:
@@ -937,7 +940,7 @@ class Label:
                             return w_pos in ('NOUN', 'VERB', 'ADJ', 'ADV', 'ADP', 'DET', None)
                         # For POS-matched mode, enforce noun/non-noun split
                         if target_is_noun:
-                            return w_pos in ('NOUN', 'PROPN', None)
+                            return w_pos in ('NOUN', 'PROPN')  # STRICT: Do not accept None!
                         else:
                             # Accept actual words but not symbols/punctuation/numbers
                             return w_pos in ('VERB', 'ADJ', 'ADV', 'ADP', 'DET', None)
