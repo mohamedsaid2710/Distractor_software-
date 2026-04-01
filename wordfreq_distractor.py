@@ -85,7 +85,7 @@ class wordfreq_dict(distractor_dict):
                 matches.append(word.text)
         return matches
 
-    def batch_tag_words(self, words):
+    def batch_tag_words(self, words, params=None):
         """Tag a list of words in bulk using high-performance SpaCy batching.
 
         Uses triple-context POS detection with majority voting:
@@ -157,10 +157,17 @@ class wordfreq_dict(distractor_dict):
                     return t.pos_
             return 'X'
 
+        batch_size = 5000
+        if params is not None:
+            try:
+                batch_size = int(params.get('spacy_batch_size', 5000))
+            except Exception:
+                pass
+
         try:
-            noun_docs = list(self.nlp_sp.pipe(noun_frames, disable=['ner'], batch_size=5000))
-            verb_docs = list(self.nlp_sp.pipe(verb_frames, disable=['ner'], batch_size=5000))
-            adj_docs  = list(self.nlp_sp.pipe(adj_frames,  disable=['ner'], batch_size=5000))
+            noun_docs = list(self.nlp_sp.pipe(noun_frames, disable=['ner', 'parser', 'lemmatizer'], batch_size=batch_size))
+            verb_docs = list(self.nlp_sp.pipe(verb_frames, disable=['ner', 'parser', 'lemmatizer'], batch_size=batch_size))
+            adj_docs  = list(self.nlp_sp.pipe(adj_frames,  disable=['ner', 'parser', 'lemmatizer'], batch_size=batch_size))
 
             for word_l, noun_doc, verb_doc, adj_doc in zip(content_words, noun_docs, verb_docs, adj_docs):
                 noun_pos = _extract_pos(noun_doc, word_l)
@@ -257,7 +264,7 @@ class wordfreq_dict(distractor_dict):
         # 3. --- HYPER-SPEED OPTIMIZATION: BATCH TAGGING ---
         # Instead of tagging words one-by-one in the loop, we tag the entire pool at once!
         if self.nlp_sp is not None:
-            self.batch_tag_words(distractor_opts)
+            self.batch_tag_words(distractor_opts, params=params)
         else:
             print(f"[DIAG] SKIPPING batch_tag: nlp_sp is None! pos_cache will be empty.", flush=True)
         # 4. Filter the pool using the now-cached high-quality POS tags

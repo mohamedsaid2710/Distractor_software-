@@ -558,7 +558,7 @@ class Label:
                             docs.append(Doc(nlp_sp.vocab, words=cw))
                             valid_pairs.append(c)
                             
-                        docs_parsed = list(nlp_sp.pipe(docs, disable=['ner', 'parser'], batch_size=int(params.get('spacy_batch_size', 5000))))
+                        docs_parsed = list(nlp_sp.pipe(docs, disable=['ner', 'parser', 'lemmatizer'], batch_size=int(params.get('spacy_batch_size', 5000))))
                         for c, doc in zip(valid_pairs, docs_parsed):
                             c_pos = doc[idx].pos_ if len(doc) > idx else None
                             is_exact_match = (c_pos == target_pos) or (target_is_noun and c_pos == 'PROPN')
