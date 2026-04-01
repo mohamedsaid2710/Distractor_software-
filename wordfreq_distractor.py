@@ -88,14 +88,16 @@ class wordfreq_dict(distractor_dict):
     def batch_tag_words(self, words):
         """Tag a list of words in bulk using high-performance SpaCy batching.
 
-        Uses dual-context POS detection as documented in the wiki:
+        Uses triple-context POS detection with majority voting:
           1. Noun context:      'Das {Word} ist hier.'   (Word capitalized)
-          2. Adjective context:  'Die {word} Sachen sind gut.'  (word lowercase)
+          2. Verb context:       'Ich {word} gerne.'      (word lowercase)
+          3. Adjective context:  'Die {word} Sachen sind gut.'  (word lowercase)
 
-        If both frames agree on POS → high confidence, use that.
-        If they disagree → use the adjective-context result for non-nouns
-        (avoids capitalization-as-noun bias), but trust the noun-context
-        for actual nouns.
+        A word is tagged as NOUN only if at least 2 of 3 frames agree.
+        This prevents the capitalization-as-noun bias that affects the
+        single noun-context frame approach — verbs like 'gehe', adjectives
+        like 'müde', and adverbs like 'voraussichtlich' are no longer
+        falsely capitalized.
         """
         if self.nlp_sp is None or not words:
             if self.nlp_sp is None:
@@ -129,53 +131,69 @@ class wordfreq_dict(distractor_dict):
                 self.case_map[w] = None
                 self.pos_cache[w] = 'ADP'
 
-        # Second pass: SpaCy tagging with CAPITALIZED word in sentence context
-        # We use ONLY the noun-context frame: 'Das {Word} ist hier.'
-        # The word MUST be capitalized because German SpaCy relies on
-        # capitalization to identify nouns. Without it, even real nouns
-        # like 'gültigkeit' get tagged as ADJ/X.
-        #
-        # Trade-off: some non-nouns may be falsely tagged NOUN due to
-        # capitalization, but this is far less harmful than missing ALL
-        # nouns (which causes systematic lowercase casing errors).
+        # Second pass: SpaCy tagging with TRIPLE-CONTEXT majority voting
+        # Using 3 frames breaks the capitalization-as-noun bias that the
+        # single "Das {Word} ist hier" frame suffers from.
         content_words = [w for w in unique_words if w not in FUNCTION_WORDS]
         if not content_words:
             return
 
-        # Frame: 'Das {Word} ist hier.'
-        # Tokens: Das(0) {Word}(1) ist(2) hier(3) .(4) → target at index 1
-        frames = [f"Das {w.capitalize()} ist hier ." for w in content_words]
+        # All 3 frames place the target word at token index 1:
+        #   Frame 1: Das(0) {Word}(1) ist(2) hier(3) .(4)     — capitalized, noun slot
+        #   Frame 2: Ich(0) {word}(1) gerne(2) .(3)            — lowercase, verb slot
+        #   Frame 3: Die(0) {word}(1) Sachen(2) sind(3) gut(4) .(5) — lowercase, adj slot
+        noun_frames = [f"Das {w.capitalize()} ist hier ." for w in content_words]
+        verb_frames = [f"Ich {w} gerne ." for w in content_words]
+        adj_frames  = [f"Die {w} Sachen sind gut ." for w in content_words]
         target_idx = 1
 
+        def _extract_pos(doc, word_lower):
+            """Extract POS tag for the target word from a SpaCy doc."""
+            if len(doc) > target_idx and doc[target_idx].text.lower() == word_lower:
+                return doc[target_idx].pos_
+            # Fallback: search all tokens (handles cases where SpaCy re-tokenized)
+            for t in doc:
+                if t.text.lower() == word_lower:
+                    return t.pos_
+            return 'X'
+
         try:
-            docs = list(self.nlp_sp.pipe(frames, disable=['ner', 'lemmatizer'], batch_size=5000))
+            noun_docs = list(self.nlp_sp.pipe(noun_frames, disable=['ner', 'lemmatizer'], batch_size=5000))
+            verb_docs = list(self.nlp_sp.pipe(verb_frames, disable=['ner', 'lemmatizer'], batch_size=5000))
+            adj_docs  = list(self.nlp_sp.pipe(adj_frames,  disable=['ner', 'lemmatizer'], batch_size=5000))
 
-            for word_l, doc in zip(content_words, docs):
-                pos_tag = 'X'
-                if len(doc) > target_idx:
-                    tok = doc[target_idx]
-                    if tok.text.lower() == word_l:
-                        pos_tag = tok.pos_
-                    else:
-                        for t in doc:
-                            if t.text.lower() == word_l:
-                                pos_tag = t.pos_
-                                break
+            for word_l, noun_doc, verb_doc, adj_doc in zip(content_words, noun_docs, verb_docs, adj_docs):
+                noun_pos = _extract_pos(noun_doc, word_l)
+                verb_pos = _extract_pos(verb_doc, word_l)
+                adj_pos  = _extract_pos(adj_doc,  word_l)
+
+                # Majority vote: how many frames think it's a NOUN?
+                noun_votes = sum(1 for p in [noun_pos, verb_pos, adj_pos]
+                                 if p in ('NOUN', 'PROPN'))
+
+                if noun_votes >= 2:
+                    # At least 2 of 3 frames agree → high confidence NOUN
+                    final_pos = 'NOUN'
                 else:
-                    for t in doc:
-                        if t.text.lower() == word_l:
-                            pos_tag = t.pos_
-                            break
+                    # Not a noun — use the most informative non-noun tag
+                    # Prefer verb/adj frame POS (unbiased by capitalization)
+                    if verb_pos not in ('NOUN', 'PROPN', 'X'):
+                        final_pos = verb_pos
+                    elif adj_pos not in ('NOUN', 'PROPN', 'X'):
+                        final_pos = adj_pos
+                    else:
+                        final_pos = noun_pos  # fallback to noun frame if others gave 'X'
 
-                self.pos_cache[word_l] = pos_tag
-                if pos_tag in ('NOUN', 'PROPN'):
+                self.pos_cache[word_l] = final_pos
+                if final_pos in ('NOUN', 'PROPN'):
                     self.case_map[word_l] = word_l.capitalize()
                 else:
                     self.case_map[word_l] = None
+
             # Diagnostic: HARD PRINT that bypasses logging config
             noun_count = sum(1 for w in content_words if self.pos_cache.get(w) in ('NOUN', 'PROPN'))
             non_noun_count = len(content_words) - noun_count
-            print(f"[DIAG] Batch tagged {len(content_words)} words: {noun_count} NOUN, {non_noun_count} non-NOUN", flush=True)
+            print(f"[DIAG] Batch tagged {len(content_words)} words (triple-frame): {noun_count} NOUN, {non_noun_count} non-NOUN", flush=True)
             noun_examples = [w for w in content_words if self.pos_cache.get(w) in ('NOUN', 'PROPN')][:5]
             non_noun_examples = [f"{w}({self.pos_cache.get(w)})" for w in content_words if self.pos_cache.get(w) not in ('NOUN', 'PROPN')][:5]
             if noun_examples:
@@ -481,29 +499,55 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.nlp_sp = None
 
     def _eval_single_word_case(self, token_lower):
-        """POS check using SpaCy with capitalized word in sentence context.
+        """POS check using SpaCy with triple-context majority voting.
 
-        Uses the same approach as batch_tag_words:
-          'Das {Word} ist hier.'
-        Word is capitalized because German SpaCy needs capitalization
-        to identify nouns correctly.
+        Uses 3 context frames to avoid capitalization-as-noun bias:
+          1. Noun context:      'Das {Word} ist hier.'   (capitalized)
+          2. Verb context:       'Ich {word} gerne.'      (lowercase)
+          3. Adjective context:  'Die {word} Sachen sind gut.'  (lowercase)
+
+        Tags as NOUN only if at least 2 of 3 frames agree.
         """
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
 
         if self.nlp_sp is not None:
-            doc = self.nlp_sp(f"Das {token_lower.capitalize()} ist hier .")
-            pos_tag = 'X'
-            if len(doc) > 1 and doc[1].text.lower() == token_lower:
-                pos_tag = doc[1].pos_
-            else:
+            def _get_pos(doc, word_lower, target_idx=1):
+                if len(doc) > target_idx and doc[target_idx].text.lower() == word_lower:
+                    return doc[target_idx].pos_
                 for t in doc:
-                    if t.text.lower() == token_lower:
-                        pos_tag = t.pos_
-                        break
+                    if t.text.lower() == word_lower:
+                        return t.pos_
+                return 'X'
 
-            self.pos_cache[token_lower] = pos_tag
-            if pos_tag in ('NOUN', 'PROPN'):
+            # Frame 1: Noun context (capitalized)
+            noun_doc = self.nlp_sp(f"Das {token_lower.capitalize()} ist hier .")
+            noun_pos = _get_pos(noun_doc, token_lower)
+
+            # Frame 2: Verb context (lowercase)
+            verb_doc = self.nlp_sp(f"Ich {token_lower} gerne .")
+            verb_pos = _get_pos(verb_doc, token_lower)
+
+            # Frame 3: Adjective context (lowercase)
+            adj_doc = self.nlp_sp(f"Die {token_lower} Sachen sind gut .")
+            adj_pos = _get_pos(adj_doc, token_lower)
+
+            # Majority vote
+            noun_votes = sum(1 for p in [noun_pos, verb_pos, adj_pos]
+                             if p in ('NOUN', 'PROPN'))
+
+            if noun_votes >= 2:
+                final_pos = 'NOUN'
+            else:
+                if verb_pos not in ('NOUN', 'PROPN', 'X'):
+                    final_pos = verb_pos
+                elif adj_pos not in ('NOUN', 'PROPN', 'X'):
+                    final_pos = adj_pos
+                else:
+                    final_pos = noun_pos
+
+            self.pos_cache[token_lower] = final_pos
+            if final_pos in ('NOUN', 'PROPN'):
                 self.case_map[token_lower] = token_lower.capitalize()
             else:
                 self.case_map[token_lower] = None
