@@ -65,8 +65,9 @@ class wordfreq_dict(distractor_dict):
             word_pool = self.words_by_len.get(l, [])
             for word in word_pool:
                 # Basic frequency check
-                if not (freq_low <= word.freq <= freq_high):
-                    continue
+                if freq_low is not None and freq_high is not None:
+                    if not (freq_low <= word.freq <= freq_high):
+                        continue
                 
                 if pos_filter:
                     p_tag = getattr(word, 'pos', None)
