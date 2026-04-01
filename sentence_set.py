@@ -188,11 +188,7 @@ def _detect_language(params):
 
 
 def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=None, is_first_word=False):
-    """Determine correct German casing based on the DISTRACTOR's own linguistic class.
-    
-    The distractor's casing should be based on whether IT is a noun, not the source word.
-    German nouns are capitalized; other word classes are lowercase (except sentence-initial).
-    """
+    """Determine correct German casing based on the token's own linguistic class."""
     if _is_x_placeholder_token(token):
         return token
     prefix, body, suffix = _split_punct(token)
@@ -200,8 +196,7 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=
         return token
 
     
-    # Check if the DISTRACTOR is a noun/proper noun in the dictionary
-    # This is the authoritative source - based on the distractor's own POS
+    # Check if it's a noun/proper noun in the dictionary
     title_var = None
     try:
         if hasattr(dict_obj, 'get_titlecase_variant'):
@@ -210,13 +205,14 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=
         pass
 
     if isinstance(title_var, str):
-        # Distractor IS a noun -> use capitalized form
         new_body = title_var
     else:
-        # Distractor is NOT a noun -> lowercase (Standard German rule)
-        new_body = body.lower()
+        # Not a noun -> lowercase (Standard German rule)
+        if source_pos in ('NOUN', 'PROPN') or (source_token and source_token[0].isupper()):
+            new_body = body.capitalize()
+        else:
+            new_body = body.lower()
     
-    # Sentence-initial words are always capitalized in German
     if is_first_word and new_body:
         new_body = new_body[0].upper() + new_body[1:]
     
