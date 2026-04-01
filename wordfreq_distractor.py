@@ -6,7 +6,7 @@ import random
 import logging
 import json
 
-import utils
+from utils import strip_punct
 from distractor import distractor_dict, distractor
 
 
@@ -49,7 +49,7 @@ class wordfreq_dict(distractor_dict):
     def in_dict(self, test_word):
         """Test to see if word is in dictionary"""
         # Minor optimization: first check length
-        l = len(utils.strip_punct(test_word))
+        l = len(strip_punct(test_word))
         word_pool = self.words_by_len.get(l, [])
         for word in word_pool:
             if word.text == test_word:
@@ -116,9 +116,31 @@ class wordfreq_dict(distractor_dict):
         n = params.get('num_to_test', 200)
         target_pool_size = max(n * 2, 500)
         
+        # Get exclude list from params for pre-filtering
+        exclude_words_set = set()
+        exclude_path = params.get('exclude_words', None)
+        if exclude_path:
+            import os
+            if not os.path.isabs(exclude_path) and not os.path.exists(exclude_path):
+                base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                exclude_path = os.path.join(base, exclude_path)
+            if os.path.exists(exclude_path):
+                try:
+                    with open(exclude_path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            w = line.strip().lower()
+                            if w and not w.startswith('#'):
+                                exclude_words_set.add(w)
+                except Exception as e:
+                    logging.warning(f"Failed to load exclude list from {exclude_path}: {e}")
+        
         # 1. Fetch search pool (using heuristic only)
         # We fetch MORE so that after POS filtering we still have 'n' candidates.
         distractor_opts = self.get_words(min_length, max_length, min_freq, max_freq, pos_filter=None, use_spacy=False)
+        
+        # PRE-FILTER: Remove excluded words BEFORE any further processing
+        if exclude_words_set:
+            distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() not in exclude_words_set]
         
         # 2. Widening frequency range if needed (still heuristic/raw)
         if len(distractor_opts) < target_pool_size:
@@ -126,6 +148,10 @@ class wordfreq_dict(distractor_dict):
             for i in range(1, max_widen + 1):
                 lower = self.get_words(min_length, max_length, min_freq - i, min_freq - i + 1, pos_filter=None, use_spacy=False)
                 higher = self.get_words(min_length, max_length, max_freq + i - 1, max_freq + i, pos_filter=None, use_spacy=False)
+                # Also filter the widened pools
+                if exclude_words_set:
+                    lower = [w for w in lower if strip_punct(w).lower() not in exclude_words_set]
+                    higher = [w for w in higher if strip_punct(w).lower() not in exclude_words_set]
                 distractor_opts.extend(lower)
                 distractor_opts.extend(higher)
                 if len(distractor_opts) >= target_pool_size:
@@ -366,15 +392,10 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         """Ultimate POS check: compares lowercase and titlecase results inside natural context."""
         w_cap = token_lower.capitalize()
         
-        # 1. Fast, highly-reliable fallback for common German noun suffixes (including plurals)
-        strong_noun_suffixes = ('ung', 'ungen', 'heit', 'heiten', 'keit', 'keiten', 'schaft', 'schaften', 'tion', 'tionen', 'sion', 'sionen', 'nis', 'nisse', 'tum', 'tät', 'itäten', 'ismus', 'eur')
-        if any(token_lower.endswith(sfx) for sfx in strong_noun_suffixes):
-            self.case_map[token_lower] = w_cap
-            return w_cap
 
         # 2. Use stable SpaCy frame (same as batch tagger)
         if self.nlp_sp is not None:
-            doc_c = self.nlp_sp(f"Das {w_cap} ist hier.")
+            doc_c = self.nlp_sp(f"das {token_lower} ist hier.")
             if len(doc_c) > 1 and doc_c[1].pos_ in ('NOUN', 'PROPN'):
                 self.case_map[token_lower] = w_cap
             else:
@@ -429,7 +450,7 @@ def get_thresholds_de(words, params=None):
     lengths = []
     freqs = []
     for word in words:
-        stripped = utils.strip_punct(word)
+        stripped = strip_punct(word)
         # Clamp word lengths to Boyce-style bins [3, 15] before range creation.
         lengths.append(max(3, min(len(stripped), 15)))
         freqs.append(get_frequency_de(stripped))
@@ -459,7 +480,7 @@ def get_thresholds_en(words, params=None):
     lengths = []
     freqs = []
     for word in words:
-        stripped = utils.strip_punct(word)
+        stripped = strip_punct(word)
         # Clamp word lengths to Boyce-style bins [3, 15] before range creation.
         lengths.append(max(3, min(len(stripped), 15)))
         freqs.append(get_frequency_en(stripped))
@@ -585,7 +606,7 @@ def get_thresholds_ar(words, params=None):
     lengths = []
     freqs = []
     for word in words:
-        stripped = utils.strip_punct(word)
+        stripped = strip_punct(word)
         # Arabic words can be shorter; clamp to [2, 15].
         lengths.append(max(2, min(len(stripped), 15)))
         freqs.append(get_frequency_ar(stripped))

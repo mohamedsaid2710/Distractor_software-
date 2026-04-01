@@ -5,6 +5,25 @@ import re
 import random
 import os
 
+
+def _levenshtein_distance(s1, s2):
+    """Compute edit distance between two strings."""
+    if len(s1) < len(s2):
+        return _levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    previous_row = range(len(s2) + 1)
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    return previous_row[-1]
+
+
 # Common uppercase acronyms to preserve when used as distractors in English.
 _EN_ACRONYM_WHITELIST = {
     'ai', 'api', 'bbc', 'cia', 'cpu', 'eu', 'fbi', 'gdp', 'gps', 'gpu',
@@ -158,7 +177,7 @@ def _detect_language(params):
     return 'en'
 
 
-def _get_german_grammatical_case(token, dict_obj, source_token=None):
+def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=None, is_first_word=False):
     """Determine correct German casing based on the token's own linguistic class."""
     if _is_x_placeholder_token(token):
         return token
@@ -166,14 +185,6 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None):
     if not body:
         return token
 
-    # Hard-coded Preposition/Function Word Guard
-    func_word_guard = {
-        'aus', 'auf', 'in', 'an', 'mit', 'von', 'für', 'um', 'bei', 
-        'pro', 'per', 'contra', 'via', 'und', 'oder', 'aber', 'denn',
-        'doch', 'als', 'wie', 'so', 'da', 'wenn', 'ob', 'weil', 'dass'
-    }
-    
-    is_func = body.lower() in func_word_guard
     
     # Check if it's a noun/proper noun in the dictionary
     title_var = None
@@ -185,18 +196,19 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None):
 
     if title_var:
         new_body = title_var
-    elif is_func:
-        new_body = body.lower()
     else:
         # Not a noun -> lowercase (Standard German rule)
         new_body = body.lower()
     
+    if is_first_word and new_body:
+        new_body = new_body[0].upper() + new_body[1:]
+    
     return prefix + new_body + suffix
 
-def _normalize_distractor_token(token, dict_obj, lang='de', source_token=None):
+def _normalize_distractor_token(token, dict_obj, lang='de', source_token=None, source_pos=None, is_first_word=False):
     """Normalize casing for a single distractor token."""
     if lang == 'de':
-        return _get_german_grammatical_case(token, dict_obj, source_token=source_token)
+        return _get_german_grammatical_case(token, dict_obj, source_token=source_token, source_pos=source_pos, is_first_word=is_first_word)
     
     # Non-German fallback (e.g. English as before)
     if _is_x_placeholder_token(token):
@@ -566,6 +578,23 @@ class Label:
                         continue
                     if not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", strip_punct(dist)):
                         continue
+                    
+                    # Levenshtein distance check: reject if too similar to any target word
+                    too_similar = False
+                    for target_word in self.words:
+                        target_clean = strip_punct(target_word).lower()
+                        if target_clean and dist_l:
+                            max_len = max(len(target_clean), len(dist_l))
+                            if max_len > 0:
+                                edit_dist = _levenshtein_distance(target_clean, dist_l)
+                                similarity = 1.0 - (edit_dist / max_len)
+                                # Reject if >70% similar (edit distance <30% of max length)
+                                if similarity > 0.7:
+                                    too_similar = True
+                                    break
+                    if too_similar:
+                        continue
+                    
                     s = candidate_min_surprisal(dist)
                     if s is None:
                         continue
@@ -649,7 +678,7 @@ class Label:
                         skip = False
                         for target in self.words:
                             t = strip_punct(target).lower()
-                            if t and (t in dist_l or dist_l in t) and len(t) >= 4:
+                            if t and (t in dist_l or dist_l in t):
                                 skip = True
                                 break
                         if skip:
@@ -705,7 +734,7 @@ class Label:
             skip = False
             for target in self.words:
                 t = strip_punct(target).lower()
-                if t and (t in dist_l or dist_l in t) and len(t) >= 4:
+                if t and (t in dist_l or dist_l in t):
                     skip = True
                     break
             if skip:
@@ -779,6 +808,8 @@ class Label:
         # If no candidate survived strict filters, relax constraints in stages.
         if best_word is None:
             allow_banned_fallback = bool(params.get("allow_banned_fallback", False))
+            # Fallback stage 1: Use distractor_opts without surprisal threshold
+            logging.debug(f"FALLBACK Stage 1: Relaxed pool (no surprisal threshold) for item {self.id}, label {self.lab}")
             fallback = list(distractor_opts)
             random.shuffle(fallback)
             cand, cand_surp = pick_best_from_pool(fallback, allow_banned=False)
@@ -786,7 +817,8 @@ class Label:
                 cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True)
             desired_len = target_exact_len if target_exact_len is not None else target_preferred_len
             if cand is None and enforce_length_match and desired_len is not None:
-                # Strict exact-length fallback from full in-memory dictionary first.
+                # Fallback stage 2: Strict exact-length fallback from full in-memory dictionary first.
+                logging.debug(f"FALLBACK Stage 2: Full dictionary exact-length search for item {self.id}, label {self.lab}")
                 try:
                     exact_full_pool = [w.text for w in getattr(dict, 'words', []) if len(strip_punct(w.text)) == desired_len]
                 except Exception:
@@ -797,22 +829,34 @@ class Label:
                     if cand is None and allow_banned_fallback:
                         cand, cand_surp = pick_best_from_pool(exact_full_pool, allow_banned=True)
             if cand is None and enforce_length_match and desired_len is not None:
-                # Then try include_words (can contain short forms filtered from main dict).
+                # Fallback stage 3: Then try include_words (can contain short forms filtered from main dict).
+                logging.debug(f"FALLBACK Stage 3: Include words file for item {self.id}, label {self.lab}")
                 include_pool = get_include_words_exact_len(desired_len)
                 if include_pool:
                     cand, cand_surp = pick_best_from_pool(include_pool, allow_banned=False)
                     if cand is None and allow_banned_fallback:
                         cand, cand_surp = pick_best_from_pool(include_pool, allow_banned=True)
             if cand is None:
+                # Fallback stage 4: Relax length requirements
+                logging.debug(f"FALLBACK Stage 4: Relaxed length matching for item {self.id}, label {self.lab}")
                 cand, cand_surp = pick_best_from_pool(fallback, allow_banned=False, relax_length=True)
                 if cand is None and allow_banned_fallback:
                     cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True, relax_length=True)
             if cand is None:
+                # Fallback stage 5: Emergency pool with stricter POS filtering
+                logging.warning(f"FALLBACK Stage 5: Emergency pool (800 random words) for item {self.id}, label {self.lab}")
                 try:
-                    # Enforce POS guard to prevent cross-contamination.
+                    # Enforce stricter POS guard to prevent garbage words.
                     def emergency_pos_ok(w_pos):
-                        if not match_noun_pos: return True
-                        return (w_pos == 'NOUN' or w_pos == 'PROPN') if target_is_noun else (w_pos != 'NOUN' and w_pos != 'PROPN')
+                        if not match_noun_pos:
+                            # For non-POS-matched mode, accept standard word types only
+                            return w_pos in ('NOUN', 'VERB', 'ADJ', 'ADV', 'ADP', 'DET', None)
+                        # For POS-matched mode, enforce noun/non-noun split
+                        if target_is_noun:
+                            return w_pos in ('NOUN', 'PROPN', None)
+                        else:
+                            # Accept actual words but not symbols/punctuation/numbers
+                            return w_pos in ('VERB', 'ADJ', 'ADV', 'ADP', 'DET', None)
                     
                     # Relax: allowing ANY length from dict.
                     potential_words = getattr(dictionary, 'words', [])
@@ -836,7 +880,8 @@ class Label:
                     logging.error(f"Emergency pool construction failed: {e}")
             
             if cand is None:
-                # desperation: any word from distractor_opts
+                # Fallback stage 6: Last resort - any word from distractor_opts
+                logging.warning(f"FALLBACK Stage 6: Desperation mode (any word from pool) for item {self.id}, label {self.lab}")
                 fallback_pool = list(distractor_opts)
                 if fallback_pool:
                     random.shuffle(fallback_pool)
@@ -845,6 +890,8 @@ class Label:
                         cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=True, relax_length=True)
 
             if cand is None:
+                # Final fallback: Use placeholder and log for manual review
+                logging.error(f"FALLBACK FAILED: No valid distractor found for item {self.id}, label {self.lab}. Using placeholder.")
                 cand = "wort"
                 cand_surp = float('-inf')
             best_word = cand
@@ -1136,7 +1183,7 @@ class Sentence_Set:
                             except (IndexError, TypeError):
                                 src_pos = None
                         sentence.distractors[j] = _normalize_distractor_token(
-                            sentence.distractors[j], d, lang=lang, source_pos=src_pos)
+                            sentence.distractors[j], d, lang=lang, source_pos=src_pos, is_first_word=(j==0))
                 except Exception:
                     pass
             # match_target_case: copy the target word's casing onto the distractor

@@ -14,8 +14,8 @@ absolute_threshold_only: False
 language: "de"
 match_noun_pos: True
 len_tolerance: 1
-min_zipf: 1.0
-short_word_min_zipf: 3.5
+min_zipf: 3.5
+short_word_min_zipf: 4.5
 freq_tolerance: 0.3
 max_freq_widen: 20
 min_word_len: 2

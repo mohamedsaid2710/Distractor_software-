@@ -12,6 +12,7 @@ dependencies = [
     "torch>=2.0.0",
     "transformers>=4.30.0",
     "wordfreq>=3.0.0",
+    "de_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.8.0/de_core_news_sm-3.8.0-py3-none-any.whl"
 ]
 
 [[tool.uv.index]]
