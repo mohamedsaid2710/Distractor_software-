@@ -98,6 +98,8 @@ class wordfreq_dict(distractor_dict):
         for actual nouns.
         """
         if self.nlp_sp is None or not words:
+            if self.nlp_sp is None:
+                print(f"[DIAG] batch_tag_words SKIPPED: nlp_sp is None", flush=True)
             return
 
         # German function words - ALWAYS lowercase, skip tagging
@@ -198,17 +200,16 @@ class wordfreq_dict(distractor_dict):
                     self.case_map[word_l] = word_l.capitalize()
                 else:
                     self.case_map[word_l] = None
-            # Diagnostic logging: show POS classification results
+            # Diagnostic: HARD PRINT that bypasses logging config
             noun_count = sum(1 for w in content_words if self.pos_cache.get(w) in ('NOUN', 'PROPN'))
             non_noun_count = len(content_words) - noun_count
-            logging.info(f"[POS CACHE] Batch tagged {len(content_words)} words: {noun_count} NOUN, {non_noun_count} non-NOUN")
-            # Log first few examples for debugging
-            noun_examples = [w for w in content_words if self.pos_cache.get(w) in ('NOUN', 'PROPN')][:8]
-            non_noun_examples = [f"{w}({self.pos_cache.get(w)})" for w in content_words if self.pos_cache.get(w) not in ('NOUN', 'PROPN')][:8]
+            print(f"[DIAG] Batch tagged {len(content_words)} words: {noun_count} NOUN, {non_noun_count} non-NOUN", flush=True)
+            noun_examples = [w for w in content_words if self.pos_cache.get(w) in ('NOUN', 'PROPN')][:5]
+            non_noun_examples = [f"{w}({self.pos_cache.get(w)})" for w in content_words if self.pos_cache.get(w) not in ('NOUN', 'PROPN')][:5]
             if noun_examples:
-                logging.info(f"[POS CACHE] NOUN examples: {noun_examples}")
+                print(f"[DIAG] NOUN examples: {noun_examples}", flush=True)
             if non_noun_examples:
-                logging.info(f"[POS CACHE] Non-NOUN examples: {non_noun_examples}")
+                print(f"[DIAG] Non-NOUN examples: {non_noun_examples}", flush=True)
         except Exception as e:
             logging.error(f"SpaCy batch tagging failed: {e}")
             for word_l in content_words:
@@ -267,7 +268,8 @@ class wordfreq_dict(distractor_dict):
         # Instead of tagging words one-by-one in the loop, we tag the entire pool at once!
         if self.nlp_sp is not None:
             self.batch_tag_words(distractor_opts)
-            
+        else:
+            print(f"[DIAG] SKIPPING batch_tag: nlp_sp is None! pos_cache will be empty.", flush=True)
         # 4. Filter the pool using the now-cached high-quality POS tags
         if pos_filter:
             filtered = []

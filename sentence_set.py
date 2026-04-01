@@ -248,11 +248,13 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=
     else:
         new_body = body.lower()
 
-    # Diagnostic: log first few casing decisions
+    # Diagnostic: HARD PRINT first few casing decisions
     if not hasattr(_get_german_grammatical_case, '_log_count'):
         _get_german_grammatical_case._log_count = 0
     if _get_german_grammatical_case._log_count < 20:
-        logging.debug(f"[CASING] '{body}' -> '{new_body}' (is_noun={distractor_is_noun}, source={pos_source})")
+        has_cache = hasattr(dict_obj, 'pos_cache')
+        cache_size = len(dict_obj.pos_cache) if has_cache else 0
+        print(f"[CASING] '{body}' -> '{new_body}' noun={distractor_is_noun} src={pos_source} cache={has_cache}({cache_size})", flush=True)
         _get_german_grammatical_case._log_count += 1
 
     # German rule: sentence-initial word is always capitalized.
