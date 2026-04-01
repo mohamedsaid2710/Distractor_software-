@@ -129,71 +129,43 @@ class wordfreq_dict(distractor_dict):
                 self.case_map[w] = None
                 self.pos_cache[w] = 'ADP'
 
-        # Second pass: SpaCy tagging with DUAL-CONTEXT framing
+        # Second pass: SpaCy tagging with CAPITALIZED word in sentence context
+        # We use ONLY the noun-context frame: 'Das {Word} ist hier.'
+        # The word MUST be capitalized because German SpaCy relies on
+        # capitalization to identify nouns. Without it, even real nouns
+        # like 'gültigkeit' get tagged as ADJ/X.
+        #
+        # Trade-off: some non-nouns may be falsely tagged NOUN due to
+        # capitalization, but this is far less harmful than missing ALL
+        # nouns (which causes systematic lowercase casing errors).
         content_words = [w for w in unique_words if w not in FUNCTION_WORDS]
         if not content_words:
             return
 
-        # Context 1 (noun-biased): 'Das {Word} ist hier.'
-        #   Tokens: Das(0) {Word}(1) ist(2) hier(3) .(4) → target at index 1
-        noun_frames = [f"Das {w.capitalize()} ist hier ." for w in content_words]
-        noun_idx = 1
-
-        # Context 2 (adjective-biased): 'Die {word} Sachen sind gut.'
-        #   Tokens: Die(0) {word}(1) Sachen(2) sind(3) gut(4) .(5) → target at index 1
-        adj_frames = [f"Die {w} Sachen sind gut ." for w in content_words]
-        adj_idx = 1
+        # Frame: 'Das {Word} ist hier.'
+        # Tokens: Das(0) {Word}(1) ist(2) hier(3) .(4) → target at index 1
+        frames = [f"Das {w.capitalize()} ist hier ." for w in content_words]
+        target_idx = 1
 
         try:
-            noun_docs = list(self.nlp_sp.pipe(noun_frames, disable=['ner', 'lemmatizer'], batch_size=5000))
-            adj_docs = list(self.nlp_sp.pipe(adj_frames, disable=['ner', 'lemmatizer'], batch_size=5000))
+            docs = list(self.nlp_sp.pipe(frames, disable=['ner', 'lemmatizer'], batch_size=5000))
 
-            for word_l, n_doc, a_doc in zip(content_words, noun_docs, adj_docs):
-                # Extract POS from both contexts
-                n_pos = 'X'
-                a_pos = 'X'
-
-                # Noun context
-                if len(n_doc) > noun_idx:
-                    tok = n_doc[noun_idx]
+            for word_l, doc in zip(content_words, docs):
+                pos_tag = 'X'
+                if len(doc) > target_idx:
+                    tok = doc[target_idx]
                     if tok.text.lower() == word_l:
-                        n_pos = tok.pos_
+                        pos_tag = tok.pos_
                     else:
-                        for t in n_doc:
+                        for t in doc:
                             if t.text.lower() == word_l:
-                                n_pos = t.pos_
+                                pos_tag = t.pos_
                                 break
-
-                # Adjective context
-                if len(a_doc) > adj_idx:
-                    tok = a_doc[adj_idx]
-                    if tok.text.lower() == word_l:
-                        a_pos = tok.pos_
-                    else:
-                        for t in a_doc:
-                            if t.text.lower() == word_l:
-                                a_pos = t.pos_
-                                break
-
-                # Decision logic:
-                # - Both agree → use that POS
-                # - Noun-context says NOUN and adj-context says ADJ → it's an ADJ
-                #   (capitalization tricked the noun context)
-                # - Noun-context says NOUN and adj-context says NOUN → it's a NOUN
-                # - Noun-context says NOUN and adj-context says VERB → it's a VERB
-                #   (noun-context was fooled by capitalization)
-                # - Otherwise → trust adjective context (lowercase, no cap bias)
-                if n_pos == a_pos:
-                    pos_tag = n_pos
-                elif n_pos in ('NOUN', 'PROPN') and a_pos in ('NOUN', 'PROPN'):
-                    pos_tag = 'NOUN'
-                elif n_pos in ('NOUN', 'PROPN') and a_pos not in ('NOUN', 'PROPN'):
-                    # Noun-context was likely fooled by capitalization
-                    # Trust the adjective context (lowercase, no bias)
-                    pos_tag = a_pos
                 else:
-                    # Neither is noun — trust adjective context
-                    pos_tag = a_pos
+                    for t in doc:
+                        if t.text.lower() == word_l:
+                            pos_tag = t.pos_
+                            break
 
                 self.pos_cache[word_l] = pos_tag
                 if pos_tag in ('NOUN', 'PROPN'):
@@ -509,48 +481,26 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.nlp_sp = None
 
     def _eval_single_word_case(self, token_lower):
-        """POS check using SpaCy with dual-context framing.
+        """POS check using SpaCy with capitalized word in sentence context.
 
-        Uses the same dual-context approach as batch_tag_words:
-          1. Noun context:     'Das {Word} ist hier.'
-          2. Adjective context: 'Die {word} Sachen sind gut.'
-        Resolves disagreements by trusting the adjective context.
+        Uses the same approach as batch_tag_words:
+          'Das {Word} ist hier.'
+        Word is capitalized because German SpaCy needs capitalization
+        to identify nouns correctly.
         """
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
 
         if self.nlp_sp is not None:
-            # Noun context (capitalized)
-            n_doc = self.nlp_sp(f"Das {token_lower.capitalize()} ist hier .")
-            n_pos = 'X'
-            if len(n_doc) > 1 and n_doc[1].text.lower() == token_lower:
-                n_pos = n_doc[1].pos_
+            doc = self.nlp_sp(f"Das {token_lower.capitalize()} ist hier .")
+            pos_tag = 'X'
+            if len(doc) > 1 and doc[1].text.lower() == token_lower:
+                pos_tag = doc[1].pos_
             else:
-                for t in n_doc:
+                for t in doc:
                     if t.text.lower() == token_lower:
-                        n_pos = t.pos_
+                        pos_tag = t.pos_
                         break
-
-            # Adjective context (lowercase)
-            a_doc = self.nlp_sp(f"Die {token_lower} Sachen sind gut .")
-            a_pos = 'X'
-            if len(a_doc) > 1 and a_doc[1].text.lower() == token_lower:
-                a_pos = a_doc[1].pos_
-            else:
-                for t in a_doc:
-                    if t.text.lower() == token_lower:
-                        a_pos = t.pos_
-                        break
-
-            # Decision: same logic as batch_tag_words
-            if n_pos == a_pos:
-                pos_tag = n_pos
-            elif n_pos in ('NOUN', 'PROPN') and a_pos in ('NOUN', 'PROPN'):
-                pos_tag = 'NOUN'
-            elif n_pos in ('NOUN', 'PROPN') and a_pos not in ('NOUN', 'PROPN'):
-                pos_tag = a_pos  # trust adj context
-            else:
-                pos_tag = a_pos
 
             self.pos_cache[token_lower] = pos_tag
             if pos_tag in ('NOUN', 'PROPN'):
