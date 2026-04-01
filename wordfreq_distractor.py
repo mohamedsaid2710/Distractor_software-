@@ -85,10 +85,14 @@ class wordfreq_dict(distractor_dict):
                 matches.append(word.text)
         return matches
 
-    def batch_tag_words(self, words):
+    def batch_tag_words(self, words, batch_size=512):
         """Tag a list of words in bulk using high-performance SpaCy batching.
         
         Evaluates capitalization mapping to safely identify valid German nouns.
+        
+        Args:
+            words: List of words to tag
+            batch_size: SpaCy pipeline batch size (default 512, configurable via spacy_batch_size param)
         """
         if self.nlp_sp is None or not words:
             return
@@ -125,8 +129,8 @@ class wordfreq_dict(distractor_dict):
         if content_words:
             cap_words = [w.capitalize() for w in content_words]
             try:
-                # High-performance batched pipeline! 
-                docs = list(self.nlp_sp.pipe(cap_words, disable=['ner', 'parser', 'lemmatizer'], batch_size=5000))
+                # High-performance batched pipeline (keep lemmatizer for morphological analysis)
+                docs = list(self.nlp_sp.pipe(cap_words, disable=['ner', 'parser'], batch_size=batch_size))
                 for word_l, cap_word, doc in zip(content_words, cap_words, docs):
                     if len(doc) > 0 and doc[0].pos_ in ('NOUN', 'PROPN'):
                         self.pos_cache[word_l] = doc[0].pos_
@@ -135,7 +139,6 @@ class wordfreq_dict(distractor_dict):
                         self.pos_cache[word_l] = doc[0].pos_ if len(doc) > 0 else 'X'
                         self.case_map[word_l] = None
             except Exception as e:
-                import logging
                 logging.error(f"SpaCy batch tagging failed: {e}")
                 for word_l in content_words:
                     self.case_map[word_l] = None
@@ -191,7 +194,8 @@ class wordfreq_dict(distractor_dict):
         # 3. --- HYPER-SPEED OPTIMIZATION: BATCH TAGGING ---
         # Instead of tagging words one-by-one in the loop, we tag the entire pool at once!
         if self.nlp_sp is not None:
-            self.batch_tag_words(distractor_opts)
+            spacy_batch_size = int(params.get("spacy_batch_size", 512))
+            self.batch_tag_words(distractor_opts, batch_size=spacy_batch_size)
             
         # 4. Filter the pool using the now-cached high-quality POS tags
         if pos_filter:
