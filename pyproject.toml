@@ -12,7 +12,11 @@ dependencies = [
     "torch>=2.0.0",
     "transformers>=4.30.0",
     "wordfreq>=3.0.0",
-    "de_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.8.0/de_core_news_sm-3.8.0-py3-none-any.whl"
+    "en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
+    "fasttext>=0.9.3",
+    "numpy>=2.4.2",
+    "scipy>=1.17.1",
+    "farasapy>=0.0.14",
 ]
 
 [[tool.uv.index]]

@@ -18,6 +18,7 @@ exclude_propn_candidates: False
 enforce_length_match: True
 lowercase_only: False
 apply_postcase: False
+match_noun_pos: True
 
 # --- Semantic Filtering ---
 # Rejects candidates that are semantically similar to the target word.

@@ -119,13 +119,12 @@ def cosine_similarity(vec1, vec2):
 
 
 def semantic_similarity(word1, word2, lang='de'):
-    """Compute semantic similarity between two words (0 to 1)."""
+    """Compute semantic similarity between two words (-1 to 1)."""
     vec1 = get_word_vector(word1, lang)
     vec2 = get_word_vector(word2, lang)
     
     sim = cosine_similarity(vec1, vec2)
-    # Clamp to [0, 1] since cosine can be negative
-    return max(0.0, sim)
+    return sim
 
 
 def is_semantically_dissimilar(target, candidate, threshold=0.35, lang='de'):
@@ -168,7 +167,8 @@ def filter_by_semantic_dissimilarity(target, candidates, threshold=0.35, lang='d
     
     filtered = []
     for cand in candidates:
-        cand_vec = get_word_vector(cand, lang)
+        text = cand.text if hasattr(cand, 'text') else str(cand)
+        cand_vec = get_word_vector(text, lang)
         sim = cosine_similarity(target_vec, cand_vec)
         
         if sim < threshold:
@@ -204,7 +204,8 @@ def batch_filter_semantic(target, candidates, threshold=0.35, lang='de'):
     valid_indices = []
     for i, cand in enumerate(candidates):
         try:
-            vec = model.get_word_vector(cand.lower())
+            text = cand.text if hasattr(cand, 'text') else str(cand)
+            vec = model.get_word_vector(text.lower())
             if vec is not None:
                 cand_vecs.append(vec)
                 valid_indices.append(i)

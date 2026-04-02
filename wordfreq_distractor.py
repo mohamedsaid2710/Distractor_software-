@@ -32,6 +32,7 @@ class wordfreq_dict(distractor_dict):
     def __init__(self, params={}):
         self.words = []
         self.words_by_len = {}
+        self.nlp_sp = None
 
     def _build_length_index(self):
         """Internal helper to organize words by length for fast lookup."""
@@ -267,6 +268,7 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
 
     def __init__(self, params={}):
         self.lang = "en"
+        self.nlp_sp = None
         exclude = params.get("exclude_words", "exclude_en.txt")
         include = params.get("include_words", None)
         lowercase_only = bool(params.get("lowercase_only", True))
@@ -638,6 +640,25 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
 
     def __init__(self, params={}):
         self.lang = "ar"
+        self.nlp_sp = None
+        self.segmenter = None
+        
+        # Initialize Farasa for Arabic NLP
+        try:
+            from farasa.pos import FarasaPOSTagger
+            # interactive=True spawns a persistent Java process, making it much faster
+            self.nlp_sp = FarasaPOSTagger(interactive=True)
+            print("[INFO] Farasa POSTagger loaded successfully for Arabic.", flush=True)
+        except Exception as e:
+            print(f"[WARN] Farasa POSTagger not found or failed to load. Install 'farasapy' for Arabic POS tagging. Error: {e}")
+
+        try:
+            from farasa.segmenter import FarasaSegmenter
+            self.segmenter = FarasaSegmenter(interactive=True)
+            print("[INFO] Farasa Segmenter loaded successfully for Arabic prefix filtering.", flush=True)
+        except Exception as e:
+            print(f"[WARN] Farasa Segmenter not found. Arabic distractors may contain 'waow' prefixes. Error: {e}")
+
         exclude = params.get("exclude_words", "exclude_ar.txt")
         include = params.get("include_words", None)
         min_word_len = int(params.get("min_word_len", 2))
@@ -686,8 +707,19 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         freq_dict = wordfreq.get_frequency_dict("ar")
         source_words = include_words if include_words is not None else freq_dict.keys()
 
+        # Define clitics to filter out from distractor base dictionary
+        # This prevents generating distractors with obvious agglutinated prefixes
+        banned_clitic_prefixes = ('و+', 'ف+', 'ب+', 'ك+', 'ل+')
+        
         self.words = []
         seen = set()
+        
+        # Batch segment the source words if Segmenter is loaded
+        # Farasa Segmenter can be slow one by one, so we pre-segment the most frequent N words
+        # but wait, the loop processes raw from iterators, we can just segment per word since
+        # freq dict is large. Let's segment on the fly but only for words that pass initial regex.
+        
+        print("[INFO] Building Arabic distractor vocabulary, isolating clean stems...", flush=True)
         for raw in source_words:
             token = strip_arabic_diacritics(raw)
             if token in seen:
@@ -698,6 +730,17 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
                 continue
             if len(token) < min_word_len:
                 continue
+            
+            # Farasa Prefix filter
+            if self.segmenter:
+                try:
+                    seg = self.segmenter.segment(token)
+                    # if the segmented token starts with any banned clitic prefix
+                    if any(seg.startswith(clitic) for clitic in banned_clitic_prefixes):
+                        continue
+                except Exception:
+                    pass
+                
             try:
                 z = wordfreq.zipf_frequency(token, "ar")
             except Exception:
@@ -716,6 +759,70 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
     def get_titlecase_variant(self, token):
         """Arabic has no casing; always returns None."""
         return None
+
+    def has_titlecase_variant(self, token):
+        """Arabic has no title casing; always returns False."""
+        return False
+
+    def batch_tag_words(self, words, params=None):
+        """Tag Arabic words using Farasa POSTagger."""
+        if getattr(self, 'nlp_sp', None) is None or not words:
+            return
+
+        if not hasattr(self, 'pos_cache'):
+            self.pos_cache = {}
+
+        unique_words = list(set(w for w in words if w not in self.pos_cache))
+        if not unique_words:
+            return
+
+        print(f"    [NLP] Running Farasa POS Tagger on {len(unique_words)} Arabic candidates...", flush=True)
+        # Farasa interactive doesn't have a reliable batch API method, so run loops. 
+        # Interactive mode avoids re-loading the jar for each call so it's quite fast.
+        for w in unique_words:
+            try:
+                # e.g., "S-و/CONJ+ال/DET+قمر/NOUN"
+                tagged = self.nlp_sp.tag(w)  # this sometimes has whitespace/newlines
+                parts = tagged.split('+')
+                pos = 'X'
+                # Find the first true lexical tag from the end
+                for part in reversed(parts):
+                    if '/' in part:
+                        curr = part.split('/')[-1].strip().upper()
+                        # Filter out common prefix clitic classifications
+                        if curr not in ('CONJ', 'PREP', 'DET', 'PART', 'PUNC'):
+                            pos = curr
+                            break
+                if pos == 'X' and parts:
+                    if '/' in parts[-1]:
+                        pos = parts[-1].split('/')[-1].strip().upper()
+                
+                # Standardize Farasa outputs to Universal POS (UPOS) tags
+                # so it maps correctly with the rest of the software's filters
+                if pos == 'V': pos = 'VERB'
+                elif pos == 'PREP': pos = 'ADP'
+                elif pos == 'CONJ': pos = 'CCONJ'
+                elif 'PRON' in pos: pos = 'PRON'
+                elif pos not in ('NOUN', 'ADJ', 'ADV', 'NUM', 'DET', 'PART', 'PROPN'):
+                    if pos == 'X':
+                        pass # keep as X
+                    else:
+                        pos = 'X' # fallback
+                
+                self.pos_cache[w] = pos
+            except Exception:
+                self.pos_cache[w] = 'X'
+
+        # Try to save to cache file just to keep running performance high
+        try:
+            import json
+            cache_file = "models/arabic_code/arabic_pos_cache.json"
+            import os
+            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(self.pos_cache, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
 
 def get_frequency_ar(word):

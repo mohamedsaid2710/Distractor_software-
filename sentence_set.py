@@ -51,10 +51,22 @@ _X_PLACEHOLDER_RE = re.compile(r"^x(?:-x)*$", re.IGNORECASE)
 _nlp_model = {}
 
 def _get_nlp_model(lang='de', params=None):
-    """Return a loaded NLP pipeline (Stanza for 'de', SpaCy for 'en'), else None."""
+    """Return a loaded NLP pipeline. Stanza for 'de', SpaCy for 'en', None for others."""
     global _nlp_model
-    key = 'en' if str(lang or '').lower().startswith('en') else 'de'
+    lang_lower = str(lang or '').lower()
     
+    if lang_lower.startswith('en'):
+        key = 'en'
+    elif lang_lower.startswith('de'):
+        key = 'de'
+    elif lang_lower.startswith('ar'):
+        # For Arabic, POS tagging is done exclusively via Farasa inside wordfreq_distractor
+        # We return a dummy object just so `nlp_model is None` checks pass, allowing
+        # get_candidate_pos to read from dictionary.pos_cache
+        return "FARASA_DELEGATE"
+    else:
+        return None
+        
     if key in _nlp_model:
         return _nlp_model[key]
         
@@ -85,7 +97,7 @@ def _get_nlp_model(lang='de', params=None):
             _nlp_model[key] = None
             return None
 
-        model_names = ['en_core_web_sm', 'en_core_web_md']
+        model_names = ['en_core_web_lg', 'en_core_web_md', 'en_core_web_sm']
         for model_name in model_names:
             try:
                 _nlp_model[key] = spacy.load(model_name)
@@ -167,13 +179,22 @@ def _looks_titlecase_name(body):
     return body[0].isupper() and body[1:].islower()
 
 
-def _normalize_english_distractor_case(distractor_token, is_first_word=False):
-    """English-specific casing normalization based strictly on the distractor's properties."""
+def _normalize_english_distractor_case(distractor_token, is_first_word=False, target_token=""):
+    """English-specific casing normalization based on the distractor's properties and target's case."""
     if _is_x_placeholder_token(distractor_token):
         return distractor_token
     d_prefix, d_body, d_suffix = _split_punct(distractor_token)
     if not d_body:
         return distractor_token
+
+    # Interactive Casing: explicitly copy uppercase or titlecase from the target word if available
+    if target_token:
+        _, t_body, _ = _split_punct(target_token)
+        if t_body:
+            if t_body.isupper() and len(t_body) > 1:
+                return d_prefix + d_body.upper() + d_suffix
+            elif t_body.istitle() or (len(t_body) == 1 and t_body.isupper()):
+                return d_prefix + d_body.capitalize() + d_suffix
 
     # Capitalize known acronym distractors.
     if d_body.lower() in _EN_ACRONYM_WHITELIST:
@@ -456,7 +477,26 @@ class Label:
             key = clean
             if key in _pos_cache: return _pos_cache[key]
             try:
-                if lang == 'de':
+                if nlp_model == "FARASA_DELEGATE":
+                    if hasattr(dictionary, 'nlp_sp') and dictionary.nlp_sp is not None:
+                        tagged = dictionary.nlp_sp.tag(clean)
+                        parts = tagged.split('+')
+                        val = 'X'
+                        for part in reversed(parts):
+                            if '/' in part:
+                                curr = part.split('/')[-1].strip()
+                                if curr not in ('CONJ', 'PREP', 'DET', 'PART', 'PUNC'):
+                                    val = curr
+                                    break
+                        if val == 'X' and parts and '/' in parts[-1]:
+                            val = parts[-1].split('/')[-1].strip()
+                        if val == 'NOUN': val = 'NOUN'
+                        elif val == 'ADJ': val = 'ADJ'
+                        elif val == 'V': val = 'VERB'
+                        elif 'PRON' in val: val = 'PRON'
+                    else:
+                        val = None
+                elif lang == 'de':
                     # Stanza
                     doc = nlp_model(clean)
                     val = doc.sentences[0].words[0].upos if doc.sentences and doc.sentences[0].words else None
@@ -1380,14 +1420,14 @@ class Sentence_Set:
                 first_dist = choose_first_word(sentence)
                 first_dist = copy_punct(sentence.words[0], first_dist)
                 if lang == 'en':
-                    first_dist = _normalize_english_distractor_case(first_dist, is_first_word=True)
+                    first_dist = _normalize_english_distractor_case(first_dist, is_first_word=True, target_token=sentence.words[0])
                 sentence.distractors.append(first_dist)
             for i in range(1, len(sentence.labels)):
                 lab = sentence.labels[i]
                 # we match distractors to their real words on punctuation
                 distractor = copy_punct(sentence.words[i], self.labels[lab].distractor)
                 if lang == 'en':
-                    distractor = _normalize_english_distractor_case(distractor, is_first_word=False)
+                    distractor = _normalize_english_distractor_case(distractor, is_first_word=False, target_token=sentence.words[i])
                 sentence.distractors.append(distractor)
             # (No forced pseudoword replacements: system uses real-word distractors only)
             # Post-process casing: only apply when appropriate (e.g., German pipeline).
