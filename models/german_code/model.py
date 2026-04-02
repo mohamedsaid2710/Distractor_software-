@@ -30,8 +30,8 @@ class GermanScorer(lang_model):
         device = params.get("device", None)
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Store model_batch_size from params (default 256 for backward compatibility)
-        self.model_batch_size = int(params.get("model_batch_size", params.get("batch_size", 256)))
+        # Store batch_size from params (default 256 for backward compatibility)
+        self.batch_size = int(params.get("batch_size", 256))
 
         self.tokenizer = self._load_tokenizer(model_name)
         self.model = self._load_model(model_name).to(self.device)
@@ -73,14 +73,15 @@ class GermanScorer(lang_model):
         return any(os.path.exists(os.path.join(model_dir, m)) for m in weight_markers)
 
     def _load_tokenizer(self, model_name):
+        token = os.environ.get("HF_TOKEN", None)
         # Prefer local cache/files first, then allow online lookup.
         # Try slow tokenizer first for backwards compatibility, then fast tokenizer
         # so partial caches containing only tokenizer.json still work offline.
         attempts = (
-            {"use_fast": False, "local_files_only": True},
-            {"use_fast": True, "local_files_only": True},
-            {"use_fast": False},
-            {"use_fast": True},
+            {"use_fast": False, "local_files_only": True, "token": token},
+            {"use_fast": True, "local_files_only": True, "token": token},
+            {"use_fast": False, "token": token},
+            {"use_fast": True, "token": token},
         )
         last_error = None
         for kwargs in attempts:
@@ -96,6 +97,7 @@ class GermanScorer(lang_model):
         ) from last_error
 
     def _load_model(self, model_name):
+        token = os.environ.get("HF_TOKEN", None)
         # If user points to a local directory, fail fast with a clear message.
         if self._is_local_dir(model_name) and not self._has_local_weights(model_name):
             raise RuntimeError(
@@ -106,12 +108,12 @@ class GermanScorer(lang_model):
             )
         # First try strict local mode.
         try:
-            return AutoModelForCausalLM.from_pretrained(model_name, local_files_only=True)
+            return AutoModelForCausalLM.from_pretrained(model_name, local_files_only=True, token=token)
         except Exception:
             pass
         # Then allow remote lookup.
         try:
-            return AutoModelForCausalLM.from_pretrained(model_name)
+            return AutoModelForCausalLM.from_pretrained(model_name, token=token)
         except Exception as e:
             raise RuntimeError(
                 "Failed to load German model '%s'. "
@@ -198,9 +200,9 @@ class GermanScorer(lang_model):
         if not words:
             return []
         
-        # Use instance model_batch_size if not overridden
+        # Use instance batch_size if not overridden
         if batch_size is None:
-            batch_size = self.model_batch_size
+            batch_size = self.batch_size
             
         ctx_ids = list(hidden) if isinstance(hidden, (list, tuple)) else list(hidden)
         ctx_len = len(ctx_ids)
