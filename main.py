@@ -1,5 +1,6 @@
 import logging
 import importlib
+import torch
 from set_params import set_params
 from limit_repeats import Repeatcounter
 from input import read_input
@@ -11,6 +12,14 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
     """Takes an input file, and an output file location
     Does the whole distractor thing (according to specified parameters)
     Writes in outformat"""
+    # Fix for Stanza loading in PyTorch 2.6+
+    if hasattr(torch, "serialization") and hasattr(torch.serialization, "add_safe_globals"):
+        try:
+            import numpy
+            torch.serialization.add_safe_globals([numpy.core.multiarray._reconstruct])
+        except Exception:
+            pass
+
     if outformat not in ["delim", "ibex"]:
         logging.error("outfile format not understood")
         raise ValueError
