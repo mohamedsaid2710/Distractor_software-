@@ -167,25 +167,20 @@ def _looks_titlecase_name(body):
     return body[0].isupper() and body[1:].islower()
 
 
-def _normalize_english_distractor_case(source_token, distractor_token):
-    """English-specific casing normalization using source token as signal."""
+def _normalize_english_distractor_case(distractor_token, is_first_word=False):
+    """English-specific casing normalization based strictly on the distractor's properties."""
     if _is_x_placeholder_token(distractor_token):
         return distractor_token
-    _, src_body, _ = _split_punct(source_token)
     d_prefix, d_body, d_suffix = _split_punct(distractor_token)
     if not d_body:
         return distractor_token
 
-    # If the replaced token is an acronym, force distractor to all-caps.
-    if _looks_acronym(src_body):
-        return d_prefix + d_body.upper() + d_suffix
-
-    # Also capitalize known acronym distractors.
+    # Capitalize known acronym distractors.
     if d_body.lower() in _EN_ACRONYM_WHITELIST:
         return d_prefix + d_body.upper() + d_suffix
 
-    # If the source token looks like a proper name, keep Title Case.
-    if _looks_titlecase_name(src_body):
+    # Sentence-initial capitalization
+    if is_first_word and d_body:
         return d_prefix + d_body[:1].upper() + d_body[1:].lower() + d_suffix
 
     return distractor_token
@@ -865,10 +860,8 @@ class Label:
                     best_candidate = _find_best_match(distractor_opts)
 
                 if best_candidate:
-                    # Apply grammatical casing based on the DISTRACTOR'S class OR mirror source
-                    source_token = self.words[0] if self.words else None
-                    self.distractor = _normalize_distractor_token(best_candidate, dictionary, lang=lang, source_token=source_token)
-                    return self.distractor
+                        # Apply grammatical casing based on the distractor's class
+                        self.distractor = _normalize_distractor_token(best_candidate, dictionary, lang=lang)
 
         # 1. Pre-filter candidates (cheap checks: length, banned, POS, repeat)
         qualified_candidates = []
@@ -1115,8 +1108,7 @@ class Label:
             best_min_surp = float('-inf')
 
         # Final casing pass based on DISTRACTOR category
-        source_token = self.words[0] if self.words else None
-        self.distractor = _normalize_distractor_token(best_word, dictionary, lang=lang, source_token=source_token)
+        self.distractor = _normalize_distractor_token(best_word, dictionary, lang=lang)
 
         if not force_max_surprisal:
             logging.warning("Could not find a word to meet threshold for item %s, label %s, returning %s with %f min surp instead",
@@ -1388,14 +1380,14 @@ class Sentence_Set:
                 first_dist = choose_first_word(sentence)
                 first_dist = copy_punct(sentence.words[0], first_dist)
                 if lang == 'en':
-                    first_dist = _normalize_english_distractor_case(sentence.words[0], first_dist)
+                    first_dist = _normalize_english_distractor_case(first_dist, is_first_word=True)
                 sentence.distractors.append(first_dist)
             for i in range(1, len(sentence.labels)):
                 lab = sentence.labels[i]
                 # we match distractors to their real words on punctuation
                 distractor = copy_punct(sentence.words[i], self.labels[lab].distractor)
                 if lang == 'en':
-                    distractor = _normalize_english_distractor_case(sentence.words[i], distractor)
+                    distractor = _normalize_english_distractor_case(distractor, is_first_word=False)
                 sentence.distractors.append(distractor)
             # (No forced pseudoword replacements: system uses real-word distractors only)
             # Post-process casing: only apply when appropriate (e.g., German pipeline).
