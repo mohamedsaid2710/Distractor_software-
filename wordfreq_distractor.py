@@ -288,6 +288,21 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
                 logging.error(f"Could not load exclude_words from {exclude}: {e}")
                 pass
 
+        # === PRELOAD EN POS CACHE ===
+        if not hasattr(self, 'pos_cache'):
+            self.pos_cache = {}
+        try:
+            import json
+            import os
+            cache_file = "models/english_code/english_pos_cache.json"
+            if os.path.exists(cache_file):
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached_data = json.load(f)
+                    self.pos_cache.update(cached_data)
+                print(f"[CACHE] Successfully loaded {len(cached_data)} POS tags from {cache_file}!", flush=True)
+        except Exception as e:
+            print(f"[CACHE] Error loading EN POS cache: {e}")
+
         include_words = None
         if include is not None and os.path.exists(include):
             try:
@@ -327,19 +342,6 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
             seen.add(low)
         self._build_length_index()
 
-
-# ---------------------------------------------------------------------------
-# German noun suffix heuristic (no spaCy required)
-# ---------------------------------------------------------------------------
-# Well-known derivational suffixes that almost exclusively form nouns.
-_GERMAN_NOUN_SUFFIXES = (
-    'ung', 'heit', 'keit', 'schaft', 'tion', 'sion', 'nis', 'tum', 'ling', 
-    'tät', 'ment', 'chen', 'lein', 'ismus', 'eur', 'ant', 'ent', 'ist', 'enz', 'anz',
-    'ität', 'ik', 'ur', 'ade', 'age', 'ie', 'elle', 'ette', 'ine', 'ive', 'ose',
-    'um', 'form', 'werk', 'zeug', 'haus', 'raum', 'platz', 'zeit', 'kraft', 'land',
-    # Additional common German endings
-    'er', 'el', 'en', 'e' 
-)
 
 
 
@@ -395,7 +397,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         try:
             import json
             import os
-            cache_file = "german_pos_cache.json"
+            cache_file = "models/german_code/german_pos_cache.json"
             if os.path.exists(cache_file):
                 with open(cache_file, "r", encoding="utf-8") as f:
                     cached_data = json.load(f)
@@ -657,6 +659,21 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
                 import logging
                 logging.error(f"Could not load exclude_words from {exclude}: {e}")
                 pass
+
+        # === PRELOAD AR POS CACHE ===
+        if not hasattr(self, 'pos_cache'):
+            self.pos_cache = {}
+        try:
+            import json
+            import os
+            cache_file = "models/arabic_code/arabic_pos_cache.json"
+            if os.path.exists(cache_file):
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached_data = json.load(f)
+                    self.pos_cache.update(cached_data)
+                print(f"[CACHE] Successfully loaded {len(cached_data)} POS tags from {cache_file}!", flush=True)
+        except Exception as e:
+            print(f"[CACHE] Error loading AR POS cache: {e}")
 
         include_words = None
         if include is not None and os.path.exists(include):
