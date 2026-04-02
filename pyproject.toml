@@ -3,7 +3,7 @@ name = "maze-automate"
 version = "0.1.0"
 description = "Maze-style distractor stimulus generator for psycholinguistic experiments in English, German, and Arabic"
 readme = "README.md"
-license = "MIT"
+license = {text = "MIT"}
 requires-python = ">=3.12"
 dependencies = [
     "huggingface-hub>=0.20.0",
@@ -18,6 +18,9 @@ dependencies = [
     "scipy>=1.17.1",
     "farasapy>=0.0.14",
 ]
+
+[tool.setuptools]
+packages = []
 
 [[tool.uv.index]]
 url = "https://download.pytorch.org/whl/cu118"
