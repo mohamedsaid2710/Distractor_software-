@@ -79,6 +79,15 @@ def _get_nlp_model(lang='de', params=None):
                 use_gpu = str(params.get('use_gpu', True)).lower() in ('true', '1')
             
             try:
+                # Security bypass for PyTorch 2.6+ Stanza loading
+                import torch
+                import numpy
+                if hasattr(torch.serialization, "add_safe_globals"):
+                    torch.serialization.add_safe_globals([numpy.core.multiarray._reconstruct])
+            except Exception:
+                pass
+
+            try:
                 # Try to load; download if necessary
                 _nlp_model[key] = stanza.Pipeline('de', processors='tokenize,mwt,pos,lemma', use_gpu=use_gpu)
             except Exception:
