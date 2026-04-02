@@ -19,8 +19,10 @@ dependencies = [
     "farasapy>=0.0.14",
 ]
 
-[tool.setuptools]
-packages = []
+[tool.setuptools.packages.find]
+where = ["."]
+include = []
+exclude = ["wiki*", "models*"]
 
 [[tool.uv.index]]
 url = "https://download.pytorch.org/whl/cu118"
