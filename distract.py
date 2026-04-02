@@ -4,28 +4,6 @@ import argparse
 import os
 import sys
 import time
-import torch
-
-# EXTREMELY CRITICAL FOR PYTORCH 2.6+ SECURITY
-# This enables loading of Stanza & SpaCy models that rely on numpy-based unpickling.
-# We must do this before any other imports that might use torch.
-def apply_pytorch_security_patch():
-    try:
-        from torch.serialization import add_safe_globals
-        import numpy as np
-        add_safe_globals([np.core.multiarray._reconstruct, np.ndarray, np.dtype, np.core.multiarray.scalar])
-        # Force global weights_only to False to handle older saved models in the environment
-        import torch.serialization
-        original_load = torch.load
-        def patched_load(*args, **kwargs):
-            if 'weights_only' not in kwargs:
-                kwargs['weights_only'] = False
-            return original_load(*args, **kwargs)
-        torch.load = patched_load
-    except Exception:
-        pass
-
-apply_pytorch_security_patch()
 
 # Keep CLI output focused on pipeline errors instead of TF backend noise.
 os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
