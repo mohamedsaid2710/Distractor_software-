@@ -114,10 +114,10 @@ class wordfreq_dict(distractor_dict):
         if not content_words:
             return
 
-        batch_size = 5000
+        batch_size = 2000
         if params is not None:
             try:
-                batch_size = int(params.get('spacy_batch_size', 5000))
+                batch_size = int(params.get('nlp_batch_size', params.get('spacy_batch_size', 2000)))
             except Exception:
                 pass
 
