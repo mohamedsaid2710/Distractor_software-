@@ -386,7 +386,28 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 import logging
                 logging.error(f"Could not load exclude_words from {exclude}: {e}")
                 pass
-
+        # === PRELOAD NOUN CACHE (NEW) ===
+        if not hasattr(self, 'pos_cache'):
+            self.pos_cache = {}
+        
+        try:
+            import json
+            import os
+            cache_file = "german_pos_cache.json"
+            if os.path.exists(cache_file):
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached_data = json.load(f)
+                    self.pos_cache.update(cached_data)
+                
+                for lw, upos in cached_data.items():
+                    if upos in ('NOUN', 'PROPN'):
+                        self.case_map[lw] = lw.capitalize()
+                    else:
+                        self.case_map[lw] = None
+                        
+                print(f"[CACHE] Successfully loaded {len(cached_data)} POS tags from {cache_file}!", flush=True)
+        except Exception as e:
+            print(f"[CACHE] Error loading POS cache: {e}")
         include_words = None
         if include is not None and os.path.exists(include):
             try:
