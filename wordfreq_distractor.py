@@ -389,6 +389,8 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         # === PRELOAD NOUN CACHE (NEW) ===
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
+        if not hasattr(self, 'case_map'):
+            self.case_map = {}
         
         try:
             import json
