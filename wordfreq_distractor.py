@@ -87,35 +87,16 @@ class wordfreq_dict(distractor_dict):
         return matches
 
     def batch_tag_words(self, words, params=None):
-        """Tag a list of words in bulk using high-performance SpaCy batching.
-
-        Uses triple-context POS detection with majority voting:
-          1. Noun context:      'Das {Word} ist hier.'   (Word capitalized)
-          2. Verb context:       'Ich {word} gerne.'      (word lowercase)
-          3. Adjective context:  'Die {word} Sachen sind gut.'  (word lowercase)
-
-        A word is tagged as NOUN only if at least 2 of 3 frames agree.
-        This prevents the capitalization-as-noun bias that affects the
-        single noun-context frame approach — verbs like 'gehe', adjectives
-        like 'müde', and adverbs like 'voraussichtlich' are no longer
-        falsely capitalized.
+        """Tag a list of words in bulk using high-performance Stanza neural tagging.
+        
+        This method processes words using Stanza's universal POS (UPOS) tagging.
+        For German, it identifies nouns and proper nouns to ensure correct TitleCasing,
+        leveraging Stanza's deep-learning morphosyntactic analysis.
         """
         if self.nlp_sp is None or not words:
             if self.nlp_sp is None:
                 print(f"[DIAG] batch_tag_words SKIPPED: nlp_sp is None", flush=True)
             return
-
-        # German function words - ALWAYS lowercase, skip tagging
-        FUNCTION_WORDS = {
-            'ins', 'im', 'am', 'ans', 'zum', 'zur', 'vom', 'beim', 'durchs', 'fürs',
-            'ums', 'aufs', 'übers', 'unters', 'hinters', 'vors',
-            'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einem', 'eines', 'einer', 'einen',
-            'mein', 'dein', 'sein', 'ihr', 'unser', 'euer',
-            'ab', 'an', 'auf', 'aus', 'bei', 'bis', 'durch', 'für', 'gegen',
-            'hinter', 'in', 'mit', 'nach', 'neben', 'ohne', 'über', 'um',
-            'unter', 'von', 'vor', 'zu', 'zwischen',
-            'pro', 'per', 'ach', 'oh',
-        }
 
         # Initialize POS cache if not exists
         if not hasattr(self, 'pos_cache'):
@@ -126,16 +107,10 @@ class wordfreq_dict(distractor_dict):
         if not unique_words:
             return
 
-        # First pass: mark function words (no Stanza needed)
-        for w in unique_words:
-            if w in FUNCTION_WORDS:
-                self.case_map[w] = None
-                self.pos_cache[w] = 'ADP'
-
-        # Second pass: Stanza Tagging (German)
+        # Stanza Tagging (German)
         # We pass the raw words to Stanza. Since we are dealing with German morphology
         # Stanza's neural net handles capitalization assumptions internally very well.
-        content_words = [w for w in unique_words if w not in FUNCTION_WORDS]
+        content_words = unique_words
         if not content_words:
             return
 
