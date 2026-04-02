@@ -1,0 +1,47 @@
+text_data = """GP_sg;1;Für das Klassikfestival waren viele Musikerinnen angereist. Die Musikerin vom Leipziger Sinfonieorchester lobten die Dirigenten begeistert in der Pressekonferenz.;x-x-x dir Einschränkungen wolle allem Achtelfinale bereitete ihr Kameraden ums augenmerk Schwierigkeiten wänden weh Abstimmung finsternis pro ehe Angelegenheiten;0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18
+GP_sg;2;Als die Lektorinnen die Humboldt Universität betraten, waren bereits viele Gespräche im Gange. Die Lektorin aus dem französischen Verlag begrüßten die Professoren besonders herzlich.;x-x-x uns Gemeinderat mir häuschen Konditionen vorgänge flöte wahrung eifel gefährden als nüsse ihm Beihilfe bis man markenzeichen Kummer angriffen ost Wirksamkeit immernoch unfällen;0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+GP_sg;3;Die Chefinnen einer Werbeagentur in Berlin sind bekannt für ihre kreativen Kampagnen. Die Chefin aus dem Design-Büro haben die Kunden kürzlich eingeladen.;x-x-x Produzent selbe Katastrophen zum strafe erde herzogs ans arme mediziner Ansprüche zog Spiels wie ihn Bewältigung zügen tür Laster bestände muskulatur;0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21
+GP_sg;4;Am ersten Adventswochenende reisten viele Illustratorinnen nach Köln zur Buchmesse. Die Illustratorin von der Kunstakademie lobten die Verleger einstimmig für ihr Engagement.;x-x höhlen Differenzierung angehen grube Wissenschaftler laut nahe bei Prozesses mut Verschwendung zur wer Voraussetzung ziffer das herzogin bekämpfung vor wir Mechaniker;0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21
+GP_sg;5;Während der Ausstellungseröffnung im Stuttgarter Kunstmuseum trafen sich viele Kuratorinnen. Die Kuratorin der Skulpturenabteilung überzeugten die Kritiker durch ihr beeindruckendes Fachwissen.;x-x-x-x-x-x-x nix Bürgermeisterin aus verhandlung Bestätigung gepäck euch wenig Ministeriums sie Infektion dem Einkommensteuer versicherer wem Ausfälle lücke ich geschäftsführer prävention;0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
+GP_sg;6;Im Tierpark Hagenbeck gibt es engagierte Tierpflegerinnen, die Führungen mit praktischen Aktivitäten für Kinder anbieten. Die Tierpflegerin bei den Elefanten haben die Schüler aufmerksam beim Reinigen des Stalls beobachtet.;x-x Konzerns geborenen lief die gültigkeit Meisterschaften der erkrankte auf flüssigkeit Herstellers vom Gürtel wohnsitz arm Kombinationen von des Denkmäler säule lag Manöver bewegungen fiel anleihen ein Stühle überschuss;0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28
+GP_sg;7;Beim großen Antiquitätenmarkt in Wien suchten Sammlerinnen nach besonderen Stücken. Die Sammlerin aus der Wiener Kunststiftung entdeckten die Münzhändler gleich nach der Eröffnung.;x-x-x-x gräber Identifizierung für märz zwingen Behandlungen ohne erkrankten zufolge wär Kreislauf mit tut rädern Eigenschaften vermeidung nah Wahrnehmung längst ruhe rot Auflösung;0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22
+GP_sg;8;An dem aufsehenerregenden Gerichtsprozess waren mehrere Anwältinnen beteiligt. Die Anwältin aus dem Büro am Marienplatz kritisierten die Richter scharf nach der Urteilsverkündung.;x-x tun einschliesslich Geschäftsmodell risse münster Mechanismen abschluss bot Mehrheit oft eng blut wen verbrennung programmiert alt Fassade läufer lied app Ausschreitungen;0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21
+GP_sg;9;Beim Schachturnier in der Stuttgarter Liederhalle traten vielversprechende Nachwuchsspielerinnen an. Die Nachwuchsspielerin vom Hamburger Schachverein besiegten die Favoriten souverän in der Finalrunde.;x-x-x-x Angelegenheit nur sei angestellte Ankündigung ämtern missverständnis Premierminister hör tat Mitgliedstaaten ruf verträgen Schwankungen problemen mag Geschäfte diensten neu los Entzündung;0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21
+GP_sg;10;Mehrere Rechtsanwältinnen aus Frankfurt waren an der Verhandlung beteiligt. Die Rechtsanwältin aus der Kanzlei am Opernplatz lobten die Richter nach dem Plädoyer für ihre akribische Vorbereitung.;x-x-x-x-x-x-x Nationalspieler bin kapazität könnt gar rum anzugreifen vergütung gab Mitgliedschaft nie war Klausel hab Auszahlung spüren kam Schüsse volk dar Defizite ort ecke Erkrankung Stoffwechsel;0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25"""
+
+correct = 0
+wrong = 0
+wrong_examples = []
+sent_starts = ["Die", "Als", "Am", "Während", "Im", "Beim", "An", "Mehrere"]
+
+for line in text_data.split('\n'):
+    if not line.strip(): continue
+    parts = line.strip().split(';')
+    targets = parts[2].split()
+    distractors = parts[3].split()
+        
+    for i in range(1, min(len(targets), len(distractors))):
+        t = targets[i].strip('.,!?')
+        d = distractors[i].strip('.,!?')
+        if not t or not d: continue
+            
+        t_cap = t.istitle()
+        d_cap = d.istitle()
+        
+        if t in sent_starts and i > 0 and targets[i-1].endswith('.'):
+             t_cap = False # Grammatically not a noun, just sentence start.
+        
+        if t_cap == d_cap:
+            correct += 1
+        else:
+            wrong += 1
+            if t_cap:
+                wrong_examples.append(f"{t} (Cap) -> {d} (low)")
+            else:
+                wrong_examples.append(f"{t} (low) -> {d} (Cap)")
+
+print(f"Correct Case Matches: {correct}")
+print(f"Mismatched Cases:     {wrong}")
+print("Mismatches:")
+for e in wrong_examples:
+    print(" -", e)

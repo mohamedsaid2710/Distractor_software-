@@ -463,9 +463,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.words.append(distractor(lw, freq_val, pos=None))
             seen.add(lw)
 
-        # Build case_map: identify which distractor words are German nouns
-        # and store their Titlecased form.
-        self.case_map = {}
+        # (Do not wipe case_map or pos_cache here, they were populated from cache above)
         self.nlp_sp = None
         self._init_spacy()
         self._build_length_index()

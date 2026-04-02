@@ -228,13 +228,12 @@ _POS_COMPATIBLE_CLASSES = {
 }
 
 
-def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=None, is_first_word=False):
-    """Determine correct German casing based on the distractor's own POS.
+def _get_german_grammatical_case(token, dict_obj, is_first_word=False):
+    """Determine correct German casing based strictly on the distractor's own POS.
 
-    Uses the dictionary's pos_cache (built by SpaCy large batch tagging during
-    get_potential_distractors) as the primary POS source.  Falls back to
-    get_titlecase_variant (lazy single-word SpaCy evaluation) only when the
-    pos_cache entry is missing.
+    Uses the dictionary's pos_cache (built offline via precompute_pos.py or
+    in batches by SpaCy) to enforce grammatical capitalization solely on
+    whether the generated distractor itself is a NOUN/PROPN.
 
     Rules (German orthography):
       - Nouns (NOUN/PROPN) → Titlecase
@@ -247,22 +246,16 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=
     if not body:
         return token
 
-    # Determine if the *distractor* is a noun via pos_cache (most reliable)
+    # Determine if the *distractor* is a noun via pos_cache (strict grammar mode)
     distractor_is_noun = False
     t_lower = body.lower()
-    pos_source = 'none'
-
-    # Primary: SpaCy batch-tagged pos_cache (built by batch_tag_words in the
-    # dictionary during get_potential_distractors — uses SpaCy large).
+    
     if hasattr(dict_obj, 'pos_cache') and t_lower in dict_obj.pos_cache:
         distractor_is_noun = dict_obj.pos_cache[t_lower] in ('NOUN', 'PROPN')
-        pos_source = f"pos_cache={dict_obj.pos_cache[t_lower]}"
-    # Secondary: case_map / titlecase variant (lazy single-word SpaCy eval)
     elif hasattr(dict_obj, 'get_titlecase_variant'):
         try:
             tv = dict_obj.get_titlecase_variant(body)
             distractor_is_noun = isinstance(tv, str)
-            pos_source = f"titlecase_variant={'NOUN' if distractor_is_noun else 'non-NOUN'}"
         except Exception:
             pass
 
@@ -271,25 +264,15 @@ def _get_german_grammatical_case(token, dict_obj, source_token=None, source_pos=
     else:
         new_body = body.lower()
 
-    # Diagnostic: HARD PRINT first few casing decisions
-    if not hasattr(_get_german_grammatical_case, '_log_count'):
-        _get_german_grammatical_case._log_count = 0
-    if _get_german_grammatical_case._log_count < 20:
-        has_cache = hasattr(dict_obj, 'pos_cache')
-        cache_size = len(dict_obj.pos_cache) if has_cache else 0
-        print(f"[CASING] '{body}' -> '{new_body}' noun={distractor_is_noun} src={pos_source} cache={has_cache}({cache_size})", flush=True)
-        _get_german_grammatical_case._log_count += 1
-
-    # German rule: sentence-initial word is always capitalized.
     if is_first_word and new_body:
         new_body = new_body[0].upper() + new_body[1:]
 
     return prefix + new_body + suffix
 
-def _normalize_distractor_token(token, dict_obj, lang='de', source_token=None, source_pos=None, is_first_word=False):
-    """Normalize casing for a single distractor token."""
+def _normalize_distractor_token(token, dict_obj, lang='de', is_first_word=False):
+    """Normalize casing for a single distractor token by its own grammatical POS."""
     if lang == 'de':
-        return _get_german_grammatical_case(token, dict_obj, source_token=source_token, source_pos=source_pos, is_first_word=is_first_word)
+        return _get_german_grammatical_case(token, dict_obj, is_first_word=is_first_word)
     
     # Non-German fallback (e.g. English as before)
     if _is_x_placeholder_token(token):
@@ -1433,24 +1416,10 @@ class Sentence_Set:
             if apply_postcase:
                 try:
                     for j in range(len(sentence.distractors)):
-                        # Use the original word's POS tag (from full-sentence
-                        # spaCy tagging in make_labels) instead of re-tagging
-                        # the distractor in isolation.
-                        src_pos = None
-                        if hasattr(sentence, 'pos_tags') and sentence.pos_tags is not None:
-                            try:
-                                src_pos = sentence.pos_tags[j]
-                            except (IndexError, TypeError):
-                                src_pos = None
-                        
-                        src_word = None
-                        try:
-                            src_word = sentence.words[j]
-                        except IndexError:
-                            pass
-                        
+                        # Enforce exact distractor-driven grammatical casing.
+                        # Never match the target's wording or uppercase status.
                         sentence.distractors[j] = _normalize_distractor_token(
-                            sentence.distractors[j], d, lang=lang, source_token=src_word, source_pos=src_pos, is_first_word=(j==0))
+                            sentence.distractors[j], d, lang=lang, is_first_word=(j==0))
                 except Exception:
                     pass
             # Keep first placeholder shape stable (no auto-capitalization side effects).

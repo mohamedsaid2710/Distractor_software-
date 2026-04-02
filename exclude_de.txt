@@ -55,7 +55,7 @@ ms
 afd
 fpö
 övp
-
+app
 
 # --- German profanity / offensive terms ---
 Volksverhetzung
