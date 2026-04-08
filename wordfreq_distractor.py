@@ -481,13 +481,15 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             except Exception:
                 continue
             # Include words bypass frequency filter — they are curated
-            if lw not in include_set:
+            if lw in include_set:
+                # Assign a very high frequency so they always pass filters and appear first
+                z = 9.9 
+            else:
                 effective_min_zipf = min_zipf if len(lw) >= 5 else max(min_zipf, short_word_min_zipf)
                 if z < effective_min_zipf:
                     continue
             freq_val = z * math.log(10)
-            # The word is added; its POS and CASE will be determined 100% by SpaCy on demand
-            # in eval_single_word_case, which uses the contextual frame '"Das {word} ist hier."'
+            # The word is added; its POS and CASE will be determined 100% by SpaCy/Stanza on demand
             self.words.append(distractor(lw, freq_val, pos=None))
             seen.add(lw)
 
