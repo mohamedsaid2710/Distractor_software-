@@ -232,17 +232,20 @@ class wordfreq_dict(distractor_dict):
         if pos_filter:
             filtered = []
             for w in distractor_opts:
-                # Use actual SpaCy POS tag from cache if available
                 w_lower = w.lower()
+                # --- DUAL-CHECK: Combine Stanza POS + wordfreq titlecase heuristic ---
+                # Stanza can misclassify German nouns when fed isolated lowercase words.
+                # wordfreq's titlecase heuristic reflects actual corpus capitalisation.
+                # If EITHER source says NOUN, treat as NOUN (conservative approach).
+                stanza_says_noun = False
                 if hasattr(self, 'pos_cache') and w_lower in self.pos_cache:
-                    spacy_pos = self.pos_cache[w_lower]
-                    # Convert SpaCy POS to simplified NOUN/!NOUN tag
-                    p_tag = "NOUN" if spacy_pos in ('NOUN', 'PROPN') else "!NOUN"
-                else:
-                    # Fallback to titlecase heuristic if POS not cached
-                    is_noun = self.has_titlecase_variant(w)
-                    p_tag = "NOUN" if is_noun else "!NOUN"
-                
+                    stanza_says_noun = self.pos_cache[w_lower] in ('NOUN', 'PROPN')
+
+                wordfreq_says_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
+
+                is_noun = stanza_says_noun or wordfreq_says_noun
+                p_tag = "NOUN" if is_noun else "!NOUN"
+
                 if pos_filter.startswith('!'):
                     if p_tag == pos_filter[1:]: continue
                 elif p_tag != pos_filter:

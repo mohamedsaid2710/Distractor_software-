@@ -267,11 +267,22 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
     if not body:
         return token
 
-    # --- CASING-ONLY MODE: mirror the target's capitalisation ---
-    if match_casing_only and target_token:
-        target_body = strip_punct(target_token)
-        target_is_upper = target_body[0].isupper() if target_body else False
-        if target_is_upper:
+    # --- CASING-ONLY MODE: use distractor's own grammatical class (dual-check) ---
+    # The candidate pool was already filtered (NOUN for uppercase targets,
+    # !NOUN for lowercase targets), so we just need to apply correct casing
+    # based on the distractor's own grammatical category.
+    # We use BOTH pos_cache AND wordfreq titlecase heuristic to be robust.
+    if match_casing_only:
+        t_lower = body.lower()
+        stanza_noun = False
+        if hasattr(dict_obj, 'pos_cache') and t_lower in dict_obj.pos_cache:
+            stanza_noun = dict_obj.pos_cache[t_lower] in ('NOUN', 'PROPN')
+        wf_noun = False
+        if hasattr(dict_obj, 'has_titlecase_variant'):
+            wf_noun = dict_obj.has_titlecase_variant(body)
+        distractor_is_noun = stanza_noun or wf_noun
+
+        if distractor_is_noun:
             new_body = body[0].upper() + body[1:].lower()
         else:
             new_body = body.lower()
