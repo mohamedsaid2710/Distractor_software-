@@ -431,12 +431,21 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         except Exception as e:
             print(f"[CACHE] Error loading POS cache: {e}")
         include_words = None
-        if include is not None and os.path.exists(include):
-            try:
-                with open(include, "r", encoding="utf-8") as f:
-                    include_words = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
-            except Exception:
-                include_words = None
+        if include is not None:
+            # Resolve path: try relative, then relative to script directory
+            if not os.path.isabs(include) and not os.path.exists(include):
+                fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), include)
+                if os.path.exists(fallback):
+                    include = fallback
+            if os.path.exists(include):
+                try:
+                    with open(include, "r", encoding="utf-8") as f:
+                        include_words = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+                    print(f"[INCLUDE] Loaded {len(include_words)} words from {include}", flush=True)
+                except Exception:
+                    include_words = None
+            else:
+                print(f"[INCLUDE] WARNING: include_words file not found: {include}", flush=True)
 
         freq_dict = wordfreq.get_frequency_dict("de")
         # Merge include_words INTO the main dictionary instead of replacing it.
