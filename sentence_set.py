@@ -244,12 +244,17 @@ _POS_COMPATIBLE_CLASSES = {
 }
 
 
-def _get_german_grammatical_case(token, dict_obj, is_first_word=False):
+def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_token="", match_casing_only=False):
     """Determine correct German casing based strictly on the distractor's own POS.
 
     Uses the dictionary's pos_cache (built offline via precompute_pos.py or
     in batches by SpaCy) to enforce grammatical capitalization solely on
     whether the generated distractor itself is a NOUN/PROPN.
+
+    When match_casing_only=True, bypasses POS-cache lookup and instead
+    mirrors the target word's capitalisation.  This is safe because the
+    candidate pool was already filtered (NOUN for uppercase targets,
+    !NOUN for lowercase targets).
 
     Rules (German orthography):
       - Nouns (NOUN/PROPN) → Titlecase
@@ -262,6 +267,19 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False):
     if not body:
         return token
 
+    # --- CASING-ONLY MODE: mirror the target's capitalisation ---
+    if match_casing_only and target_token:
+        target_body = strip_punct(target_token)
+        target_is_upper = target_body[0].isupper() if target_body else False
+        if target_is_upper:
+            new_body = body[0].upper() + body[1:].lower()
+        else:
+            new_body = body.lower()
+        if is_first_word and new_body:
+            new_body = new_body[0].upper() + new_body[1:]
+        return prefix + new_body + suffix
+
+    # --- ORIGINAL POS-DRIVEN MODE (unchanged) ---
     # Determine if the *distractor* is a noun via pos_cache (strict grammar mode)
     distractor_is_noun = False
     t_lower = body.lower()
@@ -285,10 +303,11 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False):
 
     return prefix + new_body + suffix
 
-def _normalize_distractor_token(token, dict_obj, lang='de', is_first_word=False):
+def _normalize_distractor_token(token, dict_obj, lang='de', is_first_word=False, target_token="", match_casing_only=False):
     """Normalize casing for a single distractor token by its own grammatical POS."""
     if lang == 'de':
-        return _get_german_grammatical_case(token, dict_obj, is_first_word=is_first_word)
+        return _get_german_grammatical_case(token, dict_obj, is_first_word=is_first_word,
+                                            target_token=target_token, match_casing_only=match_casing_only)
     
     # Non-German fallback (e.g. English as before)
     if _is_x_placeholder_token(token):
@@ -908,7 +927,9 @@ class Label:
 
                 if best_candidate:
                         # Apply grammatical casing based on the distractor's class
-                        self.distractor = _normalize_distractor_token(best_candidate, dictionary, lang=lang)
+                        self.distractor = _normalize_distractor_token(best_candidate, dictionary, lang=lang,
+                                                                      target_token=self.words[0] if self.words else "",
+                                                                      match_casing_only=match_casing_only)
 
         # 1. Pre-filter candidates (cheap checks: length, banned, POS, repeat)
         qualified_candidates = []
@@ -1155,7 +1176,9 @@ class Label:
             best_min_surp = float('-inf')
 
         # Final casing pass based on DISTRACTOR category
-        self.distractor = _normalize_distractor_token(best_word, dictionary, lang=lang)
+        self.distractor = _normalize_distractor_token(best_word, dictionary, lang=lang,
+                                                      target_token=self.words[0] if self.words else "",
+                                                      match_casing_only=match_casing_only)
 
         if not force_max_surprisal:
             logging.warning("Could not find a word to meet threshold for item %s, label %s, returning %s with %f min surp instead",
@@ -1452,13 +1475,14 @@ class Sentence_Set:
                     apply_postcase = ('german' in model_loc) or ('german' in dict_cls) or ('benjamin' in hf_name) or ('gerpt2' in hf_name)
                 except Exception:
                     apply_postcase = False
+            _match_casing_only = bool(params.get('match_casing_only', False))
             if apply_postcase:
                 try:
                     for j in range(len(sentence.distractors)):
-                        # Enforce exact distractor-driven grammatical casing.
-                        # Never match the target's wording or uppercase status.
+                        target_tok = sentence.words[j] if j < len(sentence.words) else ""
                         sentence.distractors[j] = _normalize_distractor_token(
-                            sentence.distractors[j], d, lang=lang, is_first_word=(j==0))
+                            sentence.distractors[j], d, lang=lang, is_first_word=(j==0),
+                            target_token=target_tok, match_casing_only=_match_casing_only)
                 except Exception:
                     pass
             # Keep first placeholder shape stable (no auto-capitalization side effects).
