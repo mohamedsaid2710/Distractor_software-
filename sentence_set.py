@@ -987,6 +987,10 @@ class Label:
                 if len(qualified_candidates) < pre_filter_count:
                     print(f"    [Semantic] Filtered {pre_filter_count} → {len(qualified_candidates)} candidates")
             
+        # 1.5 Batch tag candidates for POS persistence (German/Arabic)
+        if qualified_candidates and hasattr(dictionary, 'batch_tag_words'):
+            dictionary.batch_tag_words(qualified_candidates, params=params)
+
         if not qualified_candidates:
             # handle empty pool via fallback logic below
             target_rep = self.words[0] if self.words else "???"

@@ -579,6 +579,40 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         ans = self.case_map.get(t_lower, None)
         return ans if ans is not None else token
 
+    def batch_tag_words(self, words, params=None):
+        """Standardizes with Arabic implementation: Tag candidates in one burst and save."""
+        if self.nlp_sp is None or not words:
+            return
+
+        if not hasattr(self, 'pos_cache'):
+            self.pos_cache = {}
+
+        # 1. Identify words that need tagging
+        to_tag = [w.lower() for w in words if w.lower() not in self.pos_cache]
+        if not to_tag:
+            return
+
+        print(f"    [STANZA] Batch tagging {len(to_tag)} German candidates...", flush=True)
+        # Use frames for all untagged words
+        for w in to_tag:
+            self._eval_single_word_case(w)
+
+        # 2. Persist to disk
+        self.save_pos_cache()
+
+    def save_pos_cache(self):
+        """Persist the POS cache to the v2 file."""
+        try:
+            import json
+            import os
+            cache_file = "models/german_code/german_pos_cache_v2.json"
+            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(self.pos_cache, f, ensure_ascii=False, indent=2)
+            # print(f"    [CACHE] Saved {len(self.pos_cache)} entries to {cache_file}")
+        except Exception as e:
+            logging.error(f"Failed to save German POS cache: {e}")
+
 
 def get_frequency_de(word):
     """Returns German Zipf frequency converted to natural-log units."""
