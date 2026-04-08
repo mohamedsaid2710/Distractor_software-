@@ -5,6 +5,10 @@ import re
 import random
 import os
 
+print("\n" + "="*60)
+print("GERMAN CASING V2.2: DUAL-CHECK + SENTENCE-FRAME TAGGING ACTIVE")
+print("="*60 + "\n")
+
 # Lazy import for semantic filtering
 _semantic_filter_module = None
 
@@ -1420,7 +1424,9 @@ class Sentence_Set:
             if pos_filter == '!NOUN':
                 num_req = int(params.get('num_to_test', 100))
                 if len(opts) < (num_req // 2):
-                    fallback_opts = d.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=None)
+                    # We STILL enforce !NOUN even in fallback if match_casing_only is True
+                    fallback_filter = '!NOUN' if params.get('match_casing_only', False) else None
+                    fallback_opts = d.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=fallback_filter)
                     existing = set(opts)
                     for opt in fallback_opts:
                         if opt not in existing:

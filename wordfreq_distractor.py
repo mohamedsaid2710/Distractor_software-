@@ -124,34 +124,47 @@ class wordfreq_dict(distractor_dict):
                 pass
 
         try:
-            # Prepare inputs as a single big document where each word is a "sentence" 
-            # to let Stanza process them quickly without connecting their syntax.
-            in_docs = []
             import stanza
-            for w in content_words:
-                in_docs.append(stanza.Document([], text=w))
-            
             # Batch process in chunks to prevent memory explosion
             out_docs = []
-            for i in range(0, len(in_docs), batch_size):
-                chunk = in_docs[i:i + batch_size]
-                out_chunk = self.nlp_sp(chunk)
-                out_docs.extend(out_chunk)
-
-            for word_l, doc in zip(content_words, out_docs):
-                if doc.sentences and doc.sentences[0].words:
-                    upos = doc.sentences[0].words[0].upos
-                else:
-                    upos = 'X'
+            display_count = False
+            for i in range(0, len(content_words), batch_size):
+                chunk = content_words[i:i + batch_size]
                 
-                # Stanza uses UPOS conventions (NOUN, VERB, ADJ, PROPN)
-                final_pos = upos
-
-                self.pos_cache[word_l] = final_pos
-                if final_pos in ('NOUN', 'PROPN'):
-                    self.case_map[word_l] = word_l.capitalize()
+                # --- GERMAN CONTEXTUAL FRAME FIX ---
+                # Tagging 'kiste' isolated -> VERB (incorrect). 
+                # Tagging 'Das ist ein Kiste.' -> NOUN (correct).
+                if getattr(self, 'lang', 'en') == 'de':
+                    if not display_count:
+                        print(f"    [NLP] Running Stanza with Sentence Frames on {len(content_words)} candidates...", flush=True)
+                        display_count = True
+                    in_docs = [stanza.Document([], text=f"Das ist ein {w.capitalize()}.") for w in chunk]
+                    out_chunk = self.nlp_sp(in_docs)
+                    # Extract result from index 3: "Das"(0) "ist"(1) "ein"(2) "{Word}"(3) "."(4)
+                    for word_l, doc in zip(chunk, out_chunk):
+                        if doc.sentences and len(doc.sentences[0].words) >= 4:
+                            upos = doc.sentences[0].words[3].upos
+                        else:
+                            upos = 'X'
+                        self.pos_cache[word_l] = upos
+                        if upos in ('NOUN', 'PROPN'):
+                            self.case_map[word_l] = word_l.capitalize()
+                        else:
+                            self.case_map[word_l] = None
                 else:
-                    self.case_map[word_l] = None
+                    # Non-German or fallback: isolated tagging
+                    in_docs = [stanza.Document([], text=w) for w in chunk]
+                    out_chunk = self.nlp_sp(in_docs)
+                    for word_l, doc in zip(chunk, out_chunk):
+                        if doc.sentences and doc.sentences[0].words:
+                            upos = doc.sentences[0].words[0].upos
+                        else:
+                            upos = 'X'
+                        self.pos_cache[word_l] = upos
+                        if upos in ('NOUN', 'PROPN'):
+                            self.case_map[word_l] = word_l.capitalize()
+                        else:
+                            self.case_map[word_l] = None
         except Exception as e:
             print(f"[DIAG] batch_tag_words Stanza failed: {e}", flush=True)
             for word_l in content_words:
