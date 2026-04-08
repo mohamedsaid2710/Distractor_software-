@@ -13,6 +13,7 @@ absolute_threshold_only: False
 # --- Linguistic & POS Matching ---
 language: "de"
 match_noun_pos: True
+match_casing_only: True
 len_tolerance: 1
 min_zipf: 3.5
 short_word_min_zipf: 4.5
@@ -28,7 +29,7 @@ apply_postcase: True
 # --- Semantic Filtering (NEW) ---
 # Rejects candidates that are semantically similar to the target word.
 # Uses fastText embeddings. Requires: pip install fasttext
-semantic_filter: False
+semantic_filter: True
 semantic_threshold: 0.35
 
 # --- Model & Hardware Settings ---

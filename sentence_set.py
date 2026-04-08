@@ -380,6 +380,7 @@ class Label:
         lang = _detect_language(params)
         # Identify if we should strictly match noun POS (default False, except if enabled in params)
         match_noun_pos = bool(params.get('match_noun_pos', False))
+        match_casing_only = bool(params.get('match_casing_only', False))
         absolute_threshold_only = bool(params.get('absolute_threshold_only', False))
 
         # --- Early position boost ---
@@ -509,11 +510,16 @@ class Label:
             return val
 
         target_pos = get_candidate_pos(self.words[0]) if self.words else None
-        target_is_noun = (target_pos == 'NOUN')
-
+        
         # --- CASING CALCULATION ---
         sw_target = strip_punct(self.words[0]) if self.words else ""
         target_is_lower = sw_target[0].islower() if sw_target else True
+
+        if lang == 'de' and match_casing_only:
+            # Use casing instead of POS tag to define German nounness.
+            target_is_noun = not target_is_lower
+        else:
+            target_is_noun = (target_pos == 'NOUN')
 
         # --- POS FALLBACK CASCADE ---
         # For noun targets: NOUN candidates only.
@@ -569,7 +575,8 @@ class Label:
                     if opt not in existing:
                         distractor_opts.append(opt)
 
-        if match_noun_pos and target_pos:
+        skip_cascade = (lang == 'de' and match_casing_only and not target_is_noun)
+        if match_noun_pos and target_pos and not skip_cascade:
             exact = []
             compatible = []  # candidates matching a compatible POS class
             noun_fallback = []  # NOUN candidates — absolute last resort for non-noun targets
