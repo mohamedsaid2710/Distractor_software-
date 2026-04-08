@@ -448,6 +448,8 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
         self.words = []
         seen = set()
+        # Track which words came from include_words so they bypass frequency filters
+        include_set = set(w.lower().strip() for w in (include_words or []))
         for raw in source_words:
             w = raw.strip()
             lw = w.lower()
@@ -462,8 +464,6 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             # Require a vowel so candidates are clearly word-like
             if not re.search(r"[aeiouyäöü]", lw):
                 continue
-            if not re.search(r"[aeiouyäöü]", lw):
-                continue
 
             if _is_english_dominant(lw):
                 continue
@@ -471,12 +471,11 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 z = wordfreq.zipf_frequency(lw, "de")
             except Exception:
                 continue
-            # Apply length-dependent zipf thresholding to weed out short acronyms
-            # but allow rare long compound nouns. 
-            # Reverted to len < 5 to ensure short non-nouns have enough fallback candidates.
-            effective_min_zipf = min_zipf if len(lw) >= 5 else max(min_zipf, short_word_min_zipf)
-            if z < effective_min_zipf:
-                continue
+            # Include words bypass frequency filter — they are curated
+            if lw not in include_set:
+                effective_min_zipf = min_zipf if len(lw) >= 5 else max(min_zipf, short_word_min_zipf)
+                if z < effective_min_zipf:
+                    continue
             freq_val = z * math.log(10)
             # The word is added; its POS and CASE will be determined 100% by SpaCy on demand
             # in eval_single_word_case, which uses the contextual frame '"Das {word} ist hier."'
