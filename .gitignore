@@ -28,7 +28,7 @@ test_output*.txt
 .idea/
 
 # AI Assistant Instructions
-.github/copilot-instructions.md
+docs/copilot-instructions.md
 
 # Temporary/Working files
 requirements_working.txt
