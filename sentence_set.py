@@ -927,7 +927,7 @@ class Label:
                     return best_cand
 
                 best_candidate = None
-                if target_pos and match_noun_pos:
+                if target_pos and match_noun_pos and not skip_cascade:
                     exact_pool = [c for c in distractor_opts if get_candidate_pos(c, target_noun_context=target_is_noun) == target_pos]
                     best_candidate = _find_best_match(exact_pool)
                     
@@ -1059,6 +1059,16 @@ class Label:
                     exact_full_pool = [w.text for w in getattr(dict, 'words', []) if len(strip_punct(w.text)) == desired_len]
                 except Exception:
                     exact_full_pool = []
+                # When match_casing_only is active, enforce POS filter in fallback too
+                if match_casing_only and pos_filter and exact_full_pool:
+                    _is_noun_check = lambda w: (
+                        (hasattr(dictionary, 'pos_cache') and dictionary.pos_cache.get(w.lower()) in ('NOUN', 'PROPN'))
+                        or (hasattr(dictionary, 'has_titlecase_variant') and dictionary.has_titlecase_variant(w))
+                    )
+                    if pos_filter == '!NOUN':
+                        exact_full_pool = [w for w in exact_full_pool if not _is_noun_check(w)]
+                    elif pos_filter == 'NOUN':
+                        exact_full_pool = [w for w in exact_full_pool if _is_noun_check(w)]
                 if exact_full_pool:
                     random.shuffle(exact_full_pool)
                     cand, cand_surp = pick_best_from_pool(exact_full_pool, allow_banned=False)
@@ -1091,9 +1101,10 @@ class Label:
                         if target_is_noun:
                             return w_pos in ('NOUN', 'PROPN')  # STRICT: Do not accept None!
                         else:
-                            # Allow compatible POS classes + NOUN as last resort
+                            # Allow compatible POS classes; NOUN only if not in casing-only mode
                             ok_set = set(compatible_pos_list or ['ADV', 'ADJ', 'VERB', 'ADP'])
-                            ok_set.add('NOUN')  # noun is acceptable as emergency last resort
+                            if not match_casing_only:
+                                ok_set.add('NOUN')  # noun is acceptable as emergency last resort
                             return w_pos in ok_set
                     
                     # Relax: allowing ANY length from dict.
