@@ -41,6 +41,7 @@ chunk_size: 512        # Candidate generation chunk size (512=default, 2048-4096
 
 # --- File Paths & Resources ---
 exclude_words: "exclude_de.txt"
+include_words: "include_de.txt"
 
 # --- Position & Repeat Settings ---
 early_position_boost: 20
