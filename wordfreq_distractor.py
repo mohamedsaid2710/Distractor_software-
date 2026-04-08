@@ -595,7 +595,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         print(f"    [STANZA] Batch tagging {len(to_tag)} new German candidates...", flush=True)
 
         # 2. True neural batching with bulk_process
-        BATCH = 500
+        BATCH = int(params.get('nlp_batch_size', 2000)) if params else 2000
         for i in range(0, len(to_tag), BATCH):
             batch = to_tag[i : i + BATCH]
             frames = [f"Das ist ein {w}." for w in batch]
