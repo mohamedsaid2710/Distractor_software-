@@ -124,7 +124,10 @@ PROPN_CACHE = {}
 
 def is_propn_candidate(cand):
     """Returns True if the candidate is likely a Proper Noun (PROPN).
-    Uses a contextual frame to improve SpaCy's accuracy.
+    NOTE: This global version is a safe fallback. The real logic lives in the
+    local is_propn_candidate() defined inside choose_distractor(), which has
+    access to the dictionary's pos_cache. This global version should rarely
+    be reached, but must not crash.
     """
     clean_cand = strip_punct(cand)
     if not clean_cand:
@@ -133,20 +136,11 @@ def is_propn_candidate(cand):
     key = clean_cand.lower()
     if key in PROPN_CACHE:
         return PROPN_CACHE[key]
-        
-    try:
-        lang = 'de' # Default to German
-        nlp_sp = _get_spacy_nlp(lang)
-        if nlp_sp is not None:
-            w_cap = clean_cand.capitalize()
-            doc_c = nlp_sp(f"Das ist {w_cap}.")
-            is_propn = len(doc_c) > 2 and doc_c[2].pos_ == 'PROPN'
-            PROPN_CACHE[key] = is_propn
-            return is_propn
-    except Exception:
-        pass
     
+    # Without access to a dictionary object, we cannot reliably determine PROPN.
+    # Return False (safe default: treat as non-PROPN and let downstream filters handle it).
     return False
+
 
 
 def _is_x_placeholder_token(token):

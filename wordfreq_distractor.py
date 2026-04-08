@@ -580,7 +580,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         return ans if ans is not None else token
 
     def batch_tag_words(self, words, params=None):
-        """Standardizes with Arabic implementation: Tag candidates in one burst and save."""
+        """Batch-tag German candidates using Stanza bulk_process for GPU speed."""
         if self.nlp_sp is None or not words:
             return
 
@@ -588,16 +588,38 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.pos_cache = {}
 
         # 1. Identify words that need tagging
-        to_tag = [w.lower() for w in words if w.lower() not in self.pos_cache]
+        to_tag = list(set(w.lower() for w in words if w.lower() not in self.pos_cache))
         if not to_tag:
             return
 
-        print(f"    [STANZA] Batch tagging {len(to_tag)} German candidates...", flush=True)
-        # Use frames for all untagged words
-        for w in to_tag:
-            self._eval_single_word_case(w)
+        print(f"    [STANZA] Batch tagging {len(to_tag)} new German candidates...", flush=True)
 
-        # 2. Persist to disk
+        # 2. True neural batching with bulk_process
+        BATCH = 500
+        for i in range(0, len(to_tag), BATCH):
+            batch = to_tag[i : i + BATCH]
+            frames = [f"Das ist ein {w}." for w in batch]
+            try:
+                docs = self.nlp_sp.bulk_process(frames)
+                for word, doc in zip(batch, docs):
+                    if len(doc.sentences) > 0 and len(doc.sentences[0].words) >= 4:
+                        final_pos = doc.sentences[0].words[3].upos
+                    elif doc.sentences and doc.sentences[0].words:
+                        final_pos = doc.sentences[0].words[0].upos
+                    else:
+                        final_pos = 'X'
+                    self.pos_cache[word] = final_pos
+                    if final_pos in ('NOUN', 'PROPN'):
+                        self.case_map[word] = word.capitalize()
+                    else:
+                        self.case_map[word] = None
+            except Exception as e:
+                logging.error(f"[STANZA] Bulk tagging batch failed: {e}")
+                # Fallback to one-by-one
+                for w in batch:
+                    self._eval_single_word_case(w)
+
+        # 3. Persist to disk
         self.save_pos_cache()
 
     def save_pos_cache(self):
