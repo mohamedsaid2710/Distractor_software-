@@ -938,7 +938,15 @@ class Label:
                     if not best_candidate and not target_is_noun:
                         best_candidate = _find_best_match(distractor_opts)
                 else:
-                    best_candidate = _find_best_match(distractor_opts)
+                    # Non-cascade path: prioritize non-nouns if target is lowercase
+                    if match_noun_pos and not target_is_noun:
+                        # Try to find a non-noun in the pool first
+                        non_noun_pool = [c for c in distractor_opts if dictionary.pos_cache.get(c.lower()) not in ('NOUN', 'PROPN')]
+                        if non_noun_pool:
+                            best_candidate = _find_best_match(non_noun_pool)
+                    
+                    if not best_candidate:
+                        best_candidate = _find_best_match(distractor_opts)
 
                 if best_candidate:
                         # Apply grammatical casing based on the distractor's class
