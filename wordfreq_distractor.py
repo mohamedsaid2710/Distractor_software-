@@ -240,11 +240,6 @@ class wordfreq_dict(distractor_dict):
         # 1. Fetch search pool (using heuristic only)
         # We fetch MORE so that after POS filtering we still have 'n' candidates.
         distractor_opts = self.get_words(min_length, max_length, min_freq, max_freq, pos_filter=None, use_spacy=False)
-
-        # Protect against short-word web-scraping junk (e.g. 'uru', 'rüf') from wordfreq
-        # Ensure that ALL short words (<= 5 chars) already exist in our verified 634k JSON cache
-        if max_length <= 5 and hasattr(self, 'pos_cache') and self.pos_cache:
-            distractor_opts = [w for w in distractor_opts if w.lower() in self.pos_cache]
         
         # PRE-FILTER: Remove excluded words BEFORE any further processing
         if exclude_words_set:
@@ -257,10 +252,6 @@ class wordfreq_dict(distractor_dict):
                 lower = self.get_words(min_length, max_length, min_freq - i, min_freq - i + 1, pos_filter=None, use_spacy=False)
                 higher = self.get_words(min_length, max_length, max_freq + i - 1, max_freq + i, pos_filter=None, use_spacy=False)
                 
-                if max_length <= 5 and hasattr(self, 'pos_cache') and self.pos_cache:
-                    lower = [w for w in lower if w.lower() in self.pos_cache]
-                    higher = [w for w in higher if w.lower() in self.pos_cache]
-
                 # Also filter the widened pools
                 if exclude_words_set:
                     lower = [w for w in lower if strip_punct(w).lower() not in exclude_words_set]
