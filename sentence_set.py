@@ -267,30 +267,10 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
 
     # --- CASING-ONLY MODE: use distractor's own grammatical class (dual-check) ---
     # The candidate pool was already filtered (NOUN for uppercase targets,
-    # !NOUN for lowercase targets), so we just need to apply correct casing
+    # !NOUN for lowercase targets). We ALWAYS apply correct casing
     # based on the distractor's own grammatical category.
     # We use BOTH pos_cache AND wordfreq titlecase heuristic to be robust.
-    if match_casing_only:
-        # STRICT TARGET CASING MIRROR:
-        # Completely ignore the distractor's actual POS.
-        # Force the distractor to match the casing of the target word.
-        if target_token:
-            target_body = _split_punct(target_token)[1]
-            if target_body and target_body[0].isupper():
-                new_body = body[0].upper() + body[1:].lower()
-            else:
-                new_body = body.lower()
-        else:
-            new_body = body.lower()
 
-        if is_first_word and new_body:
-            new_body = new_body[0].upper() + new_body[1:]
-            
-        # Strip exact trailing hyphens as requested by user, while keeping suffix (.,!)
-        new_body = new_body.rstrip("-")
-        return prefix + new_body + suffix
-
-    # --- ORIGINAL POS-DRIVEN MODE (unchanged) ---
     # Determine if the *distractor* is a noun via pos_cache (strict grammar mode)
     distractor_is_noun = False
     t_lower = body.lower()
@@ -573,6 +553,20 @@ class Label:
         # --- ADAPTIVE LENGTH SEARCH (Fix for 0-candidate long words) ---
         # For Nouns, we PREFER shorter, actual nouns rather than long adjectives
         # that barely fit the length profile. 
+        
+        # PHASE 1: Smart Casing Alignment (Ultimate Quality)
+        # Allows NOUNs to shape-shift into lowercase for long words if it's a lowercase target
+        if not distractor_opts and not target_is_noun and max_length >= 8 and params.get('ultimate_quality', True):
+            logging.info(f"0 candidates for {self.words}. Engaging Phase 1: 'Shape-Shifting' NOUNs into lowercase...")
+            distractor_opts = dictionary.get_potential_distractors(
+                min_length, max_length, 
+                min_freq, max_freq, params, pos_filter='NOUN'
+            )
+            if distractor_opts:
+                match_casing_only = True
+                match_noun_pos = False
+                target_pos = 'NOUN' # Make sure fallback cascade doesn't drop them
+                
         if not distractor_opts:
             for extra_len in range(1, 11): # Try widening up to +/- 10 characters
                 logging.info(f"0 candidates for {self.words} after primary fetch. Widening search by +/- {extra_len}")
@@ -1106,42 +1100,15 @@ class Label:
                 # Fallback stage 5: Emergency pool with POS-aware cascade
                 logging.warning(f"FALLBACK Stage 5: Emergency pool (800 random words) for item {self.id}, label {self.lab}")
                 try:
-                    # POS cascade-aware guard: prefer compatible classes, allow nouns last.
-                    def emergency_pos_ok(w_pos):
-                        if not match_noun_pos:
-                            # For non-POS-matched mode, accept standard word types only
-                            return w_pos in ('NOUN', 'VERB', 'ADJ', 'ADV', 'ADP', 'DET', None)
-                        # For POS-matched mode, enforce cascade
-                        if target_is_noun:
-                            return w_pos in ('NOUN', 'PROPN')  # STRICT: Do not accept None!
-                        else:
-                            # Allow compatible POS classes; NOUN only if not in casing-only mode
-                            ok_set = set(compatible_pos_list or ['ADV', 'ADJ', 'VERB', 'ADP'])
-                            if not match_casing_only:
-                                ok_set.add('NOUN')  # noun is acceptable as emergency last resort
-                            return w_pos in ok_set
+                    # --- HYPER-SPEED OPTIMIZATION: USE PRE-INDEXED EMERGENCY POOL ---
+                    target_len = target_exact_len or desired_len or 5
+                    emergency_pool = dictionary.get_emergency_pool(target_len, is_noun=target_is_noun)
                     
-                    # Relax: allowing ANY length from dict.
-                    potential_words = getattr(dictionary, 'words', [])
-                    # Use dictionary POS cache if available, else raw w.pos
-                    emergency_pool = []
-                    for w in potential_words:
-                        w_text = w.text
-                        w_pos = None
-                        if hasattr(dictionary, 'pos_cache') and w_text.lower() in dictionary.pos_cache:
-                            w_pos = dictionary.pos_cache[w_text.lower()]
-                        else:
-                            w_pos = getattr(w, 'pos', None)
-                        if emergency_pos_ok(w_pos):
-                            emergency_pool.append(w_text)
                     if emergency_pool:
-                        # Try exact or near-match length first if the pool allows it
-                        target_len = target_exact_len or desired_len or 5
-                        near_len_pool = [w for w in emergency_pool if abs(len(w) - target_len) <= 2]
-                        active_pool = near_len_pool if (near_len_pool and enforce_length_match) else emergency_pool
+                        # We still want to perform a small sample check to find the 'best' surprisal word
+                        sample_n = min(800, len(emergency_pool))
+                        fallback_emerg = random.sample(emergency_pool, sample_n)
                         
-                        sample_n = min(800, len(active_pool))
-                        fallback_emerg = random.sample(active_pool, sample_n)
                         cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=False)
                         if cand is None and allow_banned_fallback:
                             cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=True)
@@ -1183,32 +1150,47 @@ class Label:
                 best_min_surp = cand_surp
 
         if best_word is None:
-            # If still nothing, pick ANY real word of correct length from dictionary
+            # THE ULTIMATE DESPERATION FALLBACK:
+            # If everything else fails, bypass 'pick_best_from_pool' completely.
+            # Directly query the 634k JSON array for the exact length and POS.
             try:
-                # Avoid 'wort' if any other word exists in the dictionary pool
-                emergency_pool = [w.text for w in getattr(dictionary, 'words', []) 
-                                if abs(len(w.text) - (target_exact_len or 5)) <= 2 
-                                and w.text.lower() not in banned_l]
-                if emergency_pool:
-                    random.shuffle(emergency_pool)
-                    for w_text in emergency_pool:
-                        if not match_noun_pos:
-                            best_word = w_text
-                            break
-                        
-                        is_n = dictionary.has_titlecase_variant(w_text)
-                        if target_is_noun and is_n:
-                            best_word = w_text
-                            break
-                        elif not target_is_noun and not is_n:
-                            best_word = w_text
-                            break
+                target_l_len = target_exact_len or 5
                 
-                if best_word is None:
-                    best_word = "wort"
-            except Exception:
-                best_word = "wort"
+                if hasattr(dictionary, 'get_emergency_pool'):
+                    # Fetch entirely from pre-sorted JSON (lightning fast, guaranteed)
+                    if target_is_noun:
+                        final_pool = dictionary.get_emergency_pool(target_l_len, is_noun=True)
+                    else:
+                        final_pool = dictionary.get_emergency_pool(target_l_len, is_noun=False)
+                    
+                    # If empty, just grab +/- 1 length
+                    if not final_pool:
+                        if target_is_noun:
+                            final_pool = dictionary.get_emergency_pool(target_l_len+1, is_noun=True) + dictionary.get_emergency_pool(target_l_len-1, is_noun=True)
+                        else:
+                            final_pool = dictionary.get_emergency_pool(target_l_len+1, is_noun=False) + dictionary.get_emergency_pool(target_l_len-1, is_noun=False)
+
+                    if final_pool:
+                        random.shuffle(final_pool)
+                        for cand in final_pool:
+                            if cand.lower() not in banned_l and cand.lower() not in avoid:
+                                best_word = cand
+                                break
+                        if best_word is None:
+                            # Total desperation: ignore banned list, just take the first one
+                            best_word = final_pool[0]
+                else:
+                    # Legacy fallback for English/etc.
+                    emergency_pool = [w.text for w in getattr(dictionary, 'words', []) 
+                                    if abs(len(w.text) - (target_exact_len or 5)) <= 2 
+                                    and w.text.lower() not in banned_l]
+                    if emergency_pool:
+                        best_word = random.choice(emergency_pool)
+            except Exception as e:
+                logging.error(f"Ultimate fallback failed: {e}")
                 
+            if best_word is None:
+                best_word = "wort" # Mathematically impossible with 634k words, but safe.
             best_min_surp = float('-inf')
 
         # Final casing pass based on DISTRACTOR category
@@ -1454,27 +1436,38 @@ class Sentence_Set:
                     continue
                 return cand
 
-            # Fallback: search full dictionary pool for closest valid match.
+            # Fallback: search full dictionary emergency pool for closest valid match.
             best = None
             best_diff = 10**9
             try:
-                pool = [w.text for w in getattr(d, "words", [])]
+                # Check for 634k JSON pool
+                if hasattr(d, 'get_emergency_pool'):
+                    t_len = target_len or 5
+                    # Mostly non-nouns for first word context, or mix both
+                    pool = d.get_emergency_pool(t_len, is_noun=False) + d.get_emergency_pool(t_len, is_noun=True)
+                    if not pool:
+                        pool = d.get_emergency_pool(t_len+1, is_noun=False) + d.get_emergency_pool(t_len-1, is_noun=False)
+                else:
+                    pool = [w.text for w in getattr(d, "words", [])]
             except Exception:
                 pool = []
-            random.shuffle(pool)
-            for cand in pool:
-                base = strip_punct(cand)
-                if (not base) or (not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", base)):
-                    continue
-                low = base.lower()
-                if low == target_l or low in banned_l:
-                    continue
-                diff = abs(len(base) - target_len)
-                if diff < best_diff:
-                    best = cand
-                    best_diff = diff
-                    if diff == 0:
-                        break
+            if pool:
+                random.shuffle(pool)
+                for cand in pool:
+                    base = strip_punct(cand)
+                    if (not base) or (not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", base)):
+                        continue
+                    low = base.lower()
+                    if low == target_l or low in banned_l:
+                        continue
+                    diff = abs(len(base) - target_len)
+                    if diff < best_diff:
+                        best = cand
+                        best_diff = diff
+                        if diff == 0:
+                            break
+            if best is None and pool:
+                best = pool[0] # Desperation mode, ignore filters
             return best if best is not None else "wort"
 
         use_first_placeholder = bool(params.get("first_token_placeholder", True))

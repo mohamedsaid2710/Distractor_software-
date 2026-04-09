@@ -41,3 +41,8 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
         save_delim(outfile, sents)
     else:
         save_ibex(outfile, sents)
+    
+    # FINAL CACHE SAVE: Persist all tagged words to disk
+    if hasattr(d, 'save_pos_cache'):
+        d.save_pos_cache()
+

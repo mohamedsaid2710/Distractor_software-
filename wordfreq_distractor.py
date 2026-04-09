@@ -35,13 +35,38 @@ class wordfreq_dict(distractor_dict):
         self.nlp_sp = None
 
     def _build_length_index(self):
-        """Internal helper to organize words by length for fast lookup."""
+        """Internal helper to organize words by length and category for fast lookup."""
         self.words_by_len = {}
+        self.nouns_by_len = {}
+        self.others_by_len = {}
+        
+        pos_cache = getattr(self, 'pos_cache', {})
+        
+        # 1. Main length index (from wordfreq valid words)
         for w in self.words:
             l = w.len
             if l not in self.words_by_len:
                 self.words_by_len[l] = []
             self.words_by_len[l].append(w)
+            
+        # 2. Categorized indices using the FULL JSON KNOWLEDGE BASE
+        # Treat the 634k-word JSON as the primary source for the emergency pool
+        for lw, category in pos_cache.items():
+            l = len(lw)
+            if category in ('NOUN', 'PROPN'):
+                if l not in self.nouns_by_len:
+                    self.nouns_by_len[l] = []
+                self.nouns_by_len[l].append(lw)
+            else:
+                if l not in self.others_by_len:
+                    self.others_by_len[l] = []
+                self.others_by_len[l].append(lw)
+
+    def get_emergency_pool(self, length, is_noun=False):
+        """Returns a pre-indexed list of words for the specified length and category."""
+        if is_noun:
+            return self.nouns_by_len.get(length, [])
+        return self.others_by_len.get(length, [])
 
     def canonical_case(self, token):
         """Return a preferred-cased form of `token` if available (override in subclasses)."""
@@ -232,6 +257,27 @@ class wordfreq_dict(distractor_dict):
                     higher = [w for w in higher if strip_punct(w).lower() not in exclude_words_set]
                 distractor_opts.extend(lower)
                 distractor_opts.extend(higher)
+                if len(distractor_opts) >= target_pool_size:
+                    break
+
+        # PHASE 2/3: JSON-FIRST EMERGENCY POOL (Ultimate Quality)
+        # Uses the 634k-word JSON as a primary fallback source when thresholds are not met,
+        # maintaining backward compatibility by respecting frequency filters first.
+        ultimate_quality = params.get('ultimate_quality', True)
+        if len(distractor_opts) < target_pool_size and ultimate_quality and hasattr(self, 'get_emergency_pool'):
+            for l in range(min_length, max_length + 1):
+                if pos_filter == 'NOUN':
+                    pool = self.get_emergency_pool(l, is_noun=True)
+                elif pos_filter == '!NOUN':
+                    pool = self.get_emergency_pool(l, is_noun=False)
+                else:
+                    pool = self.get_emergency_pool(l, is_noun=True) + self.get_emergency_pool(l, is_noun=False)
+                
+                if exclude_words_set:
+                    pool = [w for w in pool if strip_punct(w).lower() not in exclude_words_set]
+                
+                distractor_opts.extend(pool)
+                distractor_opts = list(set(distractor_opts))
                 if len(distractor_opts) >= target_pool_size:
                     break
 
@@ -609,10 +655,16 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                     else:
                         final_pos = 'X'
                     self.pos_cache[word] = final_pos
+                    # UPDATE EMERGENCY INDEX SO NEW TAGS ARE IMMEDIATELY AVAILABLE
+                    l = len(word)
                     if final_pos in ('NOUN', 'PROPN'):
                         self.case_map[word] = word.capitalize()
+                        if l not in self.nouns_by_len: self.nouns_by_len[l] = []
+                        if word not in self.nouns_by_len[l]: self.nouns_by_len[l].append(word)
                     else:
                         self.case_map[word] = None
+                        if l not in self.others_by_len: self.others_by_len[l] = []
+                        if word not in self.others_by_len[l]: self.others_by_len[l].append(word)
             except Exception as e:
                 logging.error(f"[STANZA] Bulk tagging batch failed: {e}")
                 # Fallback to one-by-one
