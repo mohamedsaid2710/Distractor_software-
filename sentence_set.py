@@ -271,19 +271,18 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
     # based on the distractor's own grammatical category.
     # We use BOTH pos_cache AND wordfreq titlecase heuristic to be robust.
     if match_casing_only:
-        t_lower = body.lower()
-        stanza_noun = False
-        if hasattr(dict_obj, 'pos_cache') and t_lower in dict_obj.pos_cache:
-            stanza_noun = dict_obj.pos_cache[t_lower] in ('NOUN', 'PROPN')
-        wf_noun = False
-        if hasattr(dict_obj, 'has_titlecase_variant'):
-            wf_noun = dict_obj.has_titlecase_variant(body)
-        distractor_is_noun = stanza_noun or wf_noun
-
-        if distractor_is_noun:
-            new_body = body[0].upper() + body[1:].lower()
+        # STRICT TARGET CASING MIRROR:
+        # Completely ignore the distractor's actual POS.
+        # Force the distractor to match the casing of the target word.
+        if target_token:
+            target_body = _split_punct(target_token)[1]
+            if target_body and target_body[0].isupper():
+                new_body = body[0].upper() + body[1:].lower()
+            else:
+                new_body = body.lower()
         else:
             new_body = body.lower()
+
         if is_first_word and new_body:
             new_body = new_body[0].upper() + new_body[1:]
             
@@ -295,8 +294,8 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
                 final_suffix = ","
             elif target_token.endswith('.'):
                 final_suffix = "."
-        
-        return prefix + new_body + final_suffix
+
+        return prefix + new_body + suffix + final_suffix
 
     # --- ORIGINAL POS-DRIVEN MODE (unchanged) ---
     # Determine if the *distractor* is a noun via pos_cache (strict grammar mode)
@@ -328,7 +327,7 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
         elif target_token.endswith('.'):
             final_suffix = "."
 
-    return prefix + new_body + final_suffix
+    return prefix + new_body + suffix + final_suffix
 
 def _normalize_distractor_token(token, dict_obj, lang='de', is_first_word=False, target_token="", match_casing_only=False):
     """Normalize casing for a single distractor token by its own grammatical POS."""
