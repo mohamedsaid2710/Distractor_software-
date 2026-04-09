@@ -217,13 +217,18 @@ class wordfreq_dict(distractor_dict):
     def get_potential_distractors(self, min_length, max_length, min_freq, max_freq, params, pos_filter=None):
         """Returns list of candidates, using heuristic first, then widening, then batch SpaCy validation."""
         n = params.get('num_to_test', 200)
+        # Fetch MORE so that after POS filtering we still have 'n' candidates.
+        # If we have a POS filter, we need a significantly larger pool to find survivors.
         target_pool_size = max(n * 2, 500)
+        if pos_filter:
+            target_pool_size = max(n * 5, 2000)
         
         # Get exclude list from params for pre-filtering
         exclude_words_set = set()
         exclude_path = params.get('exclude_words', None)
         if exclude_path:
             import os
+            # Resolve relative paths
             if not os.path.isabs(exclude_path) and not os.path.exists(exclude_path):
                 base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                 exclude_path = os.path.join(base, exclude_path)
@@ -238,10 +243,9 @@ class wordfreq_dict(distractor_dict):
                     logging.warning(f"Failed to load exclude list from {exclude_path}: {e}")
         
         # 1. Fetch search pool (using heuristic only)
-        # We fetch MORE so that after POS filtering we still have 'n' candidates.
         distractor_opts = self.get_words(min_length, max_length, min_freq, max_freq, pos_filter=None, use_spacy=False)
         
-        # PRE-FILTER: Remove excluded words BEFORE any further processing
+        # PRE-FILTER: Remove excluded words
         if exclude_words_set:
             distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() not in exclude_words_set]
         
@@ -252,7 +256,6 @@ class wordfreq_dict(distractor_dict):
                 lower = self.get_words(min_length, max_length, min_freq - i, min_freq - i + 1, pos_filter=None, use_spacy=False)
                 higher = self.get_words(min_length, max_length, max_freq + i - 1, max_freq + i, pos_filter=None, use_spacy=False)
                 
-                # Also filter the widened pools
                 if exclude_words_set:
                     lower = [w for w in lower if strip_punct(w).lower() not in exclude_words_set]
                     higher = [w for w in higher if strip_punct(w).lower() not in exclude_words_set]
@@ -262,10 +265,10 @@ class wordfreq_dict(distractor_dict):
                     break
 
         # PHASE 2/3: JSON-FIRST EMERGENCY POOL (Ultimate Quality)
-        # Uses the 634k-word JSON as a primary fallback source when thresholds are not met,
-        # maintaining backward compatibility by respecting frequency filters first.
+        # If thresholds are not met, fetch directly from indexed CATEGORIZED pools.
         ultimate_quality = params.get('ultimate_quality', True)
         if len(distractor_opts) < target_pool_size and ultimate_quality and hasattr(self, 'get_emergency_pool'):
+            # The Emergency Pool results are already categorized (NOUN vs others).
             for l in range(min_length, max_length + 1):
                 if pos_filter == 'NOUN':
                     pool = self.get_emergency_pool(l, is_noun=True)
@@ -283,33 +286,32 @@ class wordfreq_dict(distractor_dict):
                     break
 
         # 3. --- HYPER-SPEED OPTIMIZATION: BATCH TAGGING ---
-        # Instead of tagging words one-by-one in the loop, we tag the entire pool at once!
         if self.nlp_sp is not None:
             self.batch_tag_words(distractor_opts, params=params)
-        else:
-            print(f"[DIAG] SKIPPING batch_tag: nlp_sp is None! pos_cache will be empty.", flush=True)
+        
         # 4. Filter the pool using the now-cached high-quality POS tags
         if pos_filter:
             filtered = []
             for w in distractor_opts:
                 w_lower = w.lower()
-                # --- DUAL-CHECK: Combine Stanza POS + wordfreq titlecase heuristic ---
-                # Stanza can misclassify German nouns when fed isolated lowercase words.
-                # wordfreq's titlecase heuristic reflects actual corpus capitalisation.
-                # If EITHER source says NOUN, treat as NOUN (conservative approach).
-                stanza_says_noun = False
-                if hasattr(self, 'pos_cache') and w_lower in self.pos_cache:
-                    stanza_says_noun = self.pos_cache[w_lower] in ('NOUN', 'PROPN')
+                
+                # --- KEY FIX: Trust the high-accuracy JSON cache! ---
+                # We only use the wordfreq heuristic if the word is NOT in our neural cache.
+                in_cache = hasattr(self, 'pos_cache') and w_lower in self.pos_cache
+                
+                if in_cache:
+                    # TRUST THE NEURAL TAG (from JSON or Stanza)
+                    is_noun = self.pos_cache[w_lower] in ('NOUN', 'PROPN')
+                else:
+                    # Fallback to heuristic only if cache missed
+                    is_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
 
-                wordfreq_says_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
-
-                is_noun = stanza_says_noun or wordfreq_says_noun
                 p_tag = "NOUN" if is_noun else "!NOUN"
 
                 if pos_filter.startswith('!'):
                     if p_tag == pos_filter[1:]: continue
-                elif p_tag != pos_filter:
-                    continue
+                else:
+                    if p_tag != pos_filter: continue
                 filtered.append(w)
             distractor_opts = filtered
 
