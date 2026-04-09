@@ -73,7 +73,7 @@ def read_input(filename):
             # and Arabic characters U+0600–U+06FF).
             # Also keep apostrophes and hyphens inside words so contractions (it's)
             # and hyphenated compounds (well-known) are treated as single tokens.
-            words = re.findall(r"[A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ\u0600-\u06FF]+(?:[-'][A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ\u0600-\u06FF]+)*", word_sentence, flags=re.UNICODE)
+            words = re.findall(r"[A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ\u0600-\u06FF]+(?:[-'][A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ\u0600-\u06FF]+)*[.,!?;]*", word_sentence, flags=re.UNICODE)
             if len(row) > 3 and row[3].strip() != "":
                 label_sentence = row[3]
                 labels = label_sentence.split()
