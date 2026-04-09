@@ -428,7 +428,6 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
     def __init__(self, params={}):
         self.lang = "de"
         exclude = params.get("exclude_words", "exclude_de.txt")
-        include = params.get("include_words", None)
         lowercase_only = bool(params.get("lowercase_only", True))
         min_word_len = int(params.get("min_word_len", 3))
         min_zipf = float(params.get("min_zipf", 3.0))
@@ -477,38 +476,12 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         except Exception as e:
             print(f"[CACHE] Error loading POS cache: {e}")
         print(f"\n>>> LOADING GERMAN DICTIONARY: {self.__class__.__name__}", flush=True)
-        include_words = None
-        if include is not None:
-            # Resolve path: try relative, then relative to script directory
-            if not os.path.isabs(include) and not os.path.exists(include):
-                fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), include)
-                if os.path.exists(fallback):
-                    include = fallback
-            if os.path.exists(include):
-                try:
-                    with open(include, "r", encoding="utf-8") as f:
-                        include_words = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
-                    print(f"[INCLUDE] Success: Loaded {len(include_words)} words from {include}", flush=True)
-                except Exception as e:
-                    print(f"[INCLUDE] ERROR: Failed to read include_words file {include}: {e}", flush=True)
-                    include_words = None
-            else:
-                print(f"[INCLUDE] WARNING: File not found at {include}", flush=True)
-        else:
-            print("[INCLUDE] Skipping: No include_words specified in params.", flush=True)
 
         freq_dict = wordfreq.get_frequency_dict("de")
-        # Merge include_words INTO the main dictionary instead of replacing it.
-        # This ensures short curated words are always available as candidates
-        # without losing the full wordfreq pool for longer positions.
         source_words = list(freq_dict.keys())
-        if include_words is not None:
-            source_words = list(include_words) + source_words
 
         self.words = []
         seen = set()
-        # Track which words came from include_words so they bypass frequency filters
-        include_set = set(w.lower().strip() for w in (include_words or []))
         for raw in source_words:
             w = raw.strip()
             lw = w.lower()
@@ -530,14 +503,10 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 z = wordfreq.zipf_frequency(lw, "de")
             except Exception:
                 continue
-            # Include words bypass frequency filter — they are curated
-            if lw in include_set:
-                # Assign a very high frequency so they always pass filters and appear first
-                z = 9.9 
-            else:
-                effective_min_zipf = min_zipf if len(lw) >= 5 else max(min_zipf, short_word_min_zipf)
-                if z < effective_min_zipf:
-                    continue
+            
+            effective_min_zipf = min_zipf if len(lw) >= 5 else max(min_zipf, short_word_min_zipf)
+            if z < effective_min_zipf:
+                continue
             freq_val = z * math.log(10)
             # The word is added; its POS and CASE will be determined 100% by SpaCy/Stanza on demand
             self.words.append(distractor(lw, freq_val, pos=None))

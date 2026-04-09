@@ -69,6 +69,7 @@ python assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en.
 > Please consult the Wiki to understand how to format your parameters, tune the GPT-2 implausibility scores, or prepare files for Ibex Farm.
 
 - 📖 **[Home & Architecture Overview](https://github.com/mohamedsaid2710/Distractor_software-/wiki)**
+- 🧠 **[Models Map](https://github.com/mohamedsaid2710/Distractor_software-/wiki/Models-Map)** (How GPT, fastText, Stanza, spaCy, and Farasa power the distractor brain)
 - 🚀 **[Detailed Usage Guide](https://github.com/mohamedsaid2710/Distractor_software-/wiki/Usage)** (Installation, generation, and assessment)
 - ⚙️ **[Full Configuration Reference](https://github.com/mohamedsaid2710/Distractor_software-/wiki/Config-Reference)** (Understand `min_delta`, `min_abs`, and `semantic_filter`)
 - ➕ **[Adding a New Language](https://github.com/mohamedsaid2710/Distractor_software-/wiki/Adding-a-Language)** (Step-by-step guide for new NLP models)

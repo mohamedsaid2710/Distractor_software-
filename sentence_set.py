@@ -832,34 +832,6 @@ class Label:
             
             return _find_best(pool)
 
-        def get_include_words_exact_len(length_value):
-            """Optional fallback pool from include_words for strict exact-length matching."""
-            include_path = params.get('include_words', None)
-            if not include_path:
-                return []
-            if not os.path.exists(include_path):
-                return []
-            out = []
-            seen = set()
-            try:
-                with open(include_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        w = line.strip()
-                        if not w:
-                            continue
-                        if len(strip_punct(w)) != length_value:
-                            continue
-                        if not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", strip_punct(w)):
-                            continue
-                        wl = strip_punct(w).lower()
-                        if wl in seen:
-                            continue
-                        seen.add(wl)
-                        out.append(w)
-            except Exception:
-                return []
-            random.shuffle(out)
-            return out
         # initialize
         best_word = None
         best_min_surp = float('-inf')
@@ -1082,17 +1054,9 @@ class Label:
                     cand, cand_surp = pick_best_from_pool(exact_full_pool, allow_banned=False)
                     if cand is None and allow_banned_fallback:
                         cand, cand_surp = pick_best_from_pool(exact_full_pool, allow_banned=True)
-            if cand is None and enforce_length_match and desired_len is not None:
-                # Fallback stage 3: Then try include_words (can contain short forms filtered from main dict).
-                logging.debug(f"FALLBACK Stage 3: Include words file for item {self.id}, label {self.lab}")
-                include_pool = get_include_words_exact_len(desired_len)
-                if include_pool:
-                    cand, cand_surp = pick_best_from_pool(include_pool, allow_banned=False)
-                    if cand is None and allow_banned_fallback:
-                        cand, cand_surp = pick_best_from_pool(include_pool, allow_banned=True)
             if cand is None:
-                # Fallback stage 4: Relax length requirements
-                logging.debug(f"FALLBACK Stage 4: Relaxed length matching for item {self.id}, label {self.lab}")
+                # Fallback stage 3: Relax length requirements
+                logging.debug(f"FALLBACK Stage 3: Relaxed length matching for item {self.id}, label {self.lab}")
                 cand, cand_surp = pick_best_from_pool(fallback, allow_banned=False, relax_length=True)
                 if cand is None and allow_banned_fallback:
                     cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True, relax_length=True)
