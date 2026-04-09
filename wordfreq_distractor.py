@@ -269,6 +269,9 @@ class wordfreq_dict(distractor_dict):
         ultimate_quality = params.get('ultimate_quality', True)
         if len(distractor_opts) < target_pool_size and ultimate_quality and hasattr(self, 'get_emergency_pool'):
             # The Emergency Pool results are already categorized (NOUN vs others).
+            match_casing_only = params.get('match_casing_only', False)
+            target_is_capitalized = params.get('target_is_capitalized', False)
+            
             for l in range(min_length, max_length + 1):
                 if pos_filter == 'NOUN':
                     pool = self.get_emergency_pool(l, is_noun=True)
@@ -277,8 +280,17 @@ class wordfreq_dict(distractor_dict):
                 else:
                     pool = self.get_emergency_pool(l, is_noun=True) + self.get_emergency_pool(l, is_noun=False)
                 
-                if exclude_words_set:
-                    pool = [w for w in pool if strip_punct(w).lower() not in exclude_words_set]
+                # Apply same strict quality filters to the emergency pool
+                cleaned_pool = []
+                for w in pool:
+                    if not any(c.isalpha() for c in w): continue
+                    if '-' in w and all(len(p) < 2 for p in w.split('-')): continue
+                    if match_casing_only:
+                        if target_is_capitalized and not w[0].isupper(): continue
+                        if not target_is_capitalized and not w[0].islower(): continue
+                    if exclude_words_set and strip_punct(w).lower() in exclude_words_set: continue
+                    cleaned_pool.append(w)
+                pool = cleaned_pool
                 
                 distractor_opts.extend(pool)
                 distractor_opts = list(set(distractor_opts))
@@ -289,31 +301,42 @@ class wordfreq_dict(distractor_dict):
         if self.nlp_sp is not None:
             self.batch_tag_words(distractor_opts, params=params)
         
-        # 4. Filter the pool using the now-cached high-quality POS tags
-        if pos_filter:
-            filtered = []
-            for w in distractor_opts:
+        # 4. Filter the pool using the now-cached high-quality POS tags AND strict casing
+        match_casing_only = params.get('match_casing_only', False)
+        target_is_capitalized = params.get('target_is_capitalized', False)
+        
+        filtered = []
+        for w in distractor_opts:
+            # --- NOISE FILTER: Reject garbage like 'x-x-x', 'uru', or numeric noise ---
+            if not any(c.isalpha() for c in w) or len(w) < 1:
+                continue
+            if '-' in w and all(len(part) < 2 for part in w.split('-')): # kills x-x-x
+                continue
+            
+            # --- STRICT CASING: Mirror the target's visual shell exactly ---
+            if match_casing_only:
+                if target_is_capitalized and not w[0].isupper():
+                    continue
+                if not target_is_capitalized and not w[0].islower():
+                    continue
+
+            # --- POS FILTER: Trust the high-accuracy JSON cache ---
+            if pos_filter:
                 w_lower = w.lower()
-                
-                # --- KEY FIX: Trust the high-accuracy JSON cache! ---
-                # We only use the wordfreq heuristic if the word is NOT in our neural cache.
                 in_cache = hasattr(self, 'pos_cache') and w_lower in self.pos_cache
-                
                 if in_cache:
-                    # TRUST THE NEURAL TAG (from JSON or Stanza)
                     is_noun = self.pos_cache[w_lower] in ('NOUN', 'PROPN')
                 else:
-                    # Fallback to heuristic only if cache missed
                     is_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
 
                 p_tag = "NOUN" if is_noun else "!NOUN"
-
                 if pos_filter.startswith('!'):
                     if p_tag == pos_filter[1:]: continue
                 else:
                     if p_tag != pos_filter: continue
-                filtered.append(w)
-            distractor_opts = filtered
+
+            filtered.append(w)
+        distractor_opts = filtered
 
         random.shuffle(distractor_opts)
         return distractor_opts[:n]
