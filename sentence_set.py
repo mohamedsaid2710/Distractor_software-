@@ -286,16 +286,9 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
         if is_first_word and new_body:
             new_body = new_body[0].upper() + new_body[1:]
             
-        # --- PUNCTUATION MIRRORING (NEW) ---
-        # Match , or . from target, ignore hyphens
-        final_suffix = ""
-        if target_token:
-            if target_token.endswith(','):
-                final_suffix = ","
-            elif target_token.endswith('.'):
-                final_suffix = "."
-
-        return prefix + new_body + suffix + final_suffix
+        # Strip exact trailing hyphens as requested by user, while keeping suffix (.,!)
+        new_body = new_body.rstrip("-")
+        return prefix + new_body + suffix
 
     # --- ORIGINAL POS-DRIVEN MODE (unchanged) ---
     # Determine if the *distractor* is a noun via pos_cache (strict grammar mode)
@@ -319,15 +312,9 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
     if is_first_word and new_body:
         new_body = new_body[0].upper() + new_body[1:]
 
-    # --- PUNCTUATION MIRRORING (NEW) ---
-    final_suffix = ""
-    if target_token:
-        if target_token.endswith(','):
-            final_suffix = ","
-        elif target_token.endswith('.'):
-            final_suffix = "."
-
-    return prefix + new_body + suffix + final_suffix
+    # Strip exact trailing hyphens as requested by user, while keeping suffix (.,!)
+    new_body = new_body.rstrip("-")
+    return prefix + new_body + suffix
 
 def _normalize_distractor_token(token, dict_obj, lang='de', is_first_word=False, target_token="", match_casing_only=False):
     """Normalize casing for a single distractor token by its own grammatical POS."""
