@@ -553,19 +553,6 @@ class Label:
         # --- ADAPTIVE LENGTH SEARCH (Fix for 0-candidate long words) ---
         # For Nouns, we PREFER shorter, actual nouns rather than long adjectives
         # that barely fit the length profile. 
-        
-        # PHASE 1: Smart Casing Alignment (Ultimate Quality)
-        # Allows NOUNs to shape-shift into lowercase for long words if it's a lowercase target
-        if not distractor_opts and not target_is_noun and max_length >= 8 and params.get('ultimate_quality', True):
-            logging.info(f"0 candidates for {self.words}. Engaging Phase 1: 'Shape-Shifting' NOUNs into lowercase...")
-            distractor_opts = dictionary.get_potential_distractors(
-                min_length, max_length, 
-                min_freq, max_freq, params, pos_filter='NOUN'
-            )
-            if distractor_opts:
-                match_casing_only = True
-                match_noun_pos = False
-                target_pos = 'NOUN' # Make sure fallback cascade doesn't drop them
                 
         if not distractor_opts:
             for extra_len in range(1, 11): # Try widening up to +/- 10 characters
@@ -1094,10 +1081,8 @@ class Label:
                         cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=True, relax_length=True)
 
             if cand is None:
-                # Final fallback: Use placeholder and log for manual review
-                logging.error(f"FALLBACK FAILED: No valid distractor found for item {self.id}, label {self.lab}. Using placeholder.")
-                cand = "wort"
-                cand_surp = float('-inf')
+                # Final fallback: we exhausted the staged relaxation, leaving it None for desperation blocks
+                pass
             best_word = cand
             best_min_surp = cand_surp
         if best_word is None:
