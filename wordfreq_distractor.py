@@ -242,14 +242,14 @@ class wordfreq_dict(distractor_dict):
                 except Exception as e:
                     logging.warning(f"Failed to load exclude list from {exclude_path}: {e}")
         
-        # 1. Fetch search pool (using heuristic only)
+        # 1. TIER 1: Frequency-Matched Fetch (Status Quo)
         distractor_opts = self.get_words(min_length, max_length, min_freq, max_freq, pos_filter=None, use_spacy=False)
         
         # PRE-FILTER: Remove excluded words
         if exclude_words_set:
             distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() not in exclude_words_set]
         
-        # 2. Widening frequency range if needed (still heuristic/raw)
+        # TIER 1.5: Widening frequency range if needed (still wordfreq-based)
         if len(distractor_opts) < target_pool_size and min_freq is not None and max_freq is not None:
             max_widen = int(params.get('max_freq_widen', 15))
             for i in range(1, max_widen + 1):
@@ -261,39 +261,50 @@ class wordfreq_dict(distractor_dict):
                     higher = [w for w in higher if strip_punct(w).lower() not in exclude_words_set]
                 distractor_opts.extend(lower)
                 distractor_opts.extend(higher)
+                distractor_opts = list(set(distractor_opts))
                 if len(distractor_opts) >= target_pool_size:
                     break
 
-        # PHASE 2/3: JSON-FIRST EMERGENCY POOL (Ultimate Quality)
-        # If thresholds are not met, fetch directly from indexed CATEGORIZED pools.
-        ultimate_quality = params.get('ultimate_quality', True)
-        if len(distractor_opts) < target_pool_size and ultimate_quality and hasattr(self, 'get_emergency_pool'):
-            # The Emergency Pool results are already categorized (NOUN vs others).
-            match_casing_only = params.get('match_casing_only', False)
-            target_is_capitalized = params.get('target_is_capitalized', False)
+        # TIER 2: JSON-DIRECT SEARCH (Golden Library)
+        # If still starving, pull directly from the 634k JSON keys for EXACT length match.
+        # This bypasses Zipf filtering for verified words.
+        if len(distractor_opts) < target_pool_size and hasattr(self, 'pos_cache'):
+            target_exact_len = (min_length + max_length) // 2
+            json_pool = [w for w, pos in self.pos_cache.items() if len(w) == target_exact_len]
+            if exclude_words_set:
+                json_pool = [w for w in json_pool if w not in exclude_words_set]
             
-            for l in range(min_length, max_length + 1):
-                if pos_filter == 'NOUN':
-                    pool = self.get_emergency_pool(l, is_noun=True)
-                elif pos_filter == '!NOUN':
-                    pool = self.get_emergency_pool(l, is_noun=False)
-                else:
-                    pool = self.get_emergency_pool(l, is_noun=True) + self.get_emergency_pool(l, is_noun=False)
-                
-                # Apply same strict quality filters to the emergency pool
-                cleaned_pool = []
-                for w in pool:
-                    if not any(c.isalpha() for c in w): continue
-                    if '-' in w and all(len(p) < 2 for p in w.split('-')): continue
-                    if match_casing_only:
-                        if target_is_capitalized and not w[0].isupper(): continue
-                        if not target_is_capitalized and not w[0].islower(): continue
-                    if exclude_words_set and strip_punct(w).lower() in exclude_words_set: continue
-                    cleaned_pool.append(w)
-                pool = cleaned_pool
-                
-                distractor_opts.extend(pool)
-                distractor_opts = list(set(distractor_opts))
+            random.shuffle(json_pool)
+            distractor_opts.extend(json_pool[:target_pool_size]) 
+            distractor_opts = list(set(distractor_opts))
+
+        # TIER 3: GRADUAL EMERGENCY EXPANSION (Ultimate Quality fallback)
+        # If thresholds are NOT met, gradually expand length tolerance.
+        if len(distractor_opts) < target_pool_size and hasattr(self, 'get_emergency_pool'):
+            target_exact_len = (min_length + max_length) // 2
+            
+            # Expansion Tiers: +/- 1, then +/- 2 (if word is long enough)
+            expansion_scales = [1]
+            if target_exact_len >= 8:
+                expansion_scales.append(2)
+            
+            for scale in expansion_scales:
+                for diff in range(1, scale + 1):
+                    lengths_to_try = [target_exact_len + diff, target_exact_len - diff]
+                    for l in lengths_to_try:
+                        if l < 2: continue # Never go below 2
+                        if pos_filter == 'NOUN':
+                            pool = self.get_emergency_pool(l, is_noun=True)
+                        elif pos_filter == '!NOUN':
+                            pool = self.get_emergency_pool(l, is_noun=False)
+                        else:
+                            pool = self.get_emergency_pool(l, is_noun=True) + self.get_emergency_pool(l, is_noun=False)
+                        
+                        distractor_opts.extend(pool)
+                        distractor_opts = list(set(distractor_opts))
+                    
+                    if len(distractor_opts) >= target_pool_size:
+                        break
                 if len(distractor_opts) >= target_pool_size:
                     break
 
@@ -301,26 +312,26 @@ class wordfreq_dict(distractor_dict):
         if self.nlp_sp is not None:
             self.batch_tag_words(distractor_opts, params=params)
         
-        # 4. Filter the pool using the now-cached high-quality POS tags AND strict casing
+        # 4. FINAL FILTER: Apply Strict Casing and Noise checks to all winners
         match_casing_only = params.get('match_casing_only', False)
         target_is_capitalized = params.get('target_is_capitalized', False)
         
         filtered = []
         for w in distractor_opts:
-            # --- NOISE FILTER: Reject garbage like 'x-x-x', 'uru', or numeric noise ---
+            # --- NOISE & QUALITY FILTER ---
             if not any(c.isalpha() for c in w) or len(w) < 1:
                 continue
             if '-' in w and all(len(part) < 2 for part in w.split('-')): # kills x-x-x
                 continue
             
-            # --- STRICT CASING: Mirror the target's visual shell exactly ---
+            # --- STRICT CASING ---
             if match_casing_only:
                 if target_is_capitalized and not w[0].isupper():
                     continue
                 if not target_is_capitalized and not w[0].islower():
                     continue
 
-            # --- POS FILTER: Trust the high-accuracy JSON cache ---
+            # --- POS FILTER (Supreme Authority) ---
             if pos_filter:
                 w_lower = w.lower()
                 in_cache = hasattr(self, 'pos_cache') and w_lower in self.pos_cache
