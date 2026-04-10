@@ -431,6 +431,20 @@ class wordfreq_dict(distractor_dict):
             self.batch_tag_words(distractor_opts, params=params)
         
         # 4. FINAL FILTER: Apply Ironclad Casing, Noise, and PROPN checks
+        # [German Cache Injection]: Ensure ANY leftover untagged words get a heuristic pass 
+        # before they hit the Grammar Guard.
+        if _lang == 'de' and hasattr(self, 'pos_cache'):
+             untagged = [w for w in distractor_opts if w.lower() not in self.pos_cache]
+             if untagged:
+                 for w in untagged:
+                     w_l = w.lower()
+                     if self.is_german_noun_heuristic(w_l):
+                         self.pos_cache[w_l] = 'NOUN'
+                         self.case_map[w_l] = w_l.capitalize()
+                     else:
+                         self.pos_cache[w_l] = 'X'
+                         self.case_map[w_l] = None
+
         match_casing_only = params.get('match_casing_only', False)
         target_is_capitalized = params.get('target_is_capitalized', False)
         exclude_propn = params.get('exclude_propn_candidates', False)
@@ -500,12 +514,18 @@ class wordfreq_dict(distractor_dict):
             # If target is a noun, distractor must be a noun.
             # If target is NOT a noun (even if capitalized at start), distractor must NOT be a noun.
             if _lang == 'de' and match_casing_only:
-                # Best available POS signal
                 target_is_noun_pos = params.get('target_is_noun', target_is_capitalized)
                 
+                # REJECTION 1: Noun used for Non-Noun target (high surprisal, but avoid giveaways)
+                if not target_is_noun_pos and is_noun:
+                    continue
+                
+                # REJECTION 2: Non-Noun used for Noun target (mandatory alignment)
                 if target_is_noun_pos and not is_noun:
                     continue
-                if not target_is_noun_pos and is_noun:
+
+                # REJECTION 3: Noun-candidate is LOWERCASE (Fatal giveaway in German)
+                if is_noun and w[0].islower():
                     continue
 
 
@@ -741,6 +761,31 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             logging.error(f"Error loading Stanza: {e}")
             self.nlp_sp = None
 
+    def is_german_noun_heuristic(self, word):
+        """Heuristic check for German nouns using wordfreq casing distribution.
+        
+        Returns True if the word is significantly more frequent when capitalized.
+        Robust fallback when Stanza NLP is missing or ambiguous.
+        """
+        w_lower = word.lower()
+        w_cap = word.capitalize()
+        try:
+            z_lower = wordfreq.zipf_frequency(w_lower, 'de')
+            z_cap = wordfreq.zipf_frequency(w_cap, 'de')
+            
+            # Threshold 1: Dominant TitleCase (Zipf difference > 0.3 is ~2x freq)
+            if z_cap > (z_lower + 0.3):
+                return True
+            
+            # Threshold 2: Pure TitleCase (lowercase doesn't exist but TitleCase does)
+            if z_lower == 0 and z_cap > 1.0:
+                return True
+                
+        except Exception:
+            pass
+        return False
+
+
     def _eval_single_word_case(self, token_lower):
         """POS check using Stanza."""
         if not hasattr(self, 'pos_cache'):
@@ -791,7 +836,12 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             result = pos_tag in ('NOUN', 'PROPN')
             return result
         
-        # PRIORITY 2: Fallback to titlecase heuristic (wordfreq-based)
+        # PRIORITY 2: Dictionary-Frequency Heuristic (Robust for German)
+        if getattr(self, 'lang', None) == 'de':
+             if self.is_german_noun_heuristic(t_lower):
+                 return True
+
+        # PRIORITY 3: Fallback to titlecase heuristic (wordfreq-based)
         if t_lower not in self.case_map:
             self._eval_single_word_case(t_lower)
         return self.case_map.get(t_lower) is not None

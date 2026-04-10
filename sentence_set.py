@@ -503,9 +503,14 @@ class Label:
         target_is_lower = sw_target[0].islower() if sw_target else True
 
         if lang == 'de' and match_casing_only:
-            # Casing-only mode: use capitalisation as a proxy
-            # for German nounness. Safe shortcut: German nouns are always TitleCase.
-            target_is_noun = not target_is_lower
+            # IMPROVED: Use actual POS if available, otherwise use Dictionary Heuristic
+            if target_pos in ('NOUN', 'PROPN'):
+                target_is_noun = True
+            elif target_pos is not None:
+                target_is_noun = False
+            else:
+                # Fallback to heuristic to catch "hidden" nouns without neural NLP
+                target_is_noun = dictionary.has_titlecase_variant(sw_target)
         elif not match_casing_only:
             # Pure POS mode or non-German: derive nounness from the actual POS tag.
             target_is_noun = (target_pos == 'NOUN')
