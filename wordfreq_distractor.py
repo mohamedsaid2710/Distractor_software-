@@ -162,10 +162,6 @@ class wordfreq_dict(distractor_dict):
         for l in self.words_by_len:
             self.words_by_len[l].sort(key=lambda x: getattr(x, 'freq', 0), reverse=True)
         
-        # Categorized noun indices
-        self.nouns_by_len = {}
-        self.others_by_len = {}
-        
         # 2. Categorized indices using the POS CACHE (if available)
         pos_cache = getattr(self, 'pos_cache', {})
         for lw, category in pos_cache.items():
@@ -742,6 +738,28 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         self._build_length_index()
 
 
+    def _load_pos_overrides(self, path):
+        """Loads manual POS overrides from a file (format: 'word POS')."""
+        if not path: return
+        import os
+        if not os.path.exists(path):
+            logging.info(f"No POS overrides file found at {path}. Skipping.")
+            return
+            
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'): continue
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        word = parts[0].strip().lower()
+                        pos = parts[1].strip().upper()
+                        self.overrides[word] = pos
+            logging.info(f"Loaded {len(self.overrides)} POS overrides from {path}.")
+        except Exception as e:
+            logging.error(f"Failed to load POS overrides: {e}")
+
     def _init_spacy(self):
         """Load Stanza model for German NLP (replacing legacy SpaCy)."""
         try:
@@ -765,7 +783,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         """Heuristic check for German nouns using wordfreq casing distribution.
         
         Returns True if the word is significantly more frequent when capitalized.
-        Robust fallback when Stanza NLP is missing or ambiguous.
+        Falls back to Stanza frame tagging if wordfreq is ambiguous.
         """
         w_lower = word.lower()
         w_cap = word.capitalize()
@@ -773,13 +791,17 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             z_lower = wordfreq.zipf_frequency(w_lower, 'de')
             z_cap = wordfreq.zipf_frequency(w_cap, 'de')
             
-            # Threshold 1: Dominant TitleCase (Zipf difference > 0.3 is ~2x freq)
+            # Case 1: Dominant TitleCase (Zipf difference > 0.3 is ~2x freq)
             if z_cap > (z_lower + 0.3):
                 return True
             
-            # Threshold 2: Pure TitleCase (lowercase doesn't exist but TitleCase does)
-            if z_lower == 0 and z_cap > 1.0:
-                return True
+            # Case 2: Ambiguous wordfreq (often happens if data is case-insensitive)
+            # Use Stanza frame check as a robust fallback
+            if z_cap > 1.0 and self.nlp_sp is not None:
+                # Use neutral slot: "Das ist ein {Word}."
+                # We reuse _eval_single_word_case which does exactly this
+                result = self._eval_single_word_case(w_cap)
+                return result is not None
                 
         except Exception:
             pass
@@ -830,6 +852,10 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         """
         t_lower = token.lower()
         
+        # PRIORITY 0: Manual Overrides
+        if hasattr(self, 'overrides') and t_lower in self.overrides:
+            return self.overrides[t_lower] in ('NOUN', 'PROPN')
+
         # PRIORITY 1: Check RUNTIME POS cache (populated by batch_tag_words with correct Stanza)
         if hasattr(self, 'pos_cache') and t_lower in self.pos_cache:
             pos_tag = self.pos_cache[t_lower]

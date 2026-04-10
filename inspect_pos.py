@@ -8,15 +8,15 @@ from sentence_set import _get_nlp_model, strip_punct
 
 def run_inspection(nlp, d, sentence_text, source="Manual"):
     print(f"\n>>> SOURCE: {source}")
-    print(f"{'TOKEN':<20} | {'STANZA POS':<12} | {'HEURISTIC IS_NOUN':<18} | {'CONSENSUS'}")
-    print("-" * 75)
+    print(f"{'TOKEN':<15} | {'STANZA':<8} | {'HEURISTIC':<10} | {'CAP_CHECK':<10} | {'CONSENSUS'}")
+    print("-" * 80)
     
     tokens = sentence_text.split()
     for word in tokens:
         clean = strip_punct(word)
         if not clean: continue
         
-        # 1. Stanza POS
+        # 1. Stanza POS (direct)
         stanza_pos = "N/A"
         if nlp and nlp != "FARASA_DELEGATE":
             try:
@@ -25,15 +25,34 @@ def run_inspection(nlp, d, sentence_text, source="Manual"):
             except Exception:
                 stanza_pos = "ERR"
         
-        # 2. Heuristic
+        # 2. Heuristic (Wordfreq based)
         is_noun_h = d.has_titlecase_variant(clean.lower())
         
-        # 3. Consensus
-        consensus = "NOUN" if (stanza_pos == 'NOUN' or is_noun_h) else "NON-NOUN"
-        if stanza_pos == 'PROPN': consensus = "PROPN (NOUN)"
+        # 3. Capitalized Check (Frame trick: "Das ist ein {Word}")
+        # Only run if not already confirmed noun, to save speed.
+        cap_noun = False
+        if clean[0].islower() and nlp and nlp != "FARASA_DELEGATE":
+             try:
+                 # Force capitalized version into a noun frame
+                 test_word = clean.capitalize()
+                 frame = f"Das ist ein {test_word}."
+                 doc = nlp(frame)
+                 # Index 3: "Das(0) ist(1) ein(2) Word(3) .(4)"
+                 if len(doc.sentences) > 0 and len(doc.sentences[0].words) >= 4:
+                     cap_pos = doc.sentences[0].words[3].upos
+                     cap_noun = cap_pos in ('NOUN', 'PROPN')
+             except Exception:
+                 pass
 
-        print(f"{word:<20} | {stanza_pos:<12} | {str(is_noun_h):<18} | {consensus}")
-    print("-" * 75)
+        # 4. Consensus
+        is_noun = (stanza_pos in ('NOUN', 'PROPN')) or is_noun_h or cap_noun
+        
+        consensus = "NOUN" if is_noun else "NON-NOUN"
+        if cap_noun and not (stanza_pos in ('NOUN', 'PROPN')):
+            consensus = "NOUN (TYPO?)"
+            
+        print(f"{word:<15} | {stanza_pos:<8} | {str(is_noun_h):<10} | {str(cap_noun):<10} | {consensus}")
+    print("-" * 80)
 
 def main():
     parser = argparse.ArgumentParser(description="German Maze POS Inspection Utility")
