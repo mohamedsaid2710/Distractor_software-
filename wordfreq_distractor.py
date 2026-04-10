@@ -27,14 +27,15 @@ def _is_english_dominant(token: str, margin: float = 0.3) -> bool:
 
 
 # QUALITY GATE: Runtime validator for cache words
-def _is_valid_cache_word(word: str, min_target_length: int = 3) -> bool:
+def _is_valid_cache_word(word: str, min_target_length: int = 3, lang: str = 'de') -> bool:
     """
     Quality gate for words pulled from POS cache.
-    Rejects garbage patterns that pass frequency checks but are corrupted (aa, abc, etc).
+    Rejects garbage patterns that pass frequency checks but are corrupted (xte, odr, rav, etc).
     
     Args:
         word: Word to validate
         min_target_length: Minimum target word length (relaxes gates for short words)
+        lang: Language code ('de' for German enforcement)
     """
     word_lower = word.lower()
     word_len = len(word_lower)
@@ -77,6 +78,23 @@ def _is_valid_cache_word(word: str, min_target_length: int = 3) -> bool:
         if not re.search(r'[bcdfghjklmnpqrstvwxz]', word_lower):
             return False
     
+    # Gate 5: CRITICAL ZIPF VALIDATION (catches 'xte' Zipf:2.04, 'odr' Zipf:2.55, etc)
+    # For German, enforce strict minimum Zipf for short words
+    # Short words (≤5 chars) must have Zipf ≥ 4.0 (very confident)
+    # Medium words (6-8 chars) must have Zipf ≥ 3.5 (confident)
+    # Long words (9+ chars) can relax to Zipf ≥ 3.0 (wordfreq may not know compounds)
+    if lang == 'de' and word_len < 9:
+        try:
+            z = wordfreq.zipf_frequency(word_lower, 'de')
+            if word_len <= 5:
+                if z < 4.0:  # STRICT for short words
+                    return False
+            elif word_len <= 8:
+                if z < 3.5:  # MEDIUM for medium words
+                    return False
+        except Exception:
+            return False  # If wordfreq fails, reject the word
+    
     return True
 
 
@@ -105,11 +123,12 @@ class wordfreq_dict(distractor_dict):
             
         # 2. Categorized indices using the FULL JSON KNOWLEDGE BASE
         # Treat the 634k-word JSON as the primary source for the emergency pool
-        # NOW WITH QUALITY GATE: Reject garbage patterns (aa, abc, etc)
+        # NOW WITH QUALITY GATE: Reject garbage patterns (xte, odr, etc with Zipf validation)
         for lw, category in pos_cache.items():
             # QUALITY GATE: Skip garbage patterns
             # Validate each word relative to its own length
-            if not _is_valid_cache_word(lw, min_target_length=len(lw)):
+            _lang = getattr(self, 'lang', 'de')  # Default to German for legacy code
+            if not _is_valid_cache_word(lw, min_target_length=len(lw), lang=_lang):
                 continue
                 
             l = len(lw)
@@ -308,7 +327,8 @@ class wordfreq_dict(distractor_dict):
         # SHORT-WORD PROTECTION: For ≤5 char words, require JSON cache verification + QUALITY GATE
         # (Protects against web-scraping junk like 'fug', 'xte', 'uru' that enter via wordfreq)
         if max_length <= 5 and hasattr(self, 'pos_cache') and self.pos_cache:
-            distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() in self.pos_cache and _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length)]
+            _lang = getattr(self, 'lang', 'de')
+            distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() in self.pos_cache and _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length, lang=_lang)]
         
         # PRE-FILTER: Remove excluded words
         if exclude_words_set:
@@ -332,10 +352,11 @@ class wordfreq_dict(distractor_dict):
 
         # TIER 2: JSON-DIRECT SEARCH (Golden Library + Quality Gate)
         # If still starving, pull directly from the 634k JSON keys for EXACT length match.
-        # NOW WITH QUALITY GATE: Reject garbage patterns (aa, abc, etc) that passed frequency checks
+        # NOW WITH QUALITY GATE: Reject garbage patterns (xte, odr, etc) with Zipf validation
         if len(distractor_opts) < target_pool_size and hasattr(self, 'pos_cache'):
             target_exact_len = (min_length + max_length) // 2
-            json_pool = [w for w, pos in self.pos_cache.items() if len(w) == target_exact_len and _is_valid_cache_word(w, min_target_length=min_length)]
+            _lang = getattr(self, 'lang', 'de')
+            json_pool = [w for w, pos in self.pos_cache.items() if len(w) == target_exact_len and _is_valid_cache_word(w, min_target_length=min_length, lang=_lang)]
             if exclude_words_set:
                 json_pool = [w for w in json_pool if w not in exclude_words_set]
             
