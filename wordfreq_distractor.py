@@ -373,8 +373,23 @@ class wordfreq_dict(distractor_dict):
             # 1. Reject Proper Nouns (the "rubbish" fragments like Obb, Dha)
             if exclude_propn and is_propn:
                 continue
-                
-            # 2. Apply POS filter if active
+
+            # 2. GERMAN GRAMMAR GUARD (match_casing_only mode)
+            # The JSON stores all words as lowercase keys, so a noun like "hund"
+            # passes the IRONCLAD CASING check for a lowercase target because its
+            # stored form starts with a lowercase letter.  Without this guard it
+            # would then be uppercased to "Hund" at normalisation — a noun distractor
+            # for a verb/adjective/etc. target.  Use is_noun (from pos_cache) to
+            # block this at the source when pos_filter is not otherwise active.
+            if match_casing_only and in_cache:
+                # Non-noun target (lowercase): distractor must NOT be a noun
+                if not target_is_capitalized and is_noun:
+                    continue
+                # Noun target (uppercase): distractor must BE a noun
+                if target_is_capitalized and not is_noun:
+                    continue
+
+            # 3. Apply POS filter if active (match_noun_pos mode)
             if pos_filter:
                 p_tag = "NOUN" if is_noun else "!NOUN"
                 if pos_filter.startswith('!'):

@@ -265,11 +265,11 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
     if not body:
         return token
 
-    # --- CASING-ONLY MODE: use distractor's own grammatical class (dual-check) ---
-    # The candidate pool was already filtered (NOUN for uppercase targets,
-    # !NOUN for lowercase targets). We ALWAYS apply correct casing
-    # based on the distractor's own grammatical category.
-    # We use BOTH pos_cache AND wordfreq titlecase heuristic to be robust.
+    # --- CASING-ONLY MODE: apply correct casing based on the distractor's own class ---
+    # The German grammar guard in get_potential_distractors already ensured that
+    # nouns do not appear in non-noun slots (and vice-versa) when match_casing_only
+    # is active.  Here we simply apply the correct TitleCase / lowercase to whatever
+    # distractor was selected, using pos_cache as the authoritative source.
 
     # Determine if the *distractor* is a noun via pos_cache (strict grammar mode)
     distractor_is_noun = False
