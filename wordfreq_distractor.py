@@ -235,19 +235,21 @@ class wordfreq_dict(distractor_dict):
             for i in range(0, len(content_words), batch_size):
                 chunk = content_words[i:i + batch_size]
                 
-                # --- GERMAN CONTEXTUAL FRAME FIX ---
-                # Tagging 'kiste' isolated -> VERB (incorrect). 
-                # Tagging 'Das ist ein Kiste.' -> NOUN (correct).
+                # --- GERMAN CONTEXTUAL FRAME: NEUTRAL ISOLATION ---
+                # IMPORTANT: Do NOT use "Das ist ein {word}." - it forces NOUN tagging!
+                # Instead, use ISOLATED tagging which gives accurate POS for all word types.
+                # Stanza's neural network is strong enough for isolated German words.
                 if getattr(self, 'lang', 'en') == 'de':
                     if not display_count:
-                        print(f"    [NLP] Running Stanza with Sentence Frames on {len(content_words)} candidates...", flush=True)
+                        print(f"    [NLP] Running Stanza with Isolated Tagging on {len(content_words)} candidates...", flush=True)
                         display_count = True
-                    in_docs = [stanza.Document([], text=f"Das ist ein {w.capitalize()}.") for w in chunk]
+                    # Use isolated tagging (no forcing frame)
+                    in_docs = [stanza.Document([], text=w) for w in chunk]
                     out_chunk = self.nlp_sp(in_docs)
-                    # Extract result from index 3: "Das"(0) "ist"(1) "ein"(2) "{Word}"(3) "."(4)
+                    # Extract POS from first token (the word itself, isolated)
                     for word_l, doc in zip(chunk, out_chunk):
-                        if doc.sentences and len(doc.sentences[0].words) >= 4:
-                            upos = doc.sentences[0].words[3].upos
+                        if doc.sentences and doc.sentences[0].words:
+                            upos = doc.sentences[0].words[0].upos
                         else:
                             upos = 'X'
                         self.pos_cache[word_l] = upos
