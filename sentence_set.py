@@ -801,7 +801,29 @@ class Label:
                         continue
                     if not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", strip_punct(dist)):
                         continue
-                    
+
+                    # QUALITY GATE + GRAMMAR GUARD — applied to every fallback stage
+                    # (mirrors get_potential_distractors FINAL FILTER so no garbage can
+                    # enter through Stage 1/3/5/6 or ultimate desperation either).
+                    if lang == 'de':
+                        if len(dist_l) < 8:
+                            if not re.search(r'[aeiouyäöü]', dist_l):
+                                continue
+                            try:
+                                import wordfreq as _wf_fb
+                                if _wf_fb.zipf_frequency(dist_l, 'de') < float(params.get('json_min_zipf', 1.5)):
+                                    continue
+                            except Exception:
+                                pass
+                        if match_casing_only:
+                            _pc = getattr(dictionary, 'pos_cache', {})
+                            if dist_l in _pc:
+                                _is_noun_d = _pc[dist_l] in ('NOUN', 'PROPN')
+                                if not target_is_cap and _is_noun_d:
+                                    continue
+                                if target_is_cap and not _is_noun_d:
+                                    continue
+
                     # Levenshtein distance check: reject if too similar to any target word
                     too_similar = False
                     for target_word in self.words:
@@ -1041,18 +1063,22 @@ class Label:
                 # Fallback stage 2: Strict exact-length fallback from full in-memory dictionary first.
                 logging.debug(f"FALLBACK Stage 2: Full dictionary exact-length search for item {self.id}, label {self.lab}")
                 try:
-                    exact_full_pool = [w.text for w in getattr(dict, 'words', []) if len(strip_punct(w.text)) == desired_len]
+                    # Fixed: was erroneously using Python builtin 'dict' instead of
+                    # the actual dictionary object, so this stage always returned [].
+                    exact_full_pool = [w.text for w in getattr(dictionary, 'words', []) if len(strip_punct(w.text)) == desired_len]
                 except Exception:
                     exact_full_pool = []
-                # When match_casing_only is active, enforce POS filter in fallback too
-                if match_casing_only and pos_filter and exact_full_pool:
+                # Enforce noun/non-noun split in casing mode regardless of pos_filter.
+                # Previously this check required pos_filter to be truthy, but
+                # pos_filter=None in casing-only mode — so the guard was never applied.
+                if match_casing_only and exact_full_pool:
                     _is_noun_check = lambda w: (
                         (hasattr(dictionary, 'pos_cache') and dictionary.pos_cache.get(w.lower()) in ('NOUN', 'PROPN'))
                         or (hasattr(dictionary, 'has_titlecase_variant') and dictionary.has_titlecase_variant(w))
                     )
-                    if pos_filter == '!NOUN':
+                    if not target_is_cap:
                         exact_full_pool = [w for w in exact_full_pool if not _is_noun_check(w)]
-                    elif pos_filter == 'NOUN':
+                    else:
                         exact_full_pool = [w for w in exact_full_pool if _is_noun_check(w)]
                 if exact_full_pool:
                     random.shuffle(exact_full_pool)
@@ -1140,12 +1166,46 @@ class Label:
                     if final_pool:
                         random.shuffle(final_pool)
                         for cand in final_pool:
-                            if cand.lower() not in banned_l and cand.lower() not in avoid:
+                            cand_l = cand.lower()
+                            if cand_l in banned_l or cand_l in avoid:
+                                continue
+                            # Apply the same guards as _find_best so the ultimate
+                            # desperation path cannot produce garbage or casing leaks.
+                            if lang == 'de':
+                                if len(cand_l) < 8:
+                                    if not re.search(r'[aeiouyäöü]', cand_l):
+                                        continue
+                                    try:
+                                        import wordfreq as _wf_desp
+                                        if _wf_desp.zipf_frequency(cand_l, 'de') < float(params.get('json_min_zipf', 1.5)):
+                                            continue
+                                    except Exception:
+                                        pass
+                                if is_propn_candidate(cand):
+                                    continue
+                                if match_casing_only:
+                                    _pc2 = getattr(dictionary, 'pos_cache', {})
+                                    if cand_l in _pc2:
+                                        _is_noun_d2 = _pc2[cand_l] in ('NOUN', 'PROPN')
+                                        if not target_is_cap and _is_noun_d2:
+                                            continue
+                                        if target_is_cap and not _is_noun_d2:
+                                            continue
+                            best_word = cand
+                            break
+                        if best_word is None:
+                            # Total desperation: ignore banned list, take first clean word
+                            for cand in final_pool:
+                                cand_l = cand.lower()
+                                if lang == 'de' and len(cand_l) < 8:
+                                    if not re.search(r'[aeiouyäöü]', cand_l):
+                                        continue
+                                if is_propn_candidate(cand):
+                                    continue
                                 best_word = cand
                                 break
                         if best_word is None:
-                            # Total desperation: ignore banned list, just take the first one
-                            best_word = final_pool[0]
+                            best_word = final_pool[0]  # absolute last resort
                 else:
                     # Legacy fallback for English/etc.
                     emergency_pool = [w.text for w in getattr(dictionary, 'words', []) 
