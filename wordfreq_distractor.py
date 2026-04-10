@@ -436,12 +436,8 @@ class wordfreq_dict(distractor_dict):
              if untagged:
                  for w in untagged:
                      w_l = w.lower()
-                     if self.is_german_noun_heuristic(w_l):
-                         self.pos_cache[w_l] = 'NOUN'
-                         self.case_map[w_l] = w_l.capitalize()
-                     else:
-                         self.pos_cache[w_l] = 'X'
-                         self.case_map[w_l] = None
+                     self.pos_cache[w_l] = 'X'
+                     self.case_map[w_l] = None
 
         match_casing_only = params.get('match_casing_only', False)
         target_is_capitalized = params.get('target_is_capitalized', False)
@@ -626,33 +622,17 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
 
 
 class wordfreq_German_zipf_dict(wordfreq_dict):
-    """Zipf-based German dictionary built from the wordfreq library.
-
-    Frequencies stored on distractor objects are in natural-log units
-    (zipf * ln(10)) to be consistent with other code.
-    German noun casing is handled by apply_postcase in sentence_set.py
-    (spaCy POS tagging + .capitalize()).
-
-    Supported params:
-    - min_zipf (float, default 3.0)
-    - min_word_len (int, default 3)
-    - lowercase_only (bool, default True)
-    - include_words (path, optional)
-    - exclude_words (path, optional)
-    """
+    """Zipf-based German dictionary built from the wordfreq library."""
 
     def __init__(self, params={}):
         self.lang = "de"
         exclude = params.get("exclude_words", "exclude_de.txt")
-        lowercase_only = bool(params.get("lowercase_only", True))
         min_word_len = int(params.get("min_word_len", 3))
         min_zipf = float(params.get("min_zipf", 3.0))
         short_word_min_zipf = float(params.get("short_word_min_zipf", 3.5))
 
         exclusions_lower = set()
         if exclude is not None:
-            import os
-            # Try to resolve relative paths against the script directory
             if not os.path.isabs(exclude) and not os.path.exists(exclude):
                 fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), exclude)
                 if os.path.exists(fallback):
@@ -664,37 +644,15 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                         if w and not w.startswith("#"):
                             exclusions_lower.add(w.lower())
             except Exception as e:
-                import logging
                 logging.error(f"Could not load exclude_words from {exclude}: {e}")
-                pass
-        # === PRELOAD NOUN CACHE (NEW) ===
+
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
         if not hasattr(self, 'case_map'):
             self.case_map = {}
-        
-        # === DISABLED: Pre-loaded JSON cache has corrupted POS tags (e.g., nouns tagged as ADJ) ===
-        # Strategy: Build pos_cache at RUNTIME via batch_tag_words() with correct Stanza contextual framing
-        # This ensures accurate POS detection instead of using stale, mislabeled cache entries
-        # try:
-        #     import json
-        #     import os
-        #     cache_file = "models/german_code/german_pos_cache_v2.json"
-        #     if os.path.exists(cache_file):
-        #         with open(cache_file, "r", encoding="utf-8") as f:
-        #             cached_data = json.load(f)
-        #             self.pos_cache.update(cached_data)
-        #         
-        #         for lw, upos in cached_data.items():
-        #             if upos in ('NOUN', 'PROPN'):
-        #                 self.case_map[lw] = lw.capitalize()
-        #             else:
-        #                 self.case_map[lw] = None
-        #                 
-        #         print(f"[CACHE] Successfully loaded {len(cached_data)} POS tags from {cache_file}!", flush=True)
-        # except Exception as e:
-        #     print(f"[CACHE] Error loading POS cache: {e}")
-        
+        if not hasattr(self, 'overrides'):
+            self.overrides = {}
+
         print(f"\n>>> LOADING GERMAN DICTIONARY: {self.__class__.__name__} (Runtime Stanza tagging enabled)", flush=True)
 
         freq_dict = wordfreq.get_frequency_dict("de")
@@ -703,20 +661,13 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         self.words = []
         seen = set()
         for raw in source_words:
-            w = raw.strip()
-            lw = w.lower()
-            if lw in seen:
-                continue
-            if lw in exclusions_lower:
+            lw = raw.strip().lower()
+            if lw in seen or lw in exclusions_lower:
                 continue
             if not re.match(r"^[a-zäöüß]+$", lw):
                 continue
-            if len(lw) < min_word_len:
+            if len(lw) < min_word_len or not re.search(r"[aeiouyäöü]", lw):
                 continue
-            # Require a vowel so candidates are clearly word-like
-            if not re.search(r"[aeiouyäöü]", lw):
-                continue
-
             if _is_english_dominant(lw):
                 continue
             try:
@@ -728,14 +679,13 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             if z < effective_min_zipf:
                 continue
             freq_val = z * math.log(10)
-            # The word is added; its POS and CASE will be determined 100% by SpaCy/Stanza on demand
             self.words.append(distractor(lw, freq_val, pos=None))
             seen.add(lw)
 
-        # (Do not wipe case_map or pos_cache here, they were populated from cache above)
         self.nlp_sp = None
         self._init_spacy()
         self._build_length_index()
+        self._load_pos_overrides(params.get('pos_overrides', 'pos_overrides.txt'))
 
 
     def _load_pos_overrides(self, path):
@@ -778,35 +728,6 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         except Exception as e:
             logging.error(f"Error loading Stanza: {e}")
             self.nlp_sp = None
-
-    def is_german_noun_heuristic(self, word):
-        """Heuristic check for German nouns using wordfreq casing distribution.
-        
-        Returns True if the word is significantly more frequent when capitalized.
-        Falls back to Stanza frame tagging if wordfreq is ambiguous.
-        """
-        w_lower = word.lower()
-        w_cap = word.capitalize()
-        try:
-            z_lower = wordfreq.zipf_frequency(w_lower, 'de')
-            z_cap = wordfreq.zipf_frequency(w_cap, 'de')
-            
-            # Case 1: Dominant TitleCase (Zipf difference > 0.3 is ~2x freq)
-            if z_cap > (z_lower + 0.3):
-                return True
-            
-            # Case 2: Ambiguous wordfreq (often happens if data is case-insensitive)
-            # Use Stanza frame check as a robust fallback
-            if z_cap > 1.0 and self.nlp_sp is not None:
-                # Use neutral slot: "Das ist ein {Word}."
-                # We reuse _eval_single_word_case which does exactly this
-                result = self._eval_single_word_case(w_cap)
-                return result is not None
-                
-        except Exception:
-            pass
-        return False
-
 
     def _eval_single_word_case(self, token_lower):
         """POS check using Stanza."""
