@@ -192,73 +192,117 @@ class wordfreq_dict(distractor_dict):
         return matches
 
     def batch_tag_words(self, words, params=None):
-        """Tag a list of words in bulk using high-performance Stanza neural tagging.
+        """Tag a list of words in bulk using Stanza neural tagging with SMART SELECTIVE FRAMING.
         
-        This method processes words using Stanza's universal POS (UPOS) tagging.
-        For German, it identifies nouns and proper nouns to ensure correct TitleCasing,
-        leveraging Stanza's deep-learning morphosyntactic analysis.
+        For German, uses morphology-based frame selection:
+        - Verbs (end in -te, -ten, -iert, -et, -en): Frame "Er {word} es."
+        - Adjectives (end in -lich, -ig, -isch, -er, -keit): Frame "Das ist {word}."
+        - Nouns (capitalized or end in -e, -in, -tion, -heit): Frame "Das ist ein {word}."
+        - Others: Isolated tagging
         """
         if self.nlp_sp is None or not words:
             if self.nlp_sp is None:
                 print(f"[DIAG] batch_tag_words SKIPPED: nlp_sp is None", flush=True)
             return
 
-        # Initialize POS cache if not exists
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
 
-        # Filter for words not yet in case_map
         unique_words = list(set(w.lower() for w in words if w.lower() not in self.case_map))
         if not unique_words:
             return
 
-        # Stanza Tagging (German)
-        # We pass the raw words to Stanza. Since we are dealing with German morphology
-        # Stanza's neural net handles capitalization assumptions internally very well.
-        content_words = unique_words
-        if not content_words:
-            return
-
-        # Read batch size dynamically from params
-        batch_size = 2000  # fallback default
+        batch_size = 256
         if params is not None:
             try:
-                batch_size = int(params.get('nlp_batch_size', params.get('spacy_batch_size', 2000)))
+                batch_size = int(params.get('nlp_batch_size', params.get('spacy_batch_size', 256)))
             except Exception:
                 pass
 
         try:
             import stanza
-            # Batch process in chunks to prevent memory explosion
-            out_docs = []
+            import re
             display_count = False
-            for i in range(0, len(content_words), batch_size):
-                chunk = content_words[i:i + batch_size]
+            
+            for i in range(0, len(unique_words), batch_size):
+                chunk = unique_words[i:i + batch_size]
                 
-                # --- GERMAN CONTEXTUAL FRAME: NEUTRAL ISOLATION ---
-                # IMPORTANT: Do NOT use "Das ist ein {word}." - it forces NOUN tagging!
-                # Instead, use ISOLATED tagging which gives accurate POS for all word types.
-                # Stanza's neural network is strong enough for isolated German words.
                 if getattr(self, 'lang', 'en') == 'de':
                     if not display_count:
-                        print(f"    [NLP] Running Stanza with Isolated Tagging on {len(content_words)} candidates...", flush=True)
+                        print(f"    [NLP] Running Stanza with Smart Selective Framing on {len(unique_words)} candidates...", flush=True)
                         display_count = True
-                    # Use isolated tagging (no forcing frame)
-                    in_docs = [stanza.Document([], text=w) for w in chunk]
-                    out_chunk = self.nlp_sp(in_docs)
-                    # Extract POS from first token (the word itself, isolated)
-                    for word_l, doc in zip(chunk, out_chunk):
-                        if doc.sentences and doc.sentences[0].words:
-                            upos = doc.sentences[0].words[0].upos
+                    
+                    # Categorize by morphology (VERB check first for priority)
+                    verb_words = []
+                    adj_words = []
+                    noun_words = []
+                    other_words = []
+                    
+                    for w in chunk:
+                        w_lower = w.lower()
+                        # VERB: ends in past tense markers or -en (infinitive)
+                        # Be careful: "matte" ends in -te but is a NOUN (nominalized), not verb form
+                        # Heuristic: verbs typically have 6+ chars for past tense forms
+                        is_verb = (len(w_lower) >= 6 and re.search(r'(te|ten|iert|et)$', w_lower)) or re.search(r'(ste|ste|schrieb|tritt|trat)$', w_lower)
+                        
+                        if is_verb:
+                            verb_words.append(w_lower)
+                        elif re.search(r'(lich|ig|isch|keit)$', w_lower):
+                            adj_words.append(w_lower)
+                        elif w[0].isupper() or re.search(r'(e|in|tion|heit|ness)$', w_lower):
+                            noun_words.append(w_lower)
                         else:
-                            upos = 'X'
-                        self.pos_cache[word_l] = upos
-                        if upos in ('NOUN', 'PROPN'):
-                            self.case_map[word_l] = word_l.capitalize()
-                        else:
-                            self.case_map[word_l] = None
+                            other_words.append(w_lower)
+                    
+                    # VERB FRAME: "Er {word} es."
+                    if verb_words:
+                        in_docs = [stanza.Document([], text=f"Er {w} es.") for w in verb_words]
+                        out_chunk = self.nlp_sp(in_docs)
+                        for word_l, doc in zip(verb_words, out_chunk):
+                            if doc.sentences and len(doc.sentences[0].words) >= 2:
+                                upos = doc.sentences[0].words[1].upos  # [0]=Er, [1]=WORD, [2]=es
+                            else:
+                                upos = 'X'
+                            self.pos_cache[word_l] = upos
+                            self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
+                    
+                    # ADJECTIVE FRAME: "Das ist {word}."
+                    if adj_words:
+                        in_docs = [stanza.Document([], text=f"Das ist {w}.") for w in adj_words]
+                        out_chunk = self.nlp_sp(in_docs)
+                        for word_l, doc in zip(adj_words, out_chunk):
+                            if doc.sentences and len(doc.sentences[0].words) >= 3:
+                                upos = doc.sentences[0].words[2].upos
+                            else:
+                                upos = 'X'
+                            self.pos_cache[word_l] = upos
+                            self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
+                    
+                    # NOUN FRAME: "Das ist ein {word}."
+                    if noun_words:
+                        in_docs = [stanza.Document([], text=f"Das ist ein {w.capitalize()}.") for w in noun_words]
+                        out_chunk = self.nlp_sp(in_docs)
+                        for word_l, doc in zip(noun_words, out_chunk):
+                            if doc.sentences and len(doc.sentences[0].words) >= 4:
+                                upos = doc.sentences[0].words[3].upos
+                            else:
+                                upos = 'X'
+                            self.pos_cache[word_l] = upos
+                            self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
+                    
+                    # ISOLATED: No frame
+                    if other_words:
+                        in_docs = [stanza.Document([], text=w) for w in other_words]
+                        out_chunk = self.nlp_sp(in_docs)
+                        for word_l, doc in zip(other_words, out_chunk):
+                            if doc.sentences and doc.sentences[0].words:
+                                upos = doc.sentences[0].words[0].upos
+                            else:
+                                upos = 'X'
+                            self.pos_cache[word_l] = upos
+                            self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
                 else:
-                    # Non-German or fallback: isolated tagging
+                    # Non-German: isolated tagging
                     in_docs = [stanza.Document([], text=w) for w in chunk]
                     out_chunk = self.nlp_sp(in_docs)
                     for word_l, doc in zip(chunk, out_chunk):
@@ -267,29 +311,10 @@ class wordfreq_dict(distractor_dict):
                         else:
                             upos = 'X'
                         self.pos_cache[word_l] = upos
-                        if upos in ('NOUN', 'PROPN'):
-                            self.case_map[word_l] = word_l.capitalize()
-                        else:
-                            self.case_map[word_l] = None
+                        self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
         except Exception as e:
             print(f"[DIAG] batch_tag_words Stanza failed: {e}", flush=True)
-            for word_l in content_words:
-                self.case_map[word_l] = None
-                self.pos_cache[word_l] = 'X'
-
-            # Diagnostic: HARD PRINT that bypasses logging config
-            noun_count = sum(1 for w in content_words if self.pos_cache.get(w) in ('NOUN', 'PROPN'))
-            non_noun_count = len(content_words) - noun_count
-            print(f"[DIAG] Batch tagged {len(content_words)} words: {noun_count} NOUN, {non_noun_count} non-NOUN", flush=True)
-            noun_examples = [w for w in content_words if self.pos_cache.get(w) in ('NOUN', 'PROPN')][:5]
-            non_noun_examples = [f"{w}({self.pos_cache.get(w)})" for w in content_words if self.pos_cache.get(w) not in ('NOUN', 'PROPN')][:5]
-            if noun_examples:
-                print(f"[DIAG] NOUN examples: {noun_examples}", flush=True)
-            if non_noun_examples:
-                print(f"[DIAG] Non-NOUN examples: {non_noun_examples}", flush=True)
-        except Exception as e:
-            logging.error(f"SpaCy batch tagging failed: {e}")
-            for word_l in content_words:
+            for word_l in unique_words:
                 self.case_map[word_l] = None
                 self.pos_cache[word_l] = 'X'
 
@@ -788,53 +813,131 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         return ans if ans is not None else token
 
     def batch_tag_words(self, words, params=None):
-        """Batch-tag German candidates using Stanza bulk_process for GPU speed."""
+        """Batch-tag German candidates using Stanza with SMART SELECTIVE FRAMING.
+        
+        Categorizes words by morphology and uses context-appropriate sentences:
+        - Verbs (6+ chars ending -te, -ten, -iert, -et): Frame "Er {word} es."
+        - Adjectives (-lich, -ig, -isch, -keit): Frame "Das ist {word}."
+        - Nouns (capitalized or -e, -in, -tion, -heit): Frame "Das ist ein {word}."
+        - Others: Isolated tagging
+        """
         if self.nlp_sp is None or not words:
             return
 
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
 
-        # 1. Identify words that need tagging
+        # Identify words that need tagging
         to_tag = list(set(w.lower() for w in words if w.lower() not in self.pos_cache))
         if not to_tag:
             return
 
-        print(f"    [STANZA] Batch tagging {len(to_tag)} new German candidates...", flush=True)
+        print(f"    [STANZA] Batch tagging {len(to_tag)} new German candidates with selective framing...", flush=True)
 
-        # 2. True neural batching with bulk_process
-        BATCH = int(params.get('nlp_batch_size', 2000)) if params else 2000
+        import re
+        BATCH = int(params.get('nlp_batch_size', 256)) if params else 256
+        
         for i in range(0, len(to_tag), BATCH):
             batch = to_tag[i : i + BATCH]
-            frames = [f"Das ist ein {w}." for w in batch]
+            
+            # Categorize by morphology
+            verb_words = []
+            adj_words = []
+            noun_words = []
+            other_words = []
+            
+            for w in batch:
+                w_lower = w.lower()
+                # VERB: 6+ chars ending in past tense markers
+                is_verb = (len(w_lower) >= 6 and re.search(r'(te|ten|iert|et)$', w_lower))
+                
+                if is_verb:
+                    verb_words.append(w_lower)
+                # ADJECTIVE: Specific endings (-lich, -ig, -isch, -keit)
+                # NOTE: Words ending in -ä, -ö, -ü, -e might be adjectives or nouns
+                # Since we can't distinguish morphologically, try adjective frame first
+                elif re.search(r'(lich|ig|isch|keit)$', w_lower):
+                    adj_words.append(w_lower)
+                # NOUN: Capitalized or specific noun endings
+                # Be conservative: only add clear noun morphology, let uncertain words use "other"
+                elif w[0].isupper() or re.search(r'(tion|heit|ness|mann|schaft|um)$', w_lower):
+                    noun_words.append(w_lower)
+                else:
+                    # Everything else (including -e, -in endings) gets isolated tagging
+                    # This includes potential adjectives and ambiguous nouns
+                    other_words.append(w_lower)
+            
             try:
-                docs = self.nlp_sp.bulk_process(frames)
-                for word, doc in zip(batch, docs):
-                    if len(doc.sentences) > 0 and len(doc.sentences[0].words) >= 4:
-                        final_pos = doc.sentences[0].words[3].upos
-                    elif doc.sentences and doc.sentences[0].words:
-                        final_pos = doc.sentences[0].words[0].upos
-                    else:
-                        final_pos = 'X'
-                    self.pos_cache[word] = final_pos
-                    # UPDATE EMERGENCY INDEX SO NEW TAGS ARE IMMEDIATELY AVAILABLE
-                    l = len(word)
-                    if final_pos in ('NOUN', 'PROPN'):
-                        self.case_map[word] = word.capitalize()
-                        if l not in self.nouns_by_len: self.nouns_by_len[l] = []
-                        if word not in self.nouns_by_len[l]: self.nouns_by_len[l].append(word)
-                    else:
-                        self.case_map[word] = None
-                        if l not in self.others_by_len: self.others_by_len[l] = []
-                        if word not in self.others_by_len[l]: self.others_by_len[l].append(word)
+                # VERB FRAME: "Er {word} es."
+                if verb_words:
+                    frames = [f"Er {w} es." for w in verb_words]
+                    docs = self.nlp_sp.bulk_process(frames)
+                    for word, doc in zip(verb_words, docs):
+                        if doc.sentences and len(doc.sentences[0].words) >= 2:
+                            final_pos = doc.sentences[0].words[1].upos  # [0]=Er, [1]=VERB
+                        else:
+                            final_pos = 'X'
+                        self._record_pos_tag(word, final_pos)
+                
+                # ADJECTIVE FRAME: "Das ist {word}."
+                if adj_words:
+                    frames = [f"Das ist {w}." for w in adj_words]
+                    docs = self.nlp_sp.bulk_process(frames)
+                    for word, doc in zip(adj_words, docs):
+                        if doc.sentences and len(doc.sentences[0].words) >= 3:
+                            final_pos = doc.sentences[0].words[2].upos  # [0]=Das, [1]=ist, [2]=ADJ
+                        else:
+                            final_pos = 'X'
+                        self._record_pos_tag(word, final_pos)
+                
+                # NOUN FRAME: "Das ist ein {word}."
+                if noun_words:
+                    frames = [f"Das ist ein {w.capitalize()}." for w in noun_words]
+                    docs = self.nlp_sp.bulk_process(frames)
+                    for word, doc in zip(noun_words, docs):
+                        if doc.sentences and len(doc.sentences[0].words) >= 4:
+                            final_pos = doc.sentences[0].words[3].upos  # [0]=Das, [1]=ist, [2]=ein, [3]=NOUN
+                        else:
+                            final_pos = 'X'
+                        self._record_pos_tag(word, final_pos)
+                
+                # ISOLATED: No frame
+                if other_words:
+                    frames = other_words
+                    docs = self.nlp_sp.bulk_process(frames)
+                    for word, doc in zip(other_words, docs):
+                        if doc.sentences and doc.sentences[0].words:
+                            final_pos = doc.sentences[0].words[0].upos  # [0]=WORD
+                        else:
+                            final_pos = 'X'
+                        self._record_pos_tag(word, final_pos)
+                        
             except Exception as e:
-                logging.error(f"[STANZA] Bulk tagging batch failed: {e}")
-                # Fallback to one-by-one
+                logging.error(f"[STANZA] Selective framing batch failed: {e}")
+                # Fallback to one-by-one isolated
                 for w in batch:
                     self._eval_single_word_case(w)
 
-        # 3. Persist to disk
+        # Persist to disk
         self.save_pos_cache()
+    
+    def _record_pos_tag(self, word, upos):
+        """Record a POS tag in the cache and update case_map and indices."""
+        self.pos_cache[word] = upos
+        l = len(word)
+        
+        if upos in ('NOUN', 'PROPN'):
+            self.case_map[word] = word.capitalize()
+            if l not in self.nouns_by_len:
+                self.nouns_by_len[l] = []
+            if word not in self.nouns_by_len[l]:
+                self.nouns_by_len[l].append(word)
+        else:
+            self.case_map[word] = None
+            if l not in self.others_by_len:
+                self.others_by_len[l] = []
+            if word not in self.others_by_len[l]:
+                self.others_by_len[l].append(word)
 
     def save_pos_cache(self):
         """Persist the POS cache to the v2 file."""

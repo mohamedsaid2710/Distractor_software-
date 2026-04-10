@@ -559,13 +559,7 @@ class Label:
         if hasattr(dictionary, 'batch_tag_words'):
             target_words_to_tag = [target_stripped.lower()] if target_stripped else []
             if target_words_to_tag:
-                print(f"    [PRE-TAG] Tagging target word: {target_words_to_tag}", flush=True)
                 dictionary.batch_tag_words(target_words_to_tag, params=params)
-                if hasattr(dictionary, 'pos_cache') and target_words_to_tag[0] in dictionary.pos_cache:
-                    cached_pos = dictionary.pos_cache[target_words_to_tag[0]]
-                    print(f"    [PRE-TAG] SUCCESS: {target_words_to_tag[0]} → {cached_pos}", flush=True)
-                else:
-                    print(f"    [PRE-TAG] FAILED: {target_words_to_tag[0]} NOT in cache after tagging!", flush=True)
 
         print(f"  [Batch] Finding distractors for '{orig_target}' (Cap: {target_is_cap})...")
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
