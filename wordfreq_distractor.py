@@ -27,15 +27,24 @@ def _is_english_dominant(token: str, margin: float = 0.3) -> bool:
 
 
 # QUALITY GATE: Runtime validator for cache words
-def _is_valid_cache_word(word: str) -> bool:
+def _is_valid_cache_word(word: str, min_target_length: int = 3) -> bool:
     """
     Quality gate for words pulled from POS cache.
     Rejects garbage patterns that pass frequency checks but are corrupted (aa, abc, etc).
+    
+    Args:
+        word: Word to validate
+        min_target_length: Minimum target word length (relaxes gates for short words)
     """
     word_lower = word.lower()
+    word_len = len(word_lower)
     
-    # Gate 1: Minimum structure (4+ chars)
-    if len(word_lower) < 4:
+    # Gate 1: Minimum structure - proportional to target length
+    # For 3-char targets, accept 3-char candidates
+    # For 4-5 char targets, accept 4+ char candidates  
+    # For 6+ char targets, enforce stricter minimums
+    min_word_len = max(2, min_target_length)
+    if word_len < min_word_len:
         return False
     
     # Gate 2: Must have German vowels
@@ -43,16 +52,30 @@ def _is_valid_cache_word(word: str) -> bool:
         return False
     
     # Gate 3: Cannot be mostly same character (catches "aaaaaa", "bbbb", etc)
+    # STRICTER for short words (they have more repetition naturally)
     char_freq = {}
     for c in word_lower:
         char_freq[c] = char_freq.get(c, 0) + 1
     max_freq = max(char_freq.values())
-    if max_freq / len(word_lower) > 0.5:  # >50% same char = junk
+    
+    # Short words (<4 chars): max 60% same char (allows "aaa", "bbb")
+    # Medium words (4-7): max 50% same char
+    # Long words (8+): max 40% same char
+    if word_len < 4:
+        threshold = 0.6
+    elif word_len < 8:
+        threshold = 0.5
+    else:
+        threshold = 0.4
+    
+    if max_freq / word_len > threshold:
         return False
     
     # Gate 4: Must have consonants (not pure vowels)
-    if not re.search(r'[bcdfghjklmnpqrstvwxz]', word_lower):
-        return False
+    # RELAXED for very short words (2-3 chars can be vowel-heavy)
+    if word_len >= 4:
+        if not re.search(r'[bcdfghjklmnpqrstvwxz]', word_lower):
+            return False
     
     return True
 
@@ -85,7 +108,8 @@ class wordfreq_dict(distractor_dict):
         # NOW WITH QUALITY GATE: Reject garbage patterns (aa, abc, etc)
         for lw, category in pos_cache.items():
             # QUALITY GATE: Skip garbage patterns
-            if not _is_valid_cache_word(lw):
+            # Validate each word relative to its own length
+            if not _is_valid_cache_word(lw, min_target_length=len(lw)):
                 continue
                 
             l = len(lw)
@@ -311,7 +335,7 @@ class wordfreq_dict(distractor_dict):
         # NOW WITH QUALITY GATE: Reject garbage patterns (aa, abc, etc) that passed frequency checks
         if len(distractor_opts) < target_pool_size and hasattr(self, 'pos_cache'):
             target_exact_len = (min_length + max_length) // 2
-            json_pool = [w for w, pos in self.pos_cache.items() if len(w) == target_exact_len and _is_valid_cache_word(w)]
+            json_pool = [w for w, pos in self.pos_cache.items() if len(w) == target_exact_len and _is_valid_cache_word(w, min_target_length=min_length)]
             if exclude_words_set:
                 json_pool = [w for w in json_pool if w not in exclude_words_set]
             
