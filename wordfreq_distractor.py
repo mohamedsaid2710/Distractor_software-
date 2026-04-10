@@ -319,6 +319,7 @@ class wordfreq_dict(distractor_dict):
 
     def get_potential_distractors(self, min_length, max_length, min_freq, max_freq, params, pos_filter=None):
         """Returns list of candidates, using heuristic first, then widening, then batch SpaCy validation."""
+        _lang = getattr(self, 'lang', 'de')
         n = params.get('num_to_test', 200)
         # Fetch MORE so that after POS filtering we still have 'n' candidates.
         # If we have a POS filter, we need a significantly larger pool to find survivors.
@@ -351,7 +352,6 @@ class wordfreq_dict(distractor_dict):
         # SHORT-WORD PROTECTION: For ≤5 char words, require JSON cache verification + QUALITY GATE
         # (Protects against web-scraping junk like 'fug', 'xte', 'uru' that enter via wordfreq)
         if max_length <= 5 and hasattr(self, 'pos_cache') and self.pos_cache:
-            _lang = getattr(self, 'lang', 'de')
             distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() in self.pos_cache and _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length, lang=_lang)]
         
         # PRE-FILTER: Remove excluded words
@@ -431,7 +431,6 @@ class wordfreq_dict(distractor_dict):
             self.batch_tag_words(distractor_opts, params=params)
         
         # Pre-compute quality gate params once (German only)
-        _lang = getattr(self, 'lang', None)
 
         # 4. FINAL FILTER: Apply Ironclad Casing, Noise, and PROPN checks
         # [German Cache Injection]: Ensure ANY leftover untagged words get a heuristic pass 
