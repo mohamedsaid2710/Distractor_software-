@@ -787,11 +787,6 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             result = pos_tag in ('NOUN', 'PROPN')
             return result
         
-        # PRIORITY 2: Dictionary-Frequency Heuristic (Robust for German)
-        if getattr(self, 'lang', None) == 'de':
-             if self.is_german_noun_heuristic(t_lower):
-                 return True
-
         # PRIORITY 3: Fallback to titlecase heuristic (wordfreq-based)
         if t_lower not in self.case_map:
             self._eval_single_word_case(t_lower)
