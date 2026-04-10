@@ -5,6 +5,7 @@ import math
 import random
 import logging
 import json
+import bisect
 
 from utils import strip_punct
 from distractor import distractor_dict, distractor
@@ -106,24 +107,67 @@ class wordfreq_dict(distractor_dict):
         self.words_by_len = {}
         self.nlp_sp = None
 
+    def get_words_by_len(self, desired_len):
+        """Standard accessor for all words of a certain length."""
+        pool = self.words_by_len.get(desired_len, [])
+        # Return just the text for compatibility with old Stage 2 logic if still used
+        return [w.text for w in pool]
+
+    def get_best_frequency_pool(self, desired_len, target_freq, n=400):
+        """
+        Retrieves a 'neighborhood' of words with frequencies closest to target_freq.
+        Uses binary search for O(log N) neighborhood identification.
+        """
+        full_pool = self.words_by_len.get(desired_len, [])
+        if not full_pool:
+            return []
+            
+        if len(full_pool) <= n:
+            return [w.text for w in full_pool]
+            
+        # Since full_pool is sorted by frequency DESCENDING, we use a custom key
+        # frequencies are [7.0, 6.9, ..., 1.0]
+        # To find 'target_freq' in a descending list, we can search in the negative list
+        # or just use bisect with a custom order.
+        
+        # Extract Zipf frequencies for binary search
+        # NOTE: Using negative frequencies so bisection on descending order works
+        freqs_neg = [-w.freq for w in full_pool] # [-7.0, -6.9, ..., -1.0] (ascending)
+        
+        idx = bisect.bisect_left(freqs_neg, -target_freq)
+        
+        # Take n/2 words from each side of the index
+        start = max(0, idx - (n // 2))
+        end = min(len(full_pool), start + n)
+        
+        # Adjust start if we hit the end
+        if end == len(full_pool):
+            start = max(0, end - n)
+            
+        neighborhood = full_pool[start:end]
+        return [w.text for w in neighborhood]
+
     def _build_length_index(self):
-        """Internal helper to organize words by length and category for fast lookup."""
+        """Internal helper to organize words by length for frequency-matched fallback lookups."""
         self.words_by_len = {}
-        self.nouns_by_len = {}
-        self.others_by_len = {}
-        
-        pos_cache = getattr(self, 'pos_cache', {})
-        
-        # 1. Main length index (from wordfreq valid words)
         for w in self.words:
-            l = w.len
+            # Categorize by length
+            l = getattr(w, 'len', len(strip_punct(w.text)))
             if l not in self.words_by_len:
                 self.words_by_len[l] = []
             self.words_by_len[l].append(w)
-            
-        # 2. Categorized indices using the FULL JSON KNOWLEDGE BASE
-        # Treat the 634k-word JSON as the primary source for the emergency pool
-        # NOW WITH QUALITY GATE: Reject garbage patterns (xte, odr, etc with Zipf validation)
+        
+        # KEY FIX: Sort each bucket by frequency (descending) 
+        # to allow fast searching for closest frequency matches.
+        for l in self.words_by_len:
+            self.words_by_len[l].sort(key=lambda x: getattr(x, 'freq', 0), reverse=True)
+        
+        # Categorized noun indices
+        self.nouns_by_len = {}
+        self.others_by_len = {}
+        
+        # 2. Categorized indices using the POS CACHE (if available)
+        pos_cache = getattr(self, 'pos_cache', {})
         for lw, category in pos_cache.items():
             # QUALITY GATE: Skip garbage patterns
             # Validate each word relative to its own length
@@ -226,17 +270,44 @@ class wordfreq_dict(distractor_dict):
                     print(f"    [NLP] Running Stanza (isolated tagging) on {len(unique_words)} candidates...", flush=True)
                     display_count = True
                 
-                # SIMPLE ISOLATED TAGGING: Tag each word in isolation
-                in_docs = [stanza.Document([], text=w) for w in chunk]
-                out_chunk = self.nlp_sp(in_docs)
-                
-                for word_l, doc in zip(chunk, out_chunk):
-                    if doc.sentences and doc.sentences[0].words:
-                        upos = doc.sentences[0].words[0].upos
-                    else:
-                        upos = 'X'
-                    self.pos_cache[word_l] = upos
-                    self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
+                # German Specific Stanza Logic (Case Preservation + Framing is CRITICAL)
+                if getattr(self, 'lang', None) == 'de':
+                    # WRAP candidates in a neutral frame for context-sensitive tagging.
+                    # This ensures words like 'Ausschau' are tagged as NOUN, not ADJ.
+                    framed_texts = [f"Das ist {w}." for w in chunk]
+                    in_docs = [stanza.Document([], text=t) for t in framed_texts]
+                    out_chunk = self.nlp_sp(in_docs)
+                    
+                    for word_raw, doc in zip(chunk, out_chunk):
+                        # The candidate word is the 3rd token in "Das ist [WORD]."
+                        if doc.sentences and len(doc.sentences[0].words) >= 3:
+                            upos = doc.sentences[0].words[2].upos
+                        else:
+                            upos = 'X'
+                        
+                        word_l = word_raw.lower()
+                        self.pos_cache[word_l] = upos
+                        
+                        # LOGIC GUARD: If visually Titlecase, force NOUN if Stanza is 'X'
+                        if word_raw[0].isupper() and upos == 'X':
+                            self.pos_cache[word_l] = 'NOUN'
+                        
+                        # Map casing in JSON cache
+                        if self.pos_cache[word_l] in ('NOUN', 'PROPN'):
+                            self.case_map[word_l] = word_raw.capitalize()
+                        else:
+                            self.case_map[word_l] = None
+                else:
+                    # Non-German: standard isolated tagging
+                    in_docs = [stanza.Document([], text=w) for w in chunk]
+                    out_chunk = self.nlp_sp(in_docs)
+                    for word_l, doc in zip(chunk, out_chunk):
+                        if doc.sentences and doc.sentences[0].words:
+                            upos = doc.sentences[0].words[0].upos
+                        else:
+                            upos = 'X'
+                        self.pos_cache[word_l] = upos
+                        self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
                     
         except Exception as e:
             print(f"[DIAG] batch_tag_words Stanza failed: {e}", flush=True)
@@ -287,35 +358,40 @@ class wordfreq_dict(distractor_dict):
         if exclude_words_set:
             distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() not in exclude_words_set]
         
-        # TIER 1.5: Widening frequency range if needed (still wordfreq-based)
-        if len(distractor_opts) < target_pool_size and min_freq is not None and max_freq is not None:
-            max_widen = int(params.get('max_freq_widen', 15))
-            for i in range(1, max_widen + 1):
-                lower = self.get_words(min_length, max_length, min_freq - i, min_freq - i + 1, pos_filter=None, use_spacy=False)
-                higher = self.get_words(min_length, max_length, max_freq + i - 1, max_freq + i, pos_filter=None, use_spacy=False)
-                
-                if exclude_words_set:
-                    lower = [w for w in lower if strip_punct(w).lower() not in exclude_words_set]
-                    higher = [w for w in higher if strip_punct(w).lower() not in exclude_words_set]
-                distractor_opts.extend(lower)
-                distractor_opts.extend(higher)
-                distractor_opts = list(set(distractor_opts))
+        # TIER 1.5: Adaptive Frequency Widening
+        # If tight band failed, use the optimized neighborhood search (binary search)
+        if len(distractor_opts) < target_pool_size and 'target_zipf' in params:
+            target_zipf = params['target_zipf']
+            logging.info(f"Tight band search starved. Using neighborhood search around Zipf {target_zipf:.2f}")
+            
+            # Use binary-search-based neighborhood identifier
+            # Start with a generous neighborhood (n=1000) for fast retrieval
+            target_exact_len = (min_length + max_length) // 2
+            # Try exact length neighborhood first
+            neighbor_pool = self.get_best_frequency_pool(target_exact_len, target_zipf, n=1000)
+            
+            # Filter and add to candidates
+            if exclude_words_set:
+                neighbor_pool = [w for w in neighbor_pool if w not in exclude_words_set]
+            
+            distractor_opts.extend(neighbor_pool)
+            distractor_opts = list(set(distractor_opts))
+
+        # TIER 2: Quality Gate Fallback
+        # If still starving, we can pull from other nearby lengths using the same frequency search
+        if len(distractor_opts) < target_pool_size:
+            target_exact_len = (min_length + max_length) // 2
+            target_zipf = params.get('target_zipf', 5.0)
+            for length_diff in [1, -1]: # Try nearby length neighborhoods
+                adj_len = target_exact_len + length_diff
+                if adj_len >= 3:
+                    adj_pool = self.get_best_frequency_pool(adj_len, target_zipf, n=500)
+                    if exclude_words_set:
+                        adj_pool = [w for w in adj_pool if w not in exclude_words_set]
+                    distractor_opts.extend(adj_pool)
+                    distractor_opts = list(set(distractor_opts))
                 if len(distractor_opts) >= target_pool_size:
                     break
-
-        # TIER 2: JSON-DIRECT SEARCH (Golden Library + Quality Gate)
-        # If still starving, pull directly from the 634k JSON keys for EXACT length match.
-        # NOW WITH QUALITY GATE: Reject garbage patterns (xte, odr, etc) with Zipf validation
-        if len(distractor_opts) < target_pool_size and hasattr(self, 'pos_cache'):
-            target_exact_len = (min_length + max_length) // 2
-            _lang = getattr(self, 'lang', 'de')
-            json_pool = [w for w, pos in self.pos_cache.items() if len(w) == target_exact_len and _is_valid_cache_word(w, min_target_length=min_length, lang=_lang)]
-            if exclude_words_set:
-                json_pool = [w for w in json_pool if w not in exclude_words_set]
-            
-            random.shuffle(json_pool)
-            distractor_opts.extend(json_pool[:target_pool_size]) 
-            distractor_opts = list(set(distractor_opts))
 
         # TIER 3: GRADUAL EMERGENCY EXPANSION (Ultimate Quality fallback)
         # If thresholds are NOT met, gradually expand length tolerance.

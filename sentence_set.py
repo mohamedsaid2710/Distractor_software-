@@ -547,12 +547,18 @@ class Label:
                 # Build ordered preference list for later cascade sorting
                 compatible_pos_list = _POS_COMPATIBLE_CLASSES.get(
                     target_pos, ['ADV', 'ADJ', 'VERB', 'ADP'])
-
+        
         # Ironclad Casing: Inject target casing into params for this word
         orig_target = self.words[0] if self.words else ""
         target_stripped = strip_punct(orig_target)
         target_is_cap = target_stripped[0].isupper() if target_stripped else False
         params['target_is_capitalized'] = target_is_cap
+
+        # Calculate target Zipf for frequency-matched fallback lookups
+        target_zipf = 5.0 # default
+        if _wordfreq_mod:
+            target_zipf = _wordfreq_mod.zipf_frequency(target_stripped.lower(), 'de')
+        params['target_zipf'] = target_zipf
 
         # PRE-TAG TARGET WORD: Tag target *before* finding distractors
         # This ensures has_titlecase_variant() can find target POS in cache for accurate detection
@@ -564,14 +570,13 @@ class Label:
         print(f"  [Batch] Finding distractors for '{orig_target}' (Cap: {target_is_cap})...")
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
+        
         # --- ADAPTIVE LENGTH SEARCH (Fix for 0-candidate long words) ---
-        # For Nouns, we PREFER shorter, actual nouns rather than long adjectives
-        # that barely fit the length profile. 
-                
+        # If still nothing, dictionary already tried frequency widening.
+        # Now we only widen LENGTH as a last resort.
         if not distractor_opts:
             for extra_len in range(1, 11): # Try widening up to +/- 10 characters
-                logging.info(f"0 candidates for {self.words} after primary fetch. Widening search by +/- {extra_len}")
-                # Bias search downwards: it's better to have a shorter noun than no noun
+                logging.info(f"0 candidates. Widening length by +/- {extra_len}")
                 min_len_search = max(2, min_length - extra_len)
                 max_len_search = max_length + (extra_len // 2) if target_is_noun else (max_length + extra_len)
                 
@@ -1061,13 +1066,9 @@ class Label:
                 # Fallback stage 2: Strict exact-length fallback from full in-memory dictionary first.
                 logging.debug(f"FALLBACK Stage 2: Full dictionary exact-length search for item {self.id}, label {self.lab}")
                 try:
-                    # O(1) indexed lookup — uses the pre-built words_by_len index
-                    # (keyed by distractor.len at startup) instead of a linear scan
-                    # through all ~100k dictionary words.  The old code scanned
-                    # getattr(dict, 'words', []) — 'dict' was also the Python
-                    # builtin, so the stage always returned [] anyway.
-                    exact_full_pool = [w.text for w in
-                                       getattr(dictionary, 'words_by_len', {}).get(desired_len, [])]
+                    # O(1) indexed lookup — uses the frequency-neighborhood search
+                    # to keep distractors within a valid psycholinguistic range.
+                    exact_full_pool = dictionary.get_best_frequency_pool(desired_len, target_zipf)
                 except Exception:
                     exact_full_pool = []
                 # Enforce noun/non-noun split in casing mode regardless of pos_filter.
