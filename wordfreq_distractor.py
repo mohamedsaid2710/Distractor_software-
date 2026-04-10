@@ -430,6 +430,9 @@ class wordfreq_dict(distractor_dict):
         if self.nlp_sp is not None:
             self.batch_tag_words(distractor_opts, params=params)
         
+        # Pre-compute quality gate params once (German only)
+        _lang = getattr(self, 'lang', None)
+
         # 4. FINAL FILTER: Apply Ironclad Casing, Noise, and PROPN checks
         # [German Cache Injection]: Ensure ANY leftover untagged words get a heuristic pass 
         # before they hit the Grammar Guard.
@@ -449,8 +452,6 @@ class wordfreq_dict(distractor_dict):
         target_is_capitalized = params.get('target_is_capitalized', False)
         exclude_propn = params.get('exclude_propn_candidates', False)
         
-        # Pre-compute quality gate params once (German only)
-        _lang = getattr(self, 'lang', None)
         _min_json_zipf = float(params.get('json_min_zipf', 1.5))
         _german_vowels = re.compile(r'[aeiouyäöü]', re.IGNORECASE)
 
