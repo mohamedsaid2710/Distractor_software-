@@ -757,12 +757,16 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         # PRIORITY 1: Check POS cache (Stanza/JSON tags are highly accurate)
         if hasattr(self, 'pos_cache') and t_lower in self.pos_cache:
             pos_tag = self.pos_cache[t_lower]
-            return pos_tag in ('NOUN', 'PROPN')
+            result = pos_tag in ('NOUN', 'PROPN')
+            print(f"[TITLECASE] {t_lower} → POS_CACHE: {pos_tag} → is_noun: {result}", flush=True)
+            return result
         
         # PRIORITY 2: Fallback to titlecase heuristic (wordfreq-based)
         if t_lower not in self.case_map:
             self._eval_single_word_case(t_lower)
-        return self.case_map.get(t_lower) is not None
+        result = self.case_map.get(t_lower) is not None
+        print(f"[TITLECASE] {t_lower} → HEURISTIC: {result}", flush=True)
+        return result
 
     def get_titlecase_variant(self, token):
         """Returns the TitleCase form if the token is a known noun."""
