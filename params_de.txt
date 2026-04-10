@@ -12,7 +12,6 @@ absolute_threshold_only: False
 
 # --- Linguistic & POS Matching ---
 language: "de"
-match_noun_pos: True
 match_casing_only: True
 len_tolerance: 1
 min_zipf: 3.5
@@ -20,7 +19,6 @@ short_word_min_zipf: 3.5
 short_word_boost: 5
 short_word_max_len: 3
 freq_tolerance: 1.0
-max_freq_widen: 20
 min_word_len: 2
 exclude_propn_candidates: True
 enforce_length_match: True

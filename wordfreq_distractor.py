@@ -408,9 +408,12 @@ class wordfreq_dict(distractor_dict):
                     lengths_to_try = [target_exact_len + diff, target_exact_len - diff]
                     for l in lengths_to_try:
                         if l < 2: continue # Never go below 2
-                        if pos_filter == 'NOUN':
+                        # Use target_is_noun from params for faster pre-filtered expansion
+                        target_is_noun_p = params.get('target_is_noun', False)
+                        
+                        if pos_filter == 'NOUN' or (pos_filter is None and target_is_noun_p):
                             pool = self.get_emergency_pool(l, is_noun=True)
-                        elif pos_filter == '!NOUN':
+                        elif pos_filter == '!NOUN' or (pos_filter is None and not target_is_noun_p):
                             pool = self.get_emergency_pool(l, is_noun=False)
                         else:
                             pool = self.get_emergency_pool(l, is_noun=True) + self.get_emergency_pool(l, is_noun=False)
@@ -464,12 +467,15 @@ class wordfreq_dict(distractor_dict):
 
             # --- IRONCLAD CASING ---
             if match_casing_only:
-                # If target is capitalized, distractor MUST be capitalized
-                if target_is_capitalized and not w[0].isupper():
-                    continue
-                # If target is lowercase, distractor MUST be lowercase
-                if not target_is_capitalized and not w[0].islower():
-                    continue
+                # [German Exception]: The dictionary is lowercase, so we bypass this check
+                # and let the Grammar Guard handle it downstream via POS tagging.
+                if _lang != 'de':
+                    # If target is capitalized, distractor MUST be capitalized
+                    if target_is_capitalized and not w[0].isupper():
+                        continue
+                    # If target is lowercase, distractor MUST be lowercase
+                    if not target_is_capitalized and not w[0].islower():
+                        continue
 
             # --- POS & PROPN REJECTION (Supreme Authority) ---
             w_lower = w.lower()
@@ -490,27 +496,18 @@ class wordfreq_dict(distractor_dict):
                 continue
 
             # 2. GERMAN GRAMMAR GUARD (match_casing_only mode)
-            # The JSON stores all words as lowercase keys, so a noun like "hund"
-            # passes the IRONCLAD CASING check for a lowercase target because its
-            # stored form starts with a lowercase letter.  Without this guard it
-            # would then be uppercased to "Hund" at normalisation — a noun distractor
-            # for a verb/adjective/etc. target.  Use is_noun (from pos_cache) to
-            # block this at the source when pos_filter is not otherwise active.
-            if match_casing_only and in_cache:
-                # Non-noun target (lowercase): distractor must NOT be a noun
-                if not target_is_capitalized and is_noun:
+            # Use target_is_noun from params for maximum precision (handles sentence-starts).
+            # If target is a noun, distractor must be a noun.
+            # If target is NOT a noun (even if capitalized at start), distractor must NOT be a noun.
+            if _lang == 'de' and match_casing_only:
+                # Best available POS signal
+                target_is_noun_pos = params.get('target_is_noun', target_is_capitalized)
+                
+                if target_is_noun_pos and not is_noun:
                     continue
-                # Noun target (uppercase): distractor must BE a noun
-                if target_is_capitalized and not is_noun:
+                if not target_is_noun_pos and is_noun:
                     continue
 
-            # 3. Apply POS filter if active (match_noun_pos mode)
-            if pos_filter:
-                p_tag = "NOUN" if is_noun else "!NOUN"
-                if pos_filter.startswith('!'):
-                    if p_tag == pos_filter[1:]: continue
-                else:
-                    if p_tag != pos_filter: continue
 
             filtered.append(w)
         distractor_opts = filtered
