@@ -242,9 +242,10 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
 
     # When match_casing_only=True: mirror the target token's casing (already guarded by grammar)
     # When False: apply grammatical rules (nouns titlecase, others lowercase)
+    target_is_cap = target_token[0].isupper() if target_token else False
+    
     if match_casing_only and target_token:
         # Casing-only mode: just mirror target casing
-        target_is_cap = target_token[0].isupper() if target_token else False
         new_body = body[0].upper() + body[1:].lower() if target_is_cap else body.lower()
     else:
         # Standard German grammar: determine if *distractor* is a noun and apply rules
@@ -263,7 +264,13 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
         if distractor_is_noun:
             new_body = body[0].upper() + body[1:].lower()
         else:
-            new_body = body.lower()
+            # SAFETY FALLBACK: If target is capitalized and distractor is unknown, 
+            # assume it might need TitleCase in German (better to over-capitalize than under-capitalize).
+            if target_is_cap and not distractor_is_noun:
+                new_body = body[0].upper() + body[1:].lower()
+            else:
+                new_body = body.lower()
+
 
     if is_first_word and new_body:
         new_body = new_body[0].upper() + new_body[1:]

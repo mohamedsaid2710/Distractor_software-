@@ -839,7 +839,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         ans = self.case_map.get(t_lower, None)
         return ans if ans is not None else token
 
-    def batch_tag_words(self, words, params=None):
+    def batch_tag_words(self, words, params=None, force_refresh=False):
         """Batch-tag German candidates using Stanza with SMART SELECTIVE FRAMING.
         
         Categorizes words by morphology and uses context-appropriate sentences:
@@ -855,11 +855,15 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.pos_cache = {}
 
         # Identify words that need tagging
-        to_tag = list(set(w.lower() for w in words if w.lower() not in self.pos_cache))
-        if not to_tag:
-            return
+        if force_refresh:
+            to_tag = list(set(w.lower() for w in words))
+            print(f"    [STANZA] Force-verifying {len(to_tag)} candidates to purge messy cache...", flush=True)
+        else:
+            to_tag = list(set(w.lower() for w in words if w.lower() not in self.pos_cache))
+            if not to_tag:
+                return
+            print(f"    [STANZA] Batch tagging {len(to_tag)} new German candidates with selective framing...", flush=True)
 
-        print(f"    [STANZA] Batch tagging {len(to_tag)} new German candidates with selective framing...", flush=True)
 
         import re
         BATCH = int(params.get('nlp_batch_size', 256)) if params else 256

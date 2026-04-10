@@ -29,7 +29,8 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
     
     # PROACTIVE PARALLEL TAGGING: Scan all sentences and tag likely candidates in one batch
     if params.get("proactive_tagging", True):
-        pre_tag_all_distractors(sents, d, threshold_func, params)
+        pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=True)
+
     
     total = len(sents)
     for i, ss in enumerate(sents.values(), 1):
@@ -53,9 +54,12 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
         d.save_pos_cache()
 
 
-def pre_tag_all_distractors(sents, d, threshold_func, params):
+def pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=True):
     """Proactively harvests and batch-tags potential distractor candidates
     for the entire experiment in a single Stanza batch run.
+
+    force_refresh=True ensures that even if a word is in the cache, it is
+    re-verified to purge messy legacy tags.
     """
     if not hasattr(d, 'batch_tag_words') or getattr(d, 'nlp_sp', None) is None:
         return
@@ -93,6 +97,7 @@ def pre_tag_all_distractors(sents, d, threshold_func, params):
     if all_candidates:
         print(f"    [PRE-TAG] Found {len(all_candidates)} unique candidates to verify.")
         # batch_tag_words handles deduplication and cache-checking internally
-        d.batch_tag_words(list(all_candidates), params)
+        d.batch_tag_words(list(all_candidates), params, force_refresh=force_refresh)
         print(">>> [PRE-TAG] Parallel tagging complete.\n", flush=True)
+
 
