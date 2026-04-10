@@ -275,23 +275,30 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
     # is active.  Here we simply apply the correct TitleCase / lowercase to whatever
     # distractor was selected, using pos_cache as the authoritative source.
 
-    # Determine if the *distractor* is a noun via pos_cache (strict grammar mode)
-    distractor_is_noun = False
-    t_lower = body.lower()
-    
-    if hasattr(dict_obj, 'pos_cache') and t_lower in dict_obj.pos_cache:
-        distractor_is_noun = dict_obj.pos_cache[t_lower] in ('NOUN', 'PROPN')
-    elif hasattr(dict_obj, 'get_titlecase_variant'):
-        try:
-            tv = dict_obj.get_titlecase_variant(body)
-            distractor_is_noun = isinstance(tv, str)
-        except Exception:
-            pass
-
-    if distractor_is_noun:
-        new_body = body[0].upper() + body[1:].lower()
+    # When match_casing_only=True: mirror the target token's casing (already guarded by grammar)
+    # When False: apply grammatical rules (nouns titlecase, others lowercase)
+    if match_casing_only and target_token:
+        # Casing-only mode: just mirror target casing
+        target_is_cap = target_token[0].isupper() if target_token else False
+        new_body = body[0].upper() + body[1:].lower() if target_is_cap else body.lower()
     else:
-        new_body = body.lower()
+        # Standard German grammar: determine if *distractor* is a noun and apply rules
+        distractor_is_noun = False
+        t_lower = body.lower()
+        
+        if hasattr(dict_obj, 'pos_cache') and t_lower in dict_obj.pos_cache:
+            distractor_is_noun = dict_obj.pos_cache[t_lower] in ('NOUN', 'PROPN')
+        elif hasattr(dict_obj, 'get_titlecase_variant'):
+            try:
+                tv = dict_obj.get_titlecase_variant(body)
+                distractor_is_noun = isinstance(tv, str)
+            except Exception:
+                pass
+
+        if distractor_is_noun:
+            new_body = body[0].upper() + body[1:].lower()
+        else:
+            new_body = body.lower()
 
     if is_first_word and new_body:
         new_body = new_body[0].upper() + new_body[1:]
