@@ -538,6 +538,7 @@ class Label:
                 dictionary.batch_tag_words(target_words_to_tag, params=params)
 
         print(f"  [Batch] Finding distractors for '{orig_target}' (Cap: {target_is_cap})...")
+        params['target_is_noun'] = target_is_noun
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
         
@@ -1281,6 +1282,7 @@ class Sentence_Set:
             pos_filter = None
             
             print(f"  [First] Finding first-word distractor for '{target}' (Cap: {target_is_capitalized})...")
+            params['target_is_noun'] = target_is_noun_first
             opts = d.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
             
             if pos_filter == '!NOUN':

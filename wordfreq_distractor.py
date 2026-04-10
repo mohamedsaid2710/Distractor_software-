@@ -105,6 +105,8 @@ class wordfreq_dict(distractor_dict):
     def __init__(self, params={}):
         self.words = []
         self.words_by_len = {}
+        self.nouns_by_len = {}
+        self.others_by_len = {}
         self.nlp_sp = None
 
     def get_words_by_len(self, desired_len):
@@ -541,6 +543,7 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
     """
 
     def __init__(self, params={}):
+        super().__init__(params)
         self.lang = "en"
         self.nlp_sp = None
         exclude = params.get("exclude_words", "exclude_en.txt")
@@ -625,6 +628,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
     """Zipf-based German dictionary built from the wordfreq library."""
 
     def __init__(self, params={}):
+        super().__init__(params)
         self.lang = "de"
         exclude = params.get("exclude_words", "exclude_de.txt")
         min_word_len = int(params.get("min_word_len", 3))
@@ -1048,6 +1052,7 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
     """
 
     def __init__(self, params={}):
+        super().__init__(params)
         self.lang = "ar"
         self.nlp_sp = None
         self.segmenter = None
