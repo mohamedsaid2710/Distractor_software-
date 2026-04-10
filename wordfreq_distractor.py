@@ -302,13 +302,13 @@ class wordfreq_dict(distractor_dict):
                 except Exception as e:
                     logging.warning(f"Failed to load exclude list from {exclude_path}: {e}")
         
-        # 1. TIER 1: Frequency-Matched Fetch (Status Quo)
+        # TIER 1: Frequency-Matched Fetch (Status Quo)
         distractor_opts = self.get_words(min_length, max_length, min_freq, max_freq, pos_filter=None, use_spacy=False)
         
-        # SHORT-WORD PROTECTION: For ≤5 char words, require JSON cache verification
+        # SHORT-WORD PROTECTION: For ≤5 char words, require JSON cache verification + QUALITY GATE
         # (Protects against web-scraping junk like 'fug', 'xte', 'uru' that enter via wordfreq)
         if max_length <= 5 and hasattr(self, 'pos_cache') and self.pos_cache:
-            distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() in self.pos_cache]
+            distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() in self.pos_cache and _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length)]
         
         # PRE-FILTER: Remove excluded words
         if exclude_words_set:
