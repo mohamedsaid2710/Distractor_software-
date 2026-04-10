@@ -17,6 +17,7 @@ match_casing_only: True
 len_tolerance: 1
 min_zipf: 3.5
 short_word_min_zipf: 3.5
+json_min_zipf: 1.5
 short_word_boost: 5
 short_word_max_len: 3
 freq_tolerance: 1.0

@@ -317,6 +317,11 @@ class wordfreq_dict(distractor_dict):
         target_is_capitalized = params.get('target_is_capitalized', False)
         exclude_propn = params.get('exclude_propn_candidates', False)
         
+        # Pre-compute quality gate params once (German only)
+        _lang = getattr(self, 'lang', None)
+        _min_json_zipf = float(params.get('json_min_zipf', 1.5))
+        _german_vowels = re.compile(r'[aeiouyäöü]', re.IGNORECASE)
+
         filtered = []
         for w in distractor_opts:
             # --- NOISE & QUALITY FILTER ---
@@ -324,7 +329,24 @@ class wordfreq_dict(distractor_dict):
                 continue
             if '-' in w and all(len(part) < 2 for part in w.split('-')): # kills x-x-x
                 continue
-            
+
+            # --- GERMAN WORD QUALITY GATE ---
+            # Kills garbage fragments (xte, fug, uru, rüf, ryl, gge…) that
+            # enter via TIER 2/3 JSON fallback without any frequency check.
+            # Long compounds (≥ 8 chars) are exempt: wordfreq may not know them.
+            if _lang == 'de':
+                w_body = strip_punct(w).lower()
+                if len(w_body) < 8:
+                    # Must contain at least one German vowel
+                    if not _german_vowels.search(w_body):
+                        continue
+                    # Must have a real German wordfreq score
+                    if wordfreq.zipf_frequency(w_body, 'de') < _min_json_zipf:
+                        continue
+                    # Reject words more frequent in English than German (e.g. 'Namespace')
+                    if _is_english_dominant(w_body):
+                        continue
+
             # --- IRONCLAD CASING ---
             if match_casing_only:
                 # If target is capitalized, distractor MUST be capitalized
