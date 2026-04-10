@@ -657,6 +657,19 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         if not hasattr(self, 'overrides'):
             self.overrides = {}
 
+        # === PRELOAD GERMAN POS CACHE ===
+        try:
+            cache_file = "models/german_code/german_pos_cache_v2.json"
+            if os.path.exists(cache_file):
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached_data = json.load(f)
+                    self.pos_cache.update(cached_data)
+                print(f"    [CACHE] Loaded {len(cached_data)} German POS tags from disk.", flush=True)
+                # Seed nouns_by_len and others_by_len pools with loaded data
+                self._populate_pools_from_cache()
+        except Exception as e:
+            logging.error(f"[CACHE] Error loading German POS cache: {e}")
+
         print(f"\n>>> LOADING GERMAN DICTIONARY: {self.__class__.__name__} (Runtime Stanza tagging enabled)", flush=True)
 
         freq_dict = wordfreq.get_frequency_dict("de")
@@ -691,11 +704,30 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         self._build_length_index()
         self._load_pos_overrides(params.get('pos_overrides', 'pos_overrides.txt'))
 
+    def _populate_pools_from_cache(self):
+        """Populates nouns_by_len and others_by_len from the loaded pos_cache."""
+        if not self.pos_cache:
+            return
+        
+        for word, upos in self.pos_cache.items():
+            l = len(word)
+            if upos in ('NOUN', 'PROPN'):
+                self.case_map[word] = word.capitalize()
+                if l not in self.nouns_by_len:
+                    self.nouns_by_len[l] = []
+                if word not in self.nouns_by_len[l]:
+                    self.nouns_by_len[l].append(word)
+            else:
+                self.case_map[word] = None
+                if l not in self.others_by_len:
+                    self.others_by_len[l] = []
+                if word not in self.others_by_len[l]:
+                    self.others_by_len[l].append(word)
+
 
     def _load_pos_overrides(self, path):
         """Loads manual POS overrides from a file (format: 'word POS')."""
         if not path: return
-        import os
         if not os.path.exists(path):
             logging.info(f"No POS overrides file found at {path}. Skipping.")
             return
@@ -937,8 +969,6 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
     def save_pos_cache(self):
         """Persist the POS cache to the v2 file."""
         try:
-            import json
-            import os
             cache_file = "models/german_code/german_pos_cache_v2.json"
             os.makedirs(os.path.dirname(cache_file), exist_ok=True)
             with open(cache_file, "w", encoding="utf-8") as f:
@@ -1094,8 +1124,6 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
         try:
-            import json
-            import os
             cache_file = "models/arabic_code/arabic_pos_cache.json"
             if os.path.exists(cache_file):
                 with open(cache_file, "r", encoding="utf-8") as f:
@@ -1224,9 +1252,7 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
 
         # Try to save to cache file just to keep running performance high
         try:
-            import json
             cache_file = "models/arabic_code/arabic_pos_cache.json"
-            import os
             os.makedirs(os.path.dirname(cache_file), exist_ok=True)
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(self.pos_cache, f, ensure_ascii=False, indent=2)
