@@ -747,8 +747,19 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         return self.case_map[token_lower]
 
     def has_titlecase_variant(self, token):
-        """Public check for noun/titlecase status of a token (lowercase or otherwise)."""
+        """Public check for noun/titlecase status of a token (lowercase or otherwise).
+        
+        SMART: First checks the POS cache (from 634k JSON with Stanza tags).
+        Only falls back to titlecase heuristic if cache lookup fails.
+        """
         t_lower = token.lower()
+        
+        # PRIORITY 1: Check POS cache (Stanza/JSON tags are highly accurate)
+        if hasattr(self, 'pos_cache') and t_lower in self.pos_cache:
+            pos_tag = self.pos_cache[t_lower]
+            return pos_tag in ('NOUN', 'PROPN')
+        
+        # PRIORITY 2: Fallback to titlecase heuristic (wordfreq-based)
         if t_lower not in self.case_map:
             self._eval_single_word_case(t_lower)
         return self.case_map.get(t_lower) is not None
