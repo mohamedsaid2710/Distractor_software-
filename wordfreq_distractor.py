@@ -192,13 +192,9 @@ class wordfreq_dict(distractor_dict):
         return matches
 
     def batch_tag_words(self, words, params=None):
-        """Tag a list of words in bulk using Stanza neural tagging with SMART SELECTIVE FRAMING.
+        """Tag a list of words in bulk using Stanza neural tagging. 
         
-        For German, uses morphology-based frame selection:
-        - Verbs (end in -te, -ten, -iert, -et, -en): Frame "Er {word} es."
-        - Adjectives (end in -lich, -ig, -isch, -er, -keit): Frame "Das ist {word}."
-        - Nouns (capitalized or end in -e, -in, -tion, -heit): Frame "Das ist ein {word}."
-        - Others: Isolated tagging
+        Simple isolated word tagging (no context frames) to preserve pure two-mode logic.
         """
         if self.nlp_sp is None or not words:
             if self.nlp_sp is None:
@@ -221,97 +217,27 @@ class wordfreq_dict(distractor_dict):
 
         try:
             import stanza
-            import re
             display_count = False
             
             for i in range(0, len(unique_words), batch_size):
                 chunk = unique_words[i:i + batch_size]
                 
-                if getattr(self, 'lang', 'en') == 'de':
-                    if not display_count:
-                        print(f"    [NLP] Running Stanza with Smart Selective Framing on {len(unique_words)} candidates...", flush=True)
-                        display_count = True
+                if not display_count:
+                    print(f"    [NLP] Running Stanza (isolated tagging) on {len(unique_words)} candidates...", flush=True)
+                    display_count = True
+                
+                # SIMPLE ISOLATED TAGGING: Tag each word in isolation
+                in_docs = [stanza.Document([], text=w) for w in chunk]
+                out_chunk = self.nlp_sp(in_docs)
+                
+                for word_l, doc in zip(chunk, out_chunk):
+                    if doc.sentences and doc.sentences[0].words:
+                        upos = doc.sentences[0].words[0].upos
+                    else:
+                        upos = 'X'
+                    self.pos_cache[word_l] = upos
+                    self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
                     
-                    # Categorize by morphology (VERB check first for priority)
-                    verb_words = []
-                    adj_words = []
-                    noun_words = []
-                    other_words = []
-                    
-                    for w in chunk:
-                        w_lower = w.lower()
-                        # VERB: ends in past tense markers or -en (infinitive)
-                        # Be careful: "matte" ends in -te but is a NOUN (nominalized), not verb form
-                        # Heuristic: verbs typically have 6+ chars for past tense forms
-                        is_verb = (len(w_lower) >= 6 and re.search(r'(te|ten|iert|et)$', w_lower)) or re.search(r'(ste|ste|schrieb|tritt|trat)$', w_lower)
-                        
-                        if is_verb:
-                            verb_words.append(w_lower)
-                        elif re.search(r'(lich|ig|isch|keit)$', w_lower):
-                            adj_words.append(w_lower)
-                        elif w[0].isupper() or re.search(r'(e|in|tion|heit|ness)$', w_lower):
-                            noun_words.append(w_lower)
-                        else:
-                            other_words.append(w_lower)
-                    
-                    # VERB FRAME: "Er {word} es."
-                    if verb_words:
-                        in_docs = [stanza.Document([], text=f"Er {w} es.") for w in verb_words]
-                        out_chunk = self.nlp_sp(in_docs)
-                        for word_l, doc in zip(verb_words, out_chunk):
-                            if doc.sentences and len(doc.sentences[0].words) >= 2:
-                                upos = doc.sentences[0].words[1].upos  # [0]=Er, [1]=WORD, [2]=es
-                            else:
-                                upos = 'X'
-                            self.pos_cache[word_l] = upos
-                            self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
-                    
-                    # ADJECTIVE FRAME: "Das ist {word}."
-                    if adj_words:
-                        in_docs = [stanza.Document([], text=f"Das ist {w}.") for w in adj_words]
-                        out_chunk = self.nlp_sp(in_docs)
-                        for word_l, doc in zip(adj_words, out_chunk):
-                            if doc.sentences and len(doc.sentences[0].words) >= 3:
-                                upos = doc.sentences[0].words[2].upos
-                            else:
-                                upos = 'X'
-                            self.pos_cache[word_l] = upos
-                            self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
-                    
-                    # NOUN FRAME: "Das ist ein {word}."
-                    if noun_words:
-                        in_docs = [stanza.Document([], text=f"Das ist ein {w.capitalize()}.") for w in noun_words]
-                        out_chunk = self.nlp_sp(in_docs)
-                        for word_l, doc in zip(noun_words, out_chunk):
-                            if doc.sentences and len(doc.sentences[0].words) >= 4:
-                                upos = doc.sentences[0].words[3].upos
-                            else:
-                                upos = 'X'
-                            self.pos_cache[word_l] = upos
-                            self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
-                    
-                    # ISOLATED: No frame
-                    if other_words:
-                        in_docs = [stanza.Document([], text=w) for w in other_words]
-                        out_chunk = self.nlp_sp(in_docs)
-                        for word_l, doc in zip(other_words, out_chunk):
-                            if doc.sentences and doc.sentences[0].words:
-                                upos = doc.sentences[0].words[0].upos
-                            else:
-                                upos = 'X'
-                            self.pos_cache[word_l] = upos
-                            self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
-                else:
-                    # Non-German: isolated tagging
-                    in_docs = [stanza.Document([], text=w) for w in chunk]
-                    out_chunk = self.nlp_sp(in_docs)
-                    for word_l, doc in zip(chunk, out_chunk):
-                        if doc.sentences and doc.sentences[0].words:
-                            upos = doc.sentences[0].words[0].upos
-                        else:
-                            upos = 'X'
-                        self.pos_cache[word_l] = upos
-                        self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
         except Exception as e:
             print(f"[DIAG] batch_tag_words Stanza failed: {e}", flush=True)
             for word_l in unique_words:
