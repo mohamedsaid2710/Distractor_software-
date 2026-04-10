@@ -4,6 +4,10 @@ from limit_repeats import Repeatcounter
 import re
 import random
 import os
+try:
+    import wordfreq as _wordfreq_mod
+except ImportError:
+    _wordfreq_mod = None
 
 print("\n" + "="*60)
 print("GERMAN CASING V2.2: DUAL-CHECK + SENTENCE-FRAME TAGGING ACTIVE")
@@ -809,12 +813,9 @@ class Label:
                         if len(dist_l) < 8:
                             if not re.search(r'[aeiouyäöü]', dist_l):
                                 continue
-                            try:
-                                import wordfreq as _wf_fb
-                                if _wf_fb.zipf_frequency(dist_l, 'de') < float(params.get('json_min_zipf', 1.5)):
+                            if _wordfreq_mod is not None:
+                                if _wordfreq_mod.zipf_frequency(dist_l, 'de') < float(params.get('json_min_zipf', 1.5)):
                                     continue
-                            except Exception:
-                                pass
                         if match_casing_only:
                             _pc = getattr(dictionary, 'pos_cache', {})
                             if dist_l in _pc:
@@ -1063,9 +1064,13 @@ class Label:
                 # Fallback stage 2: Strict exact-length fallback from full in-memory dictionary first.
                 logging.debug(f"FALLBACK Stage 2: Full dictionary exact-length search for item {self.id}, label {self.lab}")
                 try:
-                    # Fixed: was erroneously using Python builtin 'dict' instead of
-                    # the actual dictionary object, so this stage always returned [].
-                    exact_full_pool = [w.text for w in getattr(dictionary, 'words', []) if len(strip_punct(w.text)) == desired_len]
+                    # O(1) indexed lookup — uses the pre-built words_by_len index
+                    # (keyed by distractor.len at startup) instead of a linear scan
+                    # through all ~100k dictionary words.  The old code scanned
+                    # getattr(dict, 'words', []) — 'dict' was also the Python
+                    # builtin, so the stage always returned [] anyway.
+                    exact_full_pool = [w.text for w in
+                                       getattr(dictionary, 'words_by_len', {}).get(desired_len, [])]
                 except Exception:
                     exact_full_pool = []
                 # Enforce noun/non-noun split in casing mode regardless of pos_filter.
@@ -1175,12 +1180,9 @@ class Label:
                                 if len(cand_l) < 8:
                                     if not re.search(r'[aeiouyäöü]', cand_l):
                                         continue
-                                    try:
-                                        import wordfreq as _wf_desp
-                                        if _wf_desp.zipf_frequency(cand_l, 'de') < float(params.get('json_min_zipf', 1.5)):
+                                    if _wordfreq_mod is not None:
+                                        if _wordfreq_mod.zipf_frequency(cand_l, 'de') < float(params.get('json_min_zipf', 1.5)):
                                             continue
-                                    except Exception:
-                                        pass
                                 if is_propn_candidate(cand):
                                     continue
                                 if match_casing_only:
