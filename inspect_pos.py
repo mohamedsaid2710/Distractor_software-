@@ -15,14 +15,14 @@ def run_inspection(nlp, d, sentence_text, source="Manual"):
     if nlp and nlp != "FARASA_DELEGATE":
         try:
             doc = nlp(sentence_text)
-            if doc.sentences:
-                for i, word_obj in enumerate(doc.sentences[0].words):
+            global_idx = 0
+            for sent_idx, sentence in enumerate(doc.sentences):
+                for word_obj in sentence.words:
                     token = word_obj.text
                     pos = word_obj.upos
                     is_noun = pos in ('NOUN', 'PROPN')
-                    print(f"{i:<5} | {token:<15} | {pos:<12} | {is_noun}")
-            else:
-                print("Stanza returned no sentences.")
+                    print(f"{global_idx:<5} | {token:<15} | {pos:<12} | {is_noun}")
+                    global_idx += 1
         except Exception as e:
             print(f"Stanza Error: {e}")
     else:
