@@ -548,6 +548,13 @@ class Label:
                 compatible_pos_list = _POS_COMPATIBLE_CLASSES.get(
                     target_pos, ['ADV', 'ADJ', 'VERB', 'ADP'])
 
+        # Ironclad Casing: Inject target casing into params for this word
+        orig_target = self.words[0] if self.words else ""
+        target_stripped = strip_punct(orig_target)
+        target_is_cap = target_stripped[0].isupper() if target_stripped else False
+        params['target_is_capitalized'] = target_is_cap
+
+        print(f"  [Batch] Finding distractors for '{orig_target}' (Cap: {target_is_cap})...")
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
         # --- ADAPTIVE LENGTH SEARCH (Fix for 0-candidate long words) ---
@@ -1355,11 +1362,15 @@ class Sentence_Set:
             if hasattr(sentence, 'pos_tags') and sentence.pos_tags and sentence.pos_tags[0] in ('NOUN', 'PROPN'):
                 target_is_noun_first = True
             
+            # --- IRONCLAD CASING: Detect target casing here ---
+            target_is_capitalized = target[0].isupper() if target else False
+            params['target_is_capitalized'] = target_is_capitalized
+            
             pos_filter = None
             if params.get('match_noun_pos', False):
                 pos_filter = 'NOUN' if target_is_noun_first else '!NOUN'
             
-            print(f"  [First] Finding first-word distractor for '{target}'...")
+            print(f"  [First] Finding first-word distractor for '{target}' (Cap: {target_is_capitalized})...")
             opts = d.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
             
             if pos_filter == '!NOUN':

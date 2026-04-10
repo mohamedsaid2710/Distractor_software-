@@ -312,9 +312,10 @@ class wordfreq_dict(distractor_dict):
         if self.nlp_sp is not None:
             self.batch_tag_words(distractor_opts, params=params)
         
-        # 4. FINAL FILTER: Apply Strict Casing and Noise checks to all winners
+        # 4. FINAL FILTER: Apply Ironclad Casing, Noise, and PROPN checks
         match_casing_only = params.get('match_casing_only', False)
         target_is_capitalized = params.get('target_is_capitalized', False)
+        exclude_propn = params.get('exclude_propn_candidates', False)
         
         filtered = []
         for w in distractor_opts:
@@ -324,22 +325,35 @@ class wordfreq_dict(distractor_dict):
             if '-' in w and all(len(part) < 2 for part in w.split('-')): # kills x-x-x
                 continue
             
-            # --- STRICT CASING ---
+            # --- IRONCLAD CASING ---
             if match_casing_only:
+                # If target is capitalized, distractor MUST be capitalized
                 if target_is_capitalized and not w[0].isupper():
                     continue
+                # If target is lowercase, distractor MUST be lowercase
                 if not target_is_capitalized and not w[0].islower():
                     continue
 
-            # --- POS FILTER (Supreme Authority) ---
+            # --- POS & PROPN REJECTION (Supreme Authority) ---
+            w_lower = w.lower()
+            in_cache = hasattr(self, 'pos_cache') and w_lower in self.pos_cache
+            
+            is_propn = False
+            is_noun = False
+            
+            if in_cache:
+                tag = self.pos_cache[w_lower]
+                is_propn = (tag == 'PROPN')
+                is_noun = (tag in ('NOUN', 'PROPN'))
+            else:
+                is_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
+            
+            # 1. Reject Proper Nouns (the "rubbish" fragments like Obb, Dha)
+            if exclude_propn and is_propn:
+                continue
+                
+            # 2. Apply POS filter if active
             if pos_filter:
-                w_lower = w.lower()
-                in_cache = hasattr(self, 'pos_cache') and w_lower in self.pos_cache
-                if in_cache:
-                    is_noun = self.pos_cache[w_lower] in ('NOUN', 'PROPN')
-                else:
-                    is_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
-
                 p_tag = "NOUN" if is_noun else "!NOUN"
                 if pos_filter.startswith('!'):
                     if p_tag == pos_filter[1:]: continue
