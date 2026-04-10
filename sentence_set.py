@@ -27,25 +27,6 @@ def _get_semantic_filter():
             _semantic_filter_module = False  # Mark as unavailable
     return _semantic_filter_module if _semantic_filter_module else None
 
-
-def _levenshtein_distance(s1, s2):
-    """Compute edit distance between two strings."""
-    if len(s1) < len(s2):
-        return _levenshtein_distance(s2, s1)
-    if len(s2) == 0:
-        return len(s1)
-    previous_row = range(len(s2) + 1)
-    for i, c1 in enumerate(s1):
-        current_row = [i + 1]
-        for j, c2 in enumerate(s2):
-            insertions = previous_row[j + 1] + 1
-            deletions = current_row[j] + 1
-            substitutions = previous_row[j] + (c1 != c2)
-            current_row.append(min(insertions, deletions, substitutions))
-        previous_row = current_row
-    return previous_row[-1]
-
-
 # Common uppercase acronyms to preserve when used as distractors in English.
 _EN_ACRONYM_WHITELIST = {
     'ai', 'api', 'bbc', 'cia', 'cpu', 'eu', 'fbi', 'gdp', 'gps', 'gpu',
@@ -728,17 +709,25 @@ class Label:
             else:
                 target_preferred_len = int(round(sum(target_lengths) / float(len(target_lengths))))
 
-        def candidate_length_ok(candidate):
+        def candidate_length_ok(candidate, relax_mult=1.0):
+            """Check if candidate length matches target within tolerance.
+            
+            Args:
+                candidate: Word to check
+                relax_mult: Multiplier for tolerance in relaxed mode (e.g., 3.0 = 3x normal tolerance)
+            """
             if not enforce_length_match:
                 return True
             sc = strip_punct(candidate)
             if not sc:
                 return False
             clen = len(sc)
+            # Apply relaxed tolerance multiplier
+            effective_tolerance = int(len_tolerance * relax_mult)
             if target_exact_len is not None:
-                return abs(clen - target_exact_len) <= len_tolerance
+                return abs(clen - target_exact_len) <= effective_tolerance
             if target_preferred_len is not None:
-                return abs(clen - target_preferred_len) <= len_tolerance
+                return abs(clen - target_preferred_len) <= effective_tolerance
             return True
         avoid=[]
         for word in self.words: # it's awkward if the distractor is the same as the real word
@@ -794,15 +783,22 @@ class Label:
                     min_surp_val = dist_surp
             return min_surp_val
         def pick_best_from_pool(pool, allow_banned=False, relax_length=False, enforce_pos=None):
-            """Pick the most implausible candidate from a pool, respecting filters."""
+            """Pick the most implausible candidate from a pool, respecting filters.
+            
+            Args:
+                relax_length: If True, use 3x tolerance for length matching (still enforces bounds)
+                              If False, use strict tolerance from params
+            """
             def _find_best(sub_pool):
                 local_best = None
                 local_best_surp = float('-inf')
+                # In relaxed mode, use 3x tolerance but still enforce length bounds
+                relax_mult = 3.0 if relax_length else 1.0
                 for dist in sub_pool:
                     dist_l = strip_punct(dist).lower()
                     if not dist_l:
                         continue
-                    if (not relax_length) and (not candidate_length_ok(dist)):
+                    if not candidate_length_ok(dist, relax_mult=relax_mult):
                         continue
                     if dist_l in avoid or dist_l in global_exclude:
                         continue
@@ -832,21 +828,8 @@ class Label:
                                 if target_is_cap and not _is_noun_d:
                                     continue
 
-                    # Levenshtein distance check: reject if too similar to any target word
-                    too_similar = False
-                    for target_word in self.words:
-                        target_clean = strip_punct(target_word).lower()
-                        if target_clean and dist_l:
-                            max_len = max(len(target_clean), len(dist_l))
-                            if max_len > 0:
-                                edit_dist = _levenshtein_distance(target_clean, dist_l)
-                                similarity = 1.0 - (edit_dist / max_len)
-                                # Reject if >70% similar (edit distance <30% of max length)
-                                if similarity > 0.7:
-                                    too_similar = True
-                                    break
-                    if too_similar:
-                        continue
+                    # NOTE: Similarity filtering is handled by semantic_filter (fastText embeddings)
+                    # Levenshtein distance check removed for performance (was causing 6.4B+ operations)
                     
                     s = candidate_min_surprisal(dist)
                     if s is None:

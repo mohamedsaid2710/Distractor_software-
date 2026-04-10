@@ -245,6 +245,11 @@ class wordfreq_dict(distractor_dict):
         # 1. TIER 1: Frequency-Matched Fetch (Status Quo)
         distractor_opts = self.get_words(min_length, max_length, min_freq, max_freq, pos_filter=None, use_spacy=False)
         
+        # SHORT-WORD PROTECTION: For ≤5 char words, require JSON cache verification
+        # (Protects against web-scraping junk like 'fug', 'xte', 'uru' that enter via wordfreq)
+        if max_length <= 5 and hasattr(self, 'pos_cache') and self.pos_cache:
+            distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() in self.pos_cache]
+        
         # PRE-FILTER: Remove excluded words
         if exclude_words_set:
             distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() not in exclude_words_set]
