@@ -26,6 +26,37 @@ def _is_english_dominant(token: str, margin: float = 0.3) -> bool:
         return False
 
 
+# QUALITY GATE: Runtime validator for cache words
+def _is_valid_cache_word(word: str) -> bool:
+    """
+    Quality gate for words pulled from POS cache.
+    Rejects garbage patterns that pass frequency checks but are corrupted (aa, abc, etc).
+    """
+    word_lower = word.lower()
+    
+    # Gate 1: Minimum structure (4+ chars)
+    if len(word_lower) < 4:
+        return False
+    
+    # Gate 2: Must have German vowels
+    if not re.search(r'[aeioäöüy]', word_lower):
+        return False
+    
+    # Gate 3: Cannot be mostly same character (catches "aaaaaa", "bbbb", etc)
+    char_freq = {}
+    for c in word_lower:
+        char_freq[c] = char_freq.get(c, 0) + 1
+    max_freq = max(char_freq.values())
+    if max_freq / len(word_lower) > 0.5:  # >50% same char = junk
+        return False
+    
+    # Gate 4: Must have consonants (not pure vowels)
+    if not re.search(r'[bcdfghjklmnpqrstvwxz]', word_lower):
+        return False
+    
+    return True
+
+
 class wordfreq_dict(distractor_dict):
     """General class of dictionaries"""
 
@@ -51,7 +82,12 @@ class wordfreq_dict(distractor_dict):
             
         # 2. Categorized indices using the FULL JSON KNOWLEDGE BASE
         # Treat the 634k-word JSON as the primary source for the emergency pool
+        # NOW WITH QUALITY GATE: Reject garbage patterns (aa, abc, etc)
         for lw, category in pos_cache.items():
+            # QUALITY GATE: Skip garbage patterns
+            if not _is_valid_cache_word(lw):
+                continue
+                
             l = len(lw)
             if category in ('NOUN', 'PROPN'):
                 if l not in self.nouns_by_len:
@@ -270,12 +306,12 @@ class wordfreq_dict(distractor_dict):
                 if len(distractor_opts) >= target_pool_size:
                     break
 
-        # TIER 2: JSON-DIRECT SEARCH (Golden Library)
+        # TIER 2: JSON-DIRECT SEARCH (Golden Library + Quality Gate)
         # If still starving, pull directly from the 634k JSON keys for EXACT length match.
-        # This bypasses Zipf filtering for verified words.
+        # NOW WITH QUALITY GATE: Reject garbage patterns (aa, abc, etc) that passed frequency checks
         if len(distractor_opts) < target_pool_size and hasattr(self, 'pos_cache'):
             target_exact_len = (min_length + max_length) // 2
-            json_pool = [w for w, pos in self.pos_cache.items() if len(w) == target_exact_len]
+            json_pool = [w for w, pos in self.pos_cache.items() if len(w) == target_exact_len and _is_valid_cache_word(w)]
             if exclude_words_set:
                 json_pool = [w for w in json_pool if w not in exclude_words_set]
             
