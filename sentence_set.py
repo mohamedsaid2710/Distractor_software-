@@ -554,6 +554,12 @@ class Label:
         target_is_cap = target_stripped[0].isupper() if target_stripped else False
         params['target_is_capitalized'] = target_is_cap
 
+        # PRE-TAG TARGET WORD: Tag target *before* finding distractors
+        # This ensures has_titlecase_variant() can find target POS in cache for accurate detection
+        if hasattr(dictionary, 'batch_tag_words'):
+            target_words_to_tag = [target_stripped.lower()] if target_stripped else []
+            dictionary.batch_tag_words(target_words_to_tag, params=params)
+
         print(f"  [Batch] Finding distractors for '{orig_target}' (Cap: {target_is_cap})...")
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
