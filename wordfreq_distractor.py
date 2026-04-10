@@ -631,25 +631,29 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         if not hasattr(self, 'case_map'):
             self.case_map = {}
         
-        try:
-            import json
-            import os
-            cache_file = "models/german_code/german_pos_cache_v2.json"
-            if os.path.exists(cache_file):
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cached_data = json.load(f)
-                    self.pos_cache.update(cached_data)
-                
-                for lw, upos in cached_data.items():
-                    if upos in ('NOUN', 'PROPN'):
-                        self.case_map[lw] = lw.capitalize()
-                    else:
-                        self.case_map[lw] = None
-                        
-                print(f"[CACHE] Successfully loaded {len(cached_data)} POS tags from {cache_file}!", flush=True)
-        except Exception as e:
-            print(f"[CACHE] Error loading POS cache: {e}")
-        print(f"\n>>> LOADING GERMAN DICTIONARY: {self.__class__.__name__}", flush=True)
+        # === DISABLED: Pre-loaded JSON cache has corrupted POS tags (e.g., nouns tagged as ADJ) ===
+        # Strategy: Build pos_cache at RUNTIME via batch_tag_words() with correct Stanza contextual framing
+        # This ensures accurate POS detection instead of using stale, mislabeled cache entries
+        # try:
+        #     import json
+        #     import os
+        #     cache_file = "models/german_code/german_pos_cache_v2.json"
+        #     if os.path.exists(cache_file):
+        #         with open(cache_file, "r", encoding="utf-8") as f:
+        #             cached_data = json.load(f)
+        #             self.pos_cache.update(cached_data)
+        #         
+        #         for lw, upos in cached_data.items():
+        #             if upos in ('NOUN', 'PROPN'):
+        #                 self.case_map[lw] = lw.capitalize()
+        #             else:
+        #                 self.case_map[lw] = None
+        #                 
+        #         print(f"[CACHE] Successfully loaded {len(cached_data)} POS tags from {cache_file}!", flush=True)
+        # except Exception as e:
+        #     print(f"[CACHE] Error loading POS cache: {e}")
+        
+        print(f"\n>>> LOADING GERMAN DICTIONARY: {self.__class__.__name__} (Runtime Stanza tagging enabled)", flush=True)
 
         freq_dict = wordfreq.get_frequency_dict("de")
         source_words = list(freq_dict.keys())
@@ -749,24 +753,22 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
     def has_titlecase_variant(self, token):
         """Public check for noun/titlecase status of a token (lowercase or otherwise).
         
-        SMART: First checks the POS cache (from 634k JSON with Stanza tags).
-        Only falls back to titlecase heuristic if cache lookup fails.
+        Strategy: Use runtime-tagged POS cache (from batch_tag_words) which has correct Stanza tags.
+        Falls back to titlecase heuristic if not yet tagged.
+        Skips the pre-loaded 634k JSON cache (which may be corrupted).
         """
         t_lower = token.lower()
         
-        # PRIORITY 1: Check POS cache (Stanza/JSON tags are highly accurate)
+        # PRIORITY 1: Check RUNTIME POS cache (populated by batch_tag_words with correct Stanza)
         if hasattr(self, 'pos_cache') and t_lower in self.pos_cache:
             pos_tag = self.pos_cache[t_lower]
             result = pos_tag in ('NOUN', 'PROPN')
-            print(f"[TITLECASE] {t_lower} → POS_CACHE: {pos_tag} → is_noun: {result}", flush=True)
             return result
         
         # PRIORITY 2: Fallback to titlecase heuristic (wordfreq-based)
         if t_lower not in self.case_map:
             self._eval_single_word_case(t_lower)
-        result = self.case_map.get(t_lower) is not None
-        print(f"[TITLECASE] {t_lower} → HEURISTIC: {result}", flush=True)
-        return result
+        return self.case_map.get(t_lower) is not None
 
     def get_titlecase_variant(self, token):
         """Returns the TitleCase form if the token is a known noun."""
