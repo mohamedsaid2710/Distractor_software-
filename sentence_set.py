@@ -527,11 +527,19 @@ class Label:
         sw_target = strip_punct(self.words[0]) if self.words else ""
         target_is_lower = sw_target[0].islower() if sw_target else True
 
-        if lang == 'de' and match_casing_only:
-            # Use casing instead of POS tag to define German nounness.
+        if lang == 'de' and match_casing_only and not match_noun_pos:
+            # Casing-only mode (no POS matching): use capitalisation as a proxy
+            # for German nounness.  Safe shortcut: German nouns are always TitleCase.
             target_is_noun = not target_is_lower
-        else:
+        elif not match_casing_only:
+            # Pure POS mode or non-German: derive nounness from the actual POS tag.
             target_is_noun = (target_pos == 'NOUN')
+        # When BOTH match_casing_only AND match_noun_pos are True:
+        # Keep the POS-derived target_is_noun that was already computed above
+        # (lines 440-468 via self.pos / dictionary.has_titlecase_variant).
+        # match_casing_only handles casing independently via target_is_capitalized
+        # (line 555); match_noun_pos handles POS via pos_filter (lines 542-549).
+        # The two flags are fully orthogonal and must not overwrite each other.
 
         # --- POS FALLBACK CASCADE ---
         # For noun targets: NOUN candidates only.
@@ -595,7 +603,10 @@ class Label:
                     if opt not in existing:
                         distractor_opts.append(opt)
 
-        skip_cascade = (lang == 'de' and match_casing_only and not target_is_noun)
+        # Only skip the POS cascade in pure casing-only mode (match_noun_pos=False).
+        # When match_noun_pos is active the cascade must always run regardless of
+        # casing mode — skipping it would silently disable POS matching.
+        skip_cascade = (lang == 'de' and match_casing_only and not match_noun_pos and not target_is_noun)
         if match_noun_pos and target_pos and not skip_cascade:
             exact = []
             compatible = []  # candidates matching a compatible POS class
