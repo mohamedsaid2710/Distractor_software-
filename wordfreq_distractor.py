@@ -176,10 +176,14 @@ class wordfreq_dict(distractor_dict):
                 continue
                 
             l = len(lw)
+            # TIGHTENED: A word is a noun if its category says so, OR if it's already in the noun pool
+            # This prevents lowercased nouns from leaking into others_by_len
             if category in ('NOUN', 'PROPN'):
                 self.nouns_by_len[l].add(lw)
             else:
-                self.others_by_len[l].add(lw)
+                # Double-check: if it has been marked as a noun elsewhere, don't put in 'others'
+                if lw not in self.nouns_by_len[l]:
+                    self.others_by_len[l].add(lw)
 
     def get_emergency_pool(self, length, is_noun=False):
         """Returns a pre-indexed list of words for the specified length and category."""
@@ -965,16 +969,27 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         self.save_pos_cache()
     
     def _record_pos_tag(self, word, upos):
-        """Cache-aware POS tagging that populates length-indexed pools."""
+        """Cache-aware POS tagging that populates length-indexed pools.
+        TIGHTENED: Ensures nouns never enter the 'others' pool even if tagged with 
+        non-noun POS when lowercased.
+        """
         if not word: return
         self.pos_cache[word] = upos
         l = len(word)
-        if upos in ('NOUN', 'PROPN'):
+        
+        is_noun = upos in ('NOUN', 'PROPN')
+        
+        if is_noun:
             self.case_map[word] = word.capitalize()
             self.nouns_by_len[l].add(word)
+            # Remove from 'others' if it was mistakenly added before
+            if word in self.others_by_len[l]:
+                self.others_by_len[l].remove(word)
         else:
-            self.case_map[word] = None
-            self.others_by_len[l].add(word)
+            # If not a noun, only add to 'others' if not already known to be a noun
+            if word not in self.nouns_by_len[l]:
+                self.case_map[word] = None
+                self.others_by_len[l].add(word)
 
     def save_pos_cache(self):
         """Persist the POS cache to the v2 file."""
