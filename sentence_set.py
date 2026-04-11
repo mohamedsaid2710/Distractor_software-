@@ -540,12 +540,7 @@ class Label:
             target_zipf = _wordfreq_mod.zipf_frequency(target_stripped.lower(), 'de')
         params['target_zipf'] = target_zipf
 
-        # PRE-TAG TARGET WORD: Tag target *before* finding distractors
-        # This ensures has_titlecase_variant() can find target POS in cache for accurate detection
-        if hasattr(dictionary, 'batch_tag_words'):
-            target_words_to_tag = [target_stripped.lower()] if target_stripped else []
-            if target_words_to_tag:
-                dictionary.batch_tag_words(target_words_to_tag, params=params)
+        # NOTE: PRE-TAGGING now handled at SentenceSet-level for optimal batch performance
 
         print(f"  [Batch] Finding distractors for '{orig_target}' (Cap: {target_is_cap})...")
         params['target_is_noun'] = target_is_noun
@@ -710,14 +705,14 @@ class Label:
                         _is_noun_d = False
                         if dist_l in _pc:
                             _is_noun_d = _pc[dist_l] in ('NOUN', 'PROPN')
-                        else:
-                            # Fallback to TitleCase mapping for wordfreq strings
-                            if hasattr(dictionary, 'nouns_by_len'):
-                                l_len = len(dist_l)
-                                if l_len in dictionary.nouns_by_len and dist_l in dictionary.nouns_by_len[l_len]:
-                                    _is_noun_d = True
-                            if not _is_noun_d and hasattr(dictionary, 'has_titlecase_variant'):
-                                _is_noun_d = dictionary.has_titlecase_variant(dist_l)
+                        elif hasattr(dictionary, 'nouns_by_len'):
+                            # High-speed O(1) lookup in pre-loaded 634k JSON set
+                            l_len = len(dist_l)
+                            if l_len in dictionary.nouns_by_len and dist_l in dictionary.nouns_by_len[l_len]:
+                                _is_noun_d = True
+                        
+                        # Note: We hard-bypass dictionary.has_titlecase_variant() here 
+                        # because it can trigger individual neural passes for words not in cache.
 
                         # Enforce target_is_noun vs distractor_is_noun
                         # (Using target_is_noun from params for stability)
@@ -1286,6 +1281,26 @@ class Sentence_Set:
     def do_distractors(self, model, d, threshold_func, params, repeats):
         """Get distractors using specified stuff"""
         lang = _detect_language(params)
+        
+        # --- NEW: SENTENCE-LEVEL BATCH TAGGING ---
+        # Aggregate all target words from all labels to minimize neural inference calls.
+        if lang == 'de' and hasattr(d, 'batch_tag_words'):
+            all_targets = set()
+            for label in self.labels.values():
+                if label.words:
+                    t = strip_punct(label.words[0]).lower()
+                    if t: all_targets.add(t)
+            
+            # Also include first-word targets if they differ
+            for sent in self.sentences:
+                if sent.words:
+                    t = strip_punct(sent.words[0]).lower()
+                    if t: all_targets.add(t)
+            
+            if all_targets:
+                logging.info(f"[PERFORMANCE] Batch-tagging {len(all_targets)} targets for optimized selection.")
+                d.batch_tag_words(list(all_targets), params=params)
+
         banned = repeats.banned[:] #don't allow duplicate distractors within the set
         for label in self.labels.values(): #get distractors for each label
             dist = label.choose_distractor(model, d, threshold_func, params, banned)

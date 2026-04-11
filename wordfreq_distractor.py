@@ -6,6 +6,7 @@ import random
 import logging
 import json
 import bisect
+from collections import defaultdict
 
 from utils import strip_punct
 from distractor import distractor_dict, distractor
@@ -105,8 +106,9 @@ class wordfreq_dict(distractor_dict):
     def __init__(self, params={}):
         self.words = []
         self.words_by_len = {}
-        self.nouns_by_len = {}
-        self.others_by_len = {}
+        self.nouns_by_len = defaultdict(set)
+        self.others_by_len = defaultdict(set)
+        self.lang = None
         self.nlp_sp = None
 
     def get_words_by_len(self, desired_len):
@@ -175,19 +177,15 @@ class wordfreq_dict(distractor_dict):
                 
             l = len(lw)
             if category in ('NOUN', 'PROPN'):
-                if l not in self.nouns_by_len:
-                    self.nouns_by_len[l] = []
-                self.nouns_by_len[l].append(lw)
+                self.nouns_by_len[l].add(lw)
             else:
-                if l not in self.others_by_len:
-                    self.others_by_len[l] = []
-                self.others_by_len[l].append(lw)
+                self.others_by_len[l].add(lw)
 
     def get_emergency_pool(self, length, is_noun=False):
         """Returns a pre-indexed list of words for the specified length and category."""
         if is_noun:
-            return self.nouns_by_len.get(length, [])
-        return self.others_by_len.get(length, [])
+            return list(self.nouns_by_len.get(length, []))
+        return list(self.others_by_len.get(length, []))
 
     def canonical_case(self, token):
         """Return a preferred-cased form of `token` if available (override in subclasses)."""
@@ -737,16 +735,10 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             l = len(word)
             if upos in ('NOUN', 'PROPN'):
                 self.case_map[word] = word.capitalize()
-                if l not in self.nouns_by_len:
-                    self.nouns_by_len[l] = []
-                if word not in self.nouns_by_len[l]:
-                    self.nouns_by_len[l].append(word)
+                self.nouns_by_len[l].add(word)
             else:
                 self.case_map[word] = None
-                if l not in self.others_by_len:
-                    self.others_by_len[l] = []
-                if word not in self.others_by_len[l]:
-                    self.others_by_len[l].append(word)
+                self.others_by_len[l].add(word)
 
 
     def _load_pos_overrides(self, path):
@@ -811,11 +803,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 else:
                     final_pos = 'X'
                 
-                self.pos_cache[token_lower] = final_pos
-                if final_pos in ('NOUN', 'PROPN'):
-                    self.case_map[token_lower] = token_lower.capitalize()
-                else:
-                    self.case_map[token_lower] = None
+                self._record_pos_tag(token_lower, final_pos)
             except Exception as e:
                 logging.error(f"[STANZA] Frame tagging error for {token_lower}: {e}")
                 self.case_map[token_lower] = None
@@ -977,22 +965,16 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         self.save_pos_cache()
     
     def _record_pos_tag(self, word, upos):
-        """Record a POS tag in the cache and update case_map and indices."""
+        """Cache-aware POS tagging that populates length-indexed pools."""
+        if not word: return
         self.pos_cache[word] = upos
         l = len(word)
-        
         if upos in ('NOUN', 'PROPN'):
             self.case_map[word] = word.capitalize()
-            if l not in self.nouns_by_len:
-                self.nouns_by_len[l] = []
-            if word not in self.nouns_by_len[l]:
-                self.nouns_by_len[l].append(word)
+            self.nouns_by_len[l].add(word)
         else:
             self.case_map[word] = None
-            if l not in self.others_by_len:
-                self.others_by_len[l] = []
-            if word not in self.others_by_len[l]:
-                self.others_by_len[l].append(word)
+            self.others_by_len[l].add(word)
 
     def save_pos_cache(self):
         """Persist the POS cache to the v2 file."""
