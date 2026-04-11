@@ -660,7 +660,8 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
     # NACIG Protocol: Ironclad German Noun Suffixes
     NOUN_SUFFIXES = (
         "ung", "heit", "keit", "schaft", "tion", "sion", 
-        "tät", "ismus", "ment", "ik", "anz", "enz"
+        "tät", "ismus", "ment", "ik", "anz", "enz",
+        "eur", "ling", "ist", "or", "erich", "in", "innen"
     )
 
     """Zipf-based German dictionary built from the wordfreq library."""
@@ -766,18 +767,20 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         
         for word_l, upos in self.pos_cache.items():
             l = len(word_l)
-            if l not in self.nouns_by_len: continue # Bounds check
+            if l not in self.others_by_len: continue # Bounds check
             
             # NACIG STARTUP GUARD:
-            # If the cache says it is a non-noun, but our NACIG Guard is sure it is a Noun,
-            # we correct it immediately at startup.
+            # Re-check everything against our heuristics to purge legacy errors.
             common = self.common_casing.get(word_l, "")
             is_ironclad = (common and common[0].isupper()) or word_l.endswith(self.NOUN_SUFFIXES)
             
-            if is_ironclad:
+            # Additional check: If it was ALREADY capitalized in someone's old manual run
+            # we should probably trust it's a noun.
+            if upos in ('NOUN', 'PROPN') or is_ironclad:
+                # PERMANENT HEALING: Update the cache so this fix is saved to the JSON file
+                if upos != "NOUN":
+                    self.pos_cache[word_l] = "NOUN"
                 upos = "NOUN"
-            
-            if upos in ('NOUN', 'PROPN'):
                 self.case_map[word_l] = word_l.capitalize()
                 self.nouns_by_len[l].add(word_l)
             else:
