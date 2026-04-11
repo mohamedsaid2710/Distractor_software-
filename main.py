@@ -3,7 +3,7 @@ import importlib
 from set_params import set_params
 from limit_repeats import Repeatcounter
 from input import read_input
-from output import save_ibex, save_delim
+from output import save_ibex, save_delim, append_results
 import re
 
 
@@ -32,6 +32,10 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
         pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=True)
 
     
+    # PRE-CLEAR OUTFILE to allow incremental appending
+    with open(outfile, 'w', encoding='utf-8') as f:
+        pass
+
     total = len(sents)
     for i, ss in enumerate(sents.values(), 1):
         # Get tag from the first sentence in the set (most sets only have one)
@@ -42,12 +46,12 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
         ss.do_surprisals(m)
         ss.make_labels(params)
         ss.do_distractors(m, d, threshold_func, params, repeats)
+        
+        # INCREMENTAL SAVE: Save this sentence set immediately
+        append_results(outfile, ss, outformat)
+        
         ss.clean_up()
     
-    if outformat == "delim":
-        save_delim(outfile, sents)
-    else:
-        save_ibex(outfile, sents)
     
     # FINAL CACHE SAVE: Persist all tagged words to disk
     if hasattr(d, 'save_pos_cache'):

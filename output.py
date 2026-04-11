@@ -39,3 +39,21 @@ def save_ibex(outfile, all_sentences):
                 f.write(f'[["{sentence.tag}", {repr(sentence.id)}], "Maze", {{s:"{s}", a:"{d}"}}], \n')
 
 
+
+def append_results(outfile, sentence_set, outformat):
+    '''Appends a single sentence_set's results to the specified outfile.
+    Ensures that output is flushed so user can see it immediately.'''
+    if outformat == "delim":
+        with open(outfile, 'a', encoding='utf-8', newline="") as f:
+            writer = csv.writer(f, delimiter=";")
+            for sentence in sentence_set.sentences:
+                writer.writerow([sentence.tag, sentence.id, sentence.word_sentence, 
+                                 sentence.distractor_sentence, sentence.label_sentence])
+            f.flush()
+    elif outformat == "ibex":
+        with open(outfile, 'a', encoding='utf-8', newline='') as f:
+            for sentence in sentence_set.sentences:
+                s = sentence.word_sentence.replace('"', '\\"')
+                d = sentence.distractor_sentence.replace('"', '\\"')
+                f.write(f'[["{sentence.tag}", {repr(sentence.id)}], "Maze", {{s:"{s}", a:"{d}"}}], \n')
+            f.flush()
