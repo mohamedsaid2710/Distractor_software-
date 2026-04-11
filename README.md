@@ -20,6 +20,7 @@ Based on the original [Maze repository](https://github.com/vboyce/Maze) by Victo
   - Optional **fastText Semantic Filtering** to reject words from similar domains (e.g., avoiding "Apple" -> "Orange").
   - **Part-Of-Speech Matching** to ensure natural grammar structure (Verbs match Verbs, Nouns match Nouns).
 - **Fast GPU Processing:** Batch-optimized surprisal scoring scales automatically to available hardware.
+- **First-Word Placeholder:** Because the first word of a sentence has no prior context, generating a meaningful linguistic distractor is impossible. The software automatically uses a length-matched placeholder (e.g., `x-x-x`) for the first token to ensure a neutral start for participants.
 - **Output Formats:** Standard delimited tables or ready-to-deploy PCIbex lines (`ibexify`).
 
 ## Quick Start
@@ -31,8 +32,9 @@ It is **highly recommended** to run this software on a GPU-enabled environment (
 git clone https://github.com/mohamedsaid2710/Distractor_software-.git
 cd Distractor_software-
 
-# Install the strict dependencies (Requires Python 3.12+)
-pip install -r requirements.txt
+# Install dependencies using uv (Fast & Reliable)
+uv sync
+source .venv/bin/activate  # (Optional) Activate for cleaner commands
 ```
 
 > **Note:** NLP/fastText models are huge. They will automatically download on the very first run. If you are preparing a remote execution, see the [Offline Model Loading guide](https://github.com/mohamedsaid2710/Distractor_software-/wiki) on the Wiki.

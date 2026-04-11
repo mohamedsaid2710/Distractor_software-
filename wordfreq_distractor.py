@@ -248,8 +248,11 @@ class wordfreq_dict(distractor_dict):
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
 
-        unique_words = list(set(w.lower() for w in words if w.lower() not in self.case_map))
+        # ABSOLUTE TRUTH GUARD: Only tag words that are NOT already in our verified cache.
+        unique_words = list(set(w.lower() for w in words if w.lower() not in self.pos_cache))
+        
         if not unique_words:
+            # print(f"    [NLP] Skipping Stanza: All {len(words)} candidates are already verified in Cache.", flush=True)
             return
 
         batch_size = 256
@@ -291,12 +294,11 @@ class wordfreq_dict(distractor_dict):
                         if (common and common[0].isupper()) or word_raw.endswith(self.NOUN_SUFFIXES):
                             upos = "NOUN"
                         
+                        # ABSOLUTE TRUTH: Once in Cache, it is immutable. 
+                        # We don't override existing cache entries with Stanza hallucinations.
                         word_l = word_raw.lower()
-                        self.pos_cache[word_l] = upos
-                        
-                        # LOGIC GUARD: If visually Titlecase, force NOUN if Stanza is 'X'
-                        if word_raw[0].isupper() and upos == 'X':
-                            self.pos_cache[word_l] = 'NOUN'
+                        if word_l not in self.pos_cache or self.pos_cache[word_l] in ('X', 'UNKNOWN'):
+                            self.pos_cache[word_l] = upos
                         
                         # Map casing in JSON cache
                         if self.pos_cache[word_l] in ('NOUN', 'PROPN'):
@@ -453,7 +455,8 @@ class wordfreq_dict(distractor_dict):
         target_is_capitalized = params.get('target_is_capitalized', False)
         exclude_propn = params.get('exclude_propn_candidates', False)
         
-        _min_json_zipf = float(params.get('json_min_zipf', 1.5))
+        _min_val = float(params.get('min_zipf', 1.5))
+        _min_json_zipf = float(params.get('json_min_zipf', _min_val))
         _german_vowels = re.compile(r'[aeiouyäöü]', re.IGNORECASE)
 
         filtered = []
@@ -537,8 +540,8 @@ class wordfreq_dict(distractor_dict):
             # Use target_is_noun from params for maximum precision (handles sentence-starts).
             # If target is a noun, distractor must be a noun.
             # If target is NOT a noun (even if capitalized at start), distractor must NOT be a noun.
-            # ARMED ALWAYS FOR GERMAN (even if match_casing_only is False)
-            if _lang == 'de':
+            # RELAXED if match_casing_only is True
+            if _lang == 'de' and not match_casing_only:
                 target_is_noun_pos = params.get('target_is_noun', target_is_capitalized)
                 
                 # REJECTION 1: Noun used for Non-Noun target (prevents giveaways like 'das' -> 'Merz')
@@ -550,8 +553,7 @@ class wordfreq_dict(distractor_dict):
                     continue
 
                 # REJECTION 3: Noun-candidate is LOWERCASE (Fatal giveaway in German)
-                # Only apply if we are in casing-aware modes
-                if is_noun and w[0].islower() and (match_casing_only or params.get('match_noun_pos', True)):
+                if is_noun and w[0].islower():
                     continue
 
 
@@ -769,18 +771,9 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             l = len(word_l)
             if l not in self.others_by_len: continue # Bounds check
             
-            # NACIG STARTUP GUARD:
-            # Re-check everything against our heuristics to purge legacy errors.
-            common = self.common_casing.get(word_l, "")
-            is_ironclad = (common and common[0].isupper()) or word_l.endswith(self.NOUN_SUFFIXES)
-            
-            # Additional check: If it was ALREADY capitalized in someone's old manual run
-            # we should probably trust it's a noun.
-            if upos in ('NOUN', 'PROPN') or is_ironclad:
-                # PERMANENT HEALING: Update the cache so this fix is saved to the JSON file
-                if upos != "NOUN":
-                    self.pos_cache[word_l] = "NOUN"
-                upos = "NOUN"
+            # 3. ABSOLUTE TRUTH: The Cache is final.
+            # We trust the UPOS in the JSON file above all else.
+            if upos in ('NOUN', 'PROPN'):
                 self.case_map[word_l] = word_l.capitalize()
                 self.nouns_by_len[l].add(word_l)
             else:
@@ -879,10 +872,13 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             result = pos_tag in ('NOUN', 'PROPN')
             return result
         
-        # PRIORITY 3: Fallback to titlecase heuristic (wordfreq-based)
-        if t_lower not in self.case_map:
-            self._eval_single_word_case(t_lower)
-        return self.case_map.get(t_lower) is not None
+        # PRIORITY 3: Fallback to titlecase heuristic (Suffix-based ONLY)
+        # We NO LONGER trigger neural _eval_single_word_case for the German Absolute Truth phase.
+        # Unknown words are treated as Non-Nouns unless they have a classic noun suffix.
+        if t_lower.endswith(self.NOUN_SUFFIXES):
+            return True
+            
+        return False
 
     def get_titlecase_variant(self, token):
         """Returns the TitleCase form if the token is a known noun."""
@@ -946,10 +942,21 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             print(f"    [NACIG] Self-healing and tagging {len(to_tag)} German candidates...", flush=True)
 
 
-        BATCH = int(params.get('nlp_batch_size', 256)) if params else 256
+        BATCH_SIZE = int(params.get('nlp_batch_size', 256)) if params else 256
         
-        for i in range(0, len(to_tag), BATCH):
-            batch = to_tag[i : i + BATCH]
+        # Performance Upgrade: Batch the SpaCy pre-check for the ENTIRE list at once
+        spacy_noun_map = {}
+        if self.spacy_nlp and to_tag:
+            try:
+                # Use nlp.pipe for massively parallel SpaCy processing
+                for doc in self.spacy_nlp.pipe(to_tag, batch_size=BATCH_SIZE):
+                    if len(doc) > 0 and doc[0].pos_ in ['NOUN', 'PROPN']:
+                        spacy_noun_map[doc.text.lower()] = True
+            except Exception as e:
+                logging.warning(f"[SPACY] Batched pre-check failed: {e}")
+
+        for i in range(0, len(to_tag), BATCH_SIZE):
+            batch = to_tag[i : i + BATCH_SIZE]
             
             # Categorize by morphology
             verb_words = []
@@ -959,18 +966,11 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             
             for w in batch:
                 w_lower = w.lower()
-                
-                # GROUNDED NOUN GUARD: NACIG Overrides
-                # If the dictionary or suffix says it's a noun, we force the noun frame.
                 common = self.common_casing.get(w_lower, "")
                 is_ironclad = (common and common[0].isupper()) or w_lower.endswith(self.NOUN_SUFFIXES)
                 
-                is_grounded_noun = is_ironclad
-                if not is_grounded_noun and self.spacy_nlp:
-                    # Fallback to Spacy pre-check
-                    doc = self.spacy_nlp(w_lower)
-                    if doc and len(doc) > 0 and doc[0].pos_ in ['NOUN', 'PROPN']:
-                        is_grounded_noun = True
+                # Check our pre-calculated SpaCy map
+                is_grounded_noun = is_ironclad or spacy_noun_map.get(w_lower, False)
                 
                 # VERB: 6+ chars ending in past tense markers
                 is_verb = (len(w_lower) >= 6 and re.search(r'(te|ten|iert|et)$', w_lower))
@@ -979,63 +979,61 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                     noun_words.append(w_lower)
                 elif is_verb:
                     verb_words.append(w_lower)
-                # ADJECTIVE: Specific endings (-lich, -ig, -isch, -keit)
                 elif re.search(r'(lich|ig|isch|keit)$', w_lower):
                     adj_words.append(w_lower)
-                # NOUN FALLBACK: clear noun morphology
                 elif w[0].isupper() or re.search(r'(tion|heit|ness|mann|schaft|um)$', w_lower):
                     noun_words.append(w_lower)
                 else:
                     other_words.append(w_lower)
             
             try:
-                # VERB FRAME: "Er {word} es."
+                import stanza
+                # 1. VERB FRAME: "Er {word} es."
                 if verb_words:
                     frames = [f"Er {w} es." for w in verb_words]
-                    docs = self.nlp_sp.bulk_process(frames)
+                    docs = self.nlp_sp([stanza.Document([], text=t) for t in frames])
                     for word, doc in zip(verb_words, docs):
                         if doc.sentences and len(doc.sentences[0].words) >= 2:
-                            final_pos = doc.sentences[0].words[1].upos  # [0]=Er, [1]=VERB
+                            final_pos = doc.sentences[0].words[1].upos
                         else:
                             final_pos = 'X'
                         self._record_pos_tag(word, final_pos)
                 
-                # ADJECTIVE FRAME: "Das ist {word}."
+                # 2. ADJECTIVE FRAME: "Das ist {word}."
                 if adj_words:
                     frames = [f"Das ist {w}." for w in adj_words]
-                    docs = self.nlp_sp.bulk_process(frames)
+                    docs = self.nlp_sp([stanza.Document([], text=t) for t in frames])
                     for word, doc in zip(adj_words, docs):
                         if doc.sentences and len(doc.sentences[0].words) >= 3:
-                            final_pos = doc.sentences[0].words[2].upos  # [0]=Das, [1]=ist, [2]=ADJ
+                            final_pos = doc.sentences[0].words[2].upos
                         else:
                             final_pos = 'X'
                         self._record_pos_tag(word, final_pos)
                 
-                # NOUN FRAME: "Das ist ein {word}."
+                # 3. NOUN FRAME: "Das ist ein {word}."
                 if noun_words:
+                    # We capitalize the word in the frame to help Stanza recognize the noun
                     frames = [f"Das ist ein {w.capitalize()}." for w in noun_words]
-                    docs = self.nlp_sp.bulk_process(frames)
+                    docs = self.nlp_sp([stanza.Document([], text=t) for t in frames])
                     for word, doc in zip(noun_words, docs):
                         if doc.sentences and len(doc.sentences[0].words) >= 4:
-                            final_pos = doc.sentences[0].words[3].upos  # [0]=Das, [1]=ist, [2]=ein, [3]=NOUN
+                            final_pos = doc.sentences[0].words[3].upos
                         else:
                             final_pos = 'X'
                         self._record_pos_tag(word, final_pos)
                 
-                # ISOLATED: No frame
+                # 4. ISOLATED: No frame
                 if other_words:
-                    frames = other_words
-                    docs = self.nlp_sp.bulk_process(frames)
+                    docs = self.nlp_sp([stanza.Document([], text=w) for w in other_words])
                     for word, doc in zip(other_words, docs):
                         if doc.sentences and doc.sentences[0].words:
-                            final_pos = doc.sentences[0].words[0].upos  # [0]=WORD
+                            final_pos = doc.sentences[0].words[0].upos
                         else:
                             final_pos = 'X'
                         self._record_pos_tag(word, final_pos)
                         
             except Exception as e:
-                logging.error(f"[STANZA] Selective framing batch failed: {e}")
-                # Fallback to one-by-one isolated
+                logging.error(f"[STANZA] Max-Throttle batching failed: {e}")
                 for w in batch:
                     self._eval_single_word_case(w)
 
@@ -1066,15 +1064,10 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 self.others_by_len[l].add(word)
 
     def save_pos_cache(self):
-        """Persist the POS cache to the v2 file."""
-        try:
-            cache_file = "models/german_code/german_pos_cache_v2.json"
-            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-            with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump(self.pos_cache, f, ensure_ascii=False, indent=2)
-            # print(f"    [CACHE] Saved {len(self.pos_cache)} entries to {cache_file}")
-        except Exception as e:
-            logging.error(f"Failed to save German POS cache: {e}")
+        """Logic disabled: POS cache is now a read-only 'Absolute Truth' file.
+        No new wordfreq results or neural tags will be added to the v2 file.
+        """
+        pass
 
 
 def _is_lexically_garbage(word, lang='de'):

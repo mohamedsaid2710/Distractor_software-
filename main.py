@@ -16,10 +16,10 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
         logging.error("outfile format not understood")
         raise ValueError
     params = set_params(parameters)
-    sents = read_input(infile)
     dict_class = getattr(importlib.import_module(params.get("dictionary_loc", "wordfreq_distractor")),
                          params.get("dictionary_class", "wordfreq_English_zipf_dict"))
     d = dict_class(params)
+    sents = read_input(infile)
     model_class = getattr(importlib.import_module(params.get("model_loc", "models.english_code.model")),
                           params.get("model_class", "EnglishScorer"))
     m = model_class(params)
@@ -29,7 +29,7 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
     
     # PROACTIVE PARALLEL TAGGING: Scan all sentences and tag likely candidates in one batch
     if params.get("proactive_tagging", True):
-        pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=True)
+        pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=False)
 
     
     # PRE-CLEAR OUTFILE to allow incremental appending
@@ -71,12 +71,12 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
         d.save_pos_cache()
 
 
-def pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=True):
+def pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=False):
     """Proactively harvests and batch-tags potential distractor candidates
     for the entire experiment in a single Stanza batch run.
 
-    force_refresh=True ensures that even if a word is in the cache, it is
-    re-verified to purge messy legacy tags.
+    force_refresh=False (Default) ensures we obey the 'Absolute Truth' of 
+    the existing cache and only tag unknown words.
     """
     if not hasattr(d, 'batch_tag_words') or getattr(d, 'nlp_sp', None) is None:
         return

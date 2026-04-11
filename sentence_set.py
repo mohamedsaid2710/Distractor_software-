@@ -515,17 +515,18 @@ class Label:
         target_is_lower = sw_target[0].islower() if sw_target else True
 
         if lang == 'de' and match_casing_only:
-            # IMPROVED: Use actual POS if available, otherwise use Dictionary Heuristic
-            if target_pos in ('NOUN', 'PROPN'):
+            # ABSOLUTE TRUTH: Trust dictionary cache above all else for German.
+            # Mirror the target casing IF our dictionary confirms the category.
+            target_is_noun_dict = dictionary.has_titlecase_variant(sw_target)
+            if target_pos in ('NOUN', 'PROPN') or target_is_noun_dict:
                 target_is_noun = True
             elif target_pos is not None:
                 target_is_noun = False
             else:
-                # Fallback to heuristic to catch "hidden" nouns without neural NLP
-                target_is_noun = dictionary.has_titlecase_variant(sw_target)
+                target_is_noun = target_is_noun_dict
         elif not match_casing_only:
-            # Pure POS mode or non-German: derive nounness from the actual POS tag.
-            target_is_noun = (target_pos == 'NOUN')
+            # Pure POS mode: prioritize dictionary cache via target_pos (checked first in get_candidate_pos)
+            target_is_noun = (target_pos in ('NOUN', 'PROPN'))
 
         # --- POS FILTER (Deprecated) ---
         pos_filter = None
@@ -686,7 +687,7 @@ class Label:
                         continue
                     if dist_l in avoid or dist_l in global_exclude:
                         continue
-                    if is_propn_candidate(dist):
+                    if exclude_propn_candidates and is_propn_candidate(dist):
                         continue
                     if (not allow_banned) and (dist_l in banned_l):
                         continue
