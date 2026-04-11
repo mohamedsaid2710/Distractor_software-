@@ -911,7 +911,6 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             print(f"    [STANZA] Batch tagging {len(to_tag)} German candidates (including unknown 'X' entries)...", flush=True)
 
 
-        import re
         BATCH = int(params.get('nlp_batch_size', 256)) if params else 256
         
         for i in range(0, len(to_tag), BATCH):
