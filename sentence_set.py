@@ -13,6 +13,9 @@ print("\n" + "="*60)
 print("GERMAN CASING V2.2: DUAL-CHECK + SENTENCE-FRAME TAGGING ACTIVE")
 print("="*60 + "\n")
 
+from wordfreq_distractor import _is_lexically_garbage
+
+
 # Lazy import for semantic filtering
 _semantic_filter_module = None
 
@@ -697,20 +700,31 @@ class Label:
                     # (mirrors get_potential_distractors FINAL FILTER so no garbage can
                     # enter through Stage 1/3/5/6 or ultimate desperation either).
                     if lang == 'de':
-                        if len(dist_l) < 8:
-                            if not re.search(r'[aeiouyäöü]', dist_l):
-                                continue
-                            if _wordfreq_mod is not None:
-                                if _wordfreq_mod.zipf_frequency(dist_l, 'de') < float(params.get('json_min_zipf', 1.5)):
-                                    continue
-                        if match_casing_only:
-                            _pc = getattr(dictionary, 'pos_cache', {})
-                            if dist_l in _pc:
-                                _is_noun_d = _pc[dist_l] in ('NOUN', 'PROPN')
-                                if not target_is_cap and _is_noun_d:
-                                    continue
-                                if target_is_cap and not _is_noun_d:
-                                    continue
+                        # Absolute Lexical Quality Guard
+                        if _is_lexically_garbage(dist_l, lang='de'):
+                            continue
+
+                        # Absolute POS Isolation
+                        # We MUST NOT use nouns for non-nouns, or non-nouns for nouns.
+                        _pc = getattr(dictionary, 'pos_cache', {})
+                        _is_noun_d = False
+                        if dist_l in _pc:
+                            _is_noun_d = _pc[dist_l] in ('NOUN', 'PROPN')
+                        else:
+                            # Fallback to TitleCase mapping for wordfreq strings
+                            if hasattr(dictionary, 'nouns_by_len'):
+                                l_len = len(dist_l)
+                                if l_len in dictionary.nouns_by_len and dist_l in dictionary.nouns_by_len[l_len]:
+                                    _is_noun_d = True
+                            if not _is_noun_d and hasattr(dictionary, 'has_titlecase_variant'):
+                                _is_noun_d = dictionary.has_titlecase_variant(dist_l)
+
+                        # Enforce target_is_noun vs distractor_is_noun
+                        # (Using target_is_noun from params for stability)
+                        t_is_n = params.get('target_is_noun', False)
+                        if t_is_n != _is_noun_d:
+                            continue
+
 
                     # NOTE: Similarity filtering is handled by semantic_filter (fastText embeddings)
                     # Levenshtein distance check removed for performance (was causing 6.4B+ operations)
@@ -922,22 +936,27 @@ class Label:
                     exact_full_pool = []
                 # Enforce noun/non-noun split in German regardless of match_casing_only.
                 # This ensures linguistic category matching even if orthographic matching is False.
-                if (match_casing_only or lang == 'de') and exact_full_pool:
+                if lang == 'de' and exact_full_pool:
                     _pc = getattr(dictionary, 'pos_cache', {})
                     _has_tc = hasattr(dictionary, 'has_titlecase_variant')
+                    _nbl = getattr(dictionary, 'nouns_by_len', {})
                     
                     def _is_noun_check(w):
                         w_l = w.lower()
                         if w_l in _pc:
                             return _pc[w_l] in ('NOUN', 'PROPN')
+                        if len(w_l) in _nbl and w_l in _nbl[len(w_l)]:
+                            return True
                         if _has_tc:
-                            return dictionary.has_titlecase_variant(w)
-                        return w[0].isupper() # last resort heuristic
+                            return dictionary.has_titlecase_variant(w_l)
+                        return False # if not found in any noun source, assume non-noun
 
-                    if not target_is_cap:
+                    t_is_n = params.get('target_is_noun', False)
+                    if not t_is_n:
                         exact_full_pool = [w for w in exact_full_pool if not _is_noun_check(w)]
                     else:
                         exact_full_pool = [w for w in exact_full_pool if _is_noun_check(w)]
+
                 if exact_full_pool:
                     random.shuffle(exact_full_pool)
                     cand, cand_surp = pick_best_from_pool(exact_full_pool, allow_banned=False)

@@ -502,8 +502,24 @@ class wordfreq_dict(distractor_dict):
                 tag = self.pos_cache[w_lower]
                 is_propn = (tag == 'PROPN')
                 is_noun = (tag in ('NOUN', 'PROPN'))
-            else:
+            
+            # German-Specific isolation hardening:
+            # Check the TitleCase variants from the wordfreq dictionary itself.
+            if _lang == 'de' and not is_noun:
+                # If we have a TitleCase version in our pre-indexed pools, it's a noun.
+                l_len = len(w_lower)
+                if hasattr(self, 'nouns_by_len') and l_len in self.nouns_by_len:
+                    if w_lower in self.nouns_by_len[l_len]:
+                        is_noun = True
+                
+                # Fallback to general TitleCase variant check
+                if not is_noun and hasattr(self, 'has_titlecase_variant'):
+                    is_noun = self.has_titlecase_variant(w_lower)
+            
+            # Generic fallback if not already determined
+            if not is_noun and not in_cache and not _lang == 'de':
                 is_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
+
             
             # 1. Reject Proper Nouns (the "rubbish" fragments like Obb, Dha)
             if exclude_propn and is_propn:
@@ -1001,8 +1017,11 @@ def _is_lexically_garbage(word, lang='de'):
     if not word: return True
     w = word.lower()
     
-    # 1. Blacklist for known noisy fragments from frequency dicts
-    blacklist = {'ua', 'uv', 'xy', 'tp', 'og', 'ogm', 'uefa', 'usw', 'zb', 'dpa', 'mrd', 'uvm', 'bzw'}
+    # 1. Blacklist for known noisy fragments and acronyms from frequency dicts
+    blacklist = {
+        'ua', 'uv', 'xy', 'tp', 'og', 'ogm', 'uefa', 'usw', 'zb', 'dpa', 'mrd', 'uvm', 'bzw',
+        'ops', 'raf', 'lan', 'ole', 'ott', 'ut', 'it', 'ed', 'ex', 're', 'id'
+    }
     if w in blacklist:
         return True
         
@@ -1016,13 +1035,41 @@ def _is_lexically_garbage(word, lang='de'):
         else:
             return True
             
-    # 3. Vowel Check (Short fragments must have vowels)
-    vowels = 'aeiouyäöü' if lang == 'de' else 'aeiouy'
-    if len(w) < 6:
-        if not any(c in vowels for c in w):
+    # 3. German Quality Guard (Density and Structure)
+    if lang == 'de':
+        vowels = set('aeiouyäöü')
+        v_count = sum(1 for c in w if c in vowels)
+        
+        # Whitelist of valid tiny German words (2-3 chars)
+        valid_tiny = {
+            'der', 'die', 'das', 'dem', 'den', 'des', 'ein', 'eine', 'einer', 'eines',
+            'und', 'mit', 'auf', 'für', 'von', 'aus', 'bei', 'vor', 'nach', 'über',
+            'ich', 'du', 'er', 'sie', 'es', 'wir', 'ihr', 'sie', 'uns', 'mir', 'dir',
+            'ist', 'sind', 'war', 'ja', 'nein', 'doch', 'als', 'wie', 'so', 'nur',
+            'bis', 'ab', 'zu', 'an', 'im', 'am', 'um', 'da'
+        }
+        
+        if len(w) <= 3 and w not in valid_tiny:
+            # If it's a 2-3 char word not in our whitelist, ensure it has at least one vowel
+            # AND isn't just a consonant cluster.
+            if v_count == 0:
+                return True
+            # Optional: reject 3-letter words with rare consonant patterns
+            # (Keeping it simple for now)
+
+        # Vowel density: Words should usually have at least one vowel per ~3.5 chars
+        # Except for very long compounds which might have clusters.
+        if len(w) > 3 and v_count == 0:
+            return True
+
+    else:
+        # Non-German generic check
+        vowels = set('aeiouy')
+        if len(w) < 6 and not any(c in vowels for c in w):
             return True
             
     # 4. Repeating character threshold (kills aaa, xxx, etc.)
+
     for char in set(w):
         if w.count(char) > 3 and len(w) < 10:
             return True
