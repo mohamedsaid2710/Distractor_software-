@@ -104,6 +104,7 @@ class wordfreq_dict(distractor_dict):
     """General class of dictionaries"""
 
     def __init__(self, params={}):
+        self.params = params
         self.words = []
         self.words_by_len = {}
         self.nouns_by_len = defaultdict(set)
