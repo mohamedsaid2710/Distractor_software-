@@ -929,9 +929,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 is_ironclad = (common and common[0].isupper()) or w_clean.endswith(self.NOUN_SUFFIXES)
                 
                 current_tag = self.pos_cache.get(w_clean, None)
-                needs_refresh = (current_tag is None or 
-                                 current_tag in ['X', 'UNKNOWN'] or 
-                                 (is_ironclad and current_tag != 'NOUN'))
+                needs_refresh = (current_tag is None)
                 
                 if needs_refresh:
                     to_tag.append(w_clean)
@@ -939,7 +937,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             to_tag = list(set(to_tag))
             if not to_tag:
                 return
-            print(f"    [NACIG] Self-healing and tagging {len(to_tag)} German candidates...", flush=True)
+            print(f"    [DICT] Found {len(to_tag)} new words missing from cache. Tagging...", flush=True)
 
 
         BATCH_SIZE = int(params.get('nlp_batch_size', 256)) if params else 256
