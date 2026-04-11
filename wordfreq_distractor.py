@@ -682,6 +682,8 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.case_map = {}
         if not hasattr(self, 'overrides'):
             self.overrides = {}
+        if not hasattr(self, 'common_casing'):
+            self.common_casing = {}
 
         # === PRELOAD GERMAN POS CACHE ===
         try:
@@ -697,6 +699,18 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             logging.error(f"[CACHE] Error loading German POS cache: {e}")
 
         print(f"\n>>> LOADING GERMAN DICTIONARY: {self.__class__.__name__} (Runtime Stanza tagging enabled)", flush=True)
+
+        # Grounded Noun Guard: using spacy's German model for robust orthography
+        import spacy
+        try:
+            # Using 'lg' (Large) model for better accuracy if available
+            self.spacy_nlp = spacy.load("de_core_news_lg")
+        except:
+            # Fallback to 'sm' (Small) if only that is installed
+            try:
+                self.spacy_nlp = spacy.load("de_core_news_sm")
+            except:
+                self.spacy_nlp = None
 
         freq_dict = wordfreq.get_frequency_dict("de")
         source_words = list(freq_dict.keys())
@@ -724,6 +738,9 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             freq_val = z * math.log(10)
             self.words.append(distractor(lw, freq_val, pos=None))
             seen.add(lw)
+            # Store the common casing as a hint for the POS tagger
+            # If the common casing is Titlecase, it's almost certainly a NOUN.
+            self.common_casing[lw] = raw.strip()
 
         self.nlp_sp = None
         self._init_spacy()
@@ -895,23 +912,37 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             
             for w in batch:
                 w_lower = w.lower()
+                
+                # GROUNDED NOUN GUARD: Check spacy's lexicon/vocab first.
+                # If spacy identifies it primarily as a noun, we frame it as such.
+                is_grounded_noun = False
+                if self.spacy_nlp:
+                    # We check if the word exists and is tagged as NOUN or PROPN in spacy's static vocab
+                    lex = self.spacy_nlp.vocab[w_lower]
+                    # Since we can't easily get the 'most frequent' tag from vocab without a doc, 
+                    # we use a small frame for a quick pre-check if needed, or just rely on morphology
+                    if re.search(r'(tion|heit|ness|mann|schaft|um|keit)$', w_lower):
+                        is_grounded_noun = True
+                    else:
+                        # Fallback: quick light-weight spacy check on the word alone
+                        doc = self.spacy_nlp(w_lower)
+                        if doc and len(doc) > 0 and doc[0].pos_ in ['NOUN', 'PROPN']:
+                            is_grounded_noun = True
+                
                 # VERB: 6+ chars ending in past tense markers
                 is_verb = (len(w_lower) >= 6 and re.search(r'(te|ten|iert|et)$', w_lower))
                 
-                if is_verb:
+                if is_grounded_noun:
+                    noun_words.append(w_lower)
+                elif is_verb:
                     verb_words.append(w_lower)
                 # ADJECTIVE: Specific endings (-lich, -ig, -isch, -keit)
-                # NOTE: Words ending in -ä, -ö, -ü, -e might be adjectives or nouns
-                # Since we can't distinguish morphologically, try adjective frame first
                 elif re.search(r'(lich|ig|isch|keit)$', w_lower):
                     adj_words.append(w_lower)
-                # NOUN: Capitalized or specific noun endings
-                # Be conservative: only add clear noun morphology, let uncertain words use "other"
+                # NOUN FALLBACK: clear noun morphology
                 elif w[0].isupper() or re.search(r'(tion|heit|ness|mann|schaft|um)$', w_lower):
                     noun_words.append(w_lower)
                 else:
-                    # Everything else (including -e, -in endings) gets isolated tagging
-                    # This includes potential adjectives and ambiguous nouns
                     other_words.append(w_lower)
             
             try:
