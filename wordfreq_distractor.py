@@ -285,6 +285,12 @@ class wordfreq_dict(distractor_dict):
                         else:
                             upos = 'X'
                         
+                        # FINAL NACIG GUARD: 
+                        # If our heuristics are 100% sure it's a NOUN, we override Stanza's last word.
+                        common = self.common_casing.get(word_raw, "")
+                        if (common and common[0].isupper()) or word_raw.endswith(self.NOUN_SUFFIXES):
+                            upos = "NOUN"
+                        
                         word_l = word_raw.lower()
                         self.pos_cache[word_l] = upos
                         
@@ -651,6 +657,12 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
 
 
 class wordfreq_German_zipf_dict(wordfreq_dict):
+    # NACIG Protocol: Ironclad German Noun Suffixes
+    NOUN_SUFFIXES = (
+        "ung", "heit", "keit", "schaft", "tion", "sion", 
+        "tät", "ismus", "ment", "ik", "anz", "enz"
+    )
+
     """Zipf-based German dictionary built from the wordfreq library."""
 
     def __init__(self, params={}):
@@ -893,22 +905,31 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             to_tag = list(set(w.lower() for w in words))
             print(f"    [STANZA] Force-verifying {len(to_tag)} candidates to purge messy cache...", flush=True)
         else:
-            # RE-TAG 'X' ENTRIES: If it was marked as 'X' before, it likely failed. 
-            # We re-check it with the new Grounded Noun Guard.
+            # NACIG SELF-HEALING: If it is marked as 'X', 'VERB', or 'ADJ' but 
+            # our NACIG Guard says it's a NOUN, we MUST re-tag it properly.
             to_tag = []
             for w in set(words):
                 w_lower = w.lower()
-                # Defensive strip punctuation to prevent cache pollution early
+                # Defensive strip punctuation to prevent cache pollution
                 w_clean = re.sub(r"[^\w\säöüÄÖÜß]", "", w_lower).strip()
                 if not w_clean: continue
                 
-                if w_clean not in self.pos_cache or self.pos_cache[w_clean] == 'X':
+                # NACIG Protocol Check: Is this an 'Ironclad Noun'?
+                common = self.common_casing.get(w_clean, "")
+                is_ironclad = (common and common[0].isupper()) or w_clean.endswith(self.NOUN_SUFFIXES)
+                
+                current_tag = self.pos_cache.get(w_clean, None)
+                needs_refresh = (current_tag is None or 
+                                 current_tag in ['X', 'UNKNOWN'] or 
+                                 (is_ironclad and current_tag != 'NOUN'))
+                
+                if needs_refresh:
                     to_tag.append(w_clean)
             
-            to_tag = list(set(to_tag)) # Deduplicate clean words
+            to_tag = list(set(to_tag))
             if not to_tag:
                 return
-            print(f"    [STANZA] Batch tagging {len(to_tag)} German candidates (including unknown 'X' entries)...", flush=True)
+            print(f"    [NACIG] Self-healing and tagging {len(to_tag)} German candidates...", flush=True)
 
 
         BATCH = int(params.get('nlp_batch_size', 256)) if params else 256
@@ -925,21 +946,17 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             for w in batch:
                 w_lower = w.lower()
                 
-                # GROUNDED NOUN GUARD: Check spacy's lexicon/vocab first.
-                # If spacy identifies it primarily as a noun, we frame it as such.
-                is_grounded_noun = False
-                if self.spacy_nlp:
-                    # We check if the word exists and is tagged as NOUN or PROPN in spacy's static vocab
-                    lex = self.spacy_nlp.vocab[w_lower]
-                    # Since we can't easily get the 'most frequent' tag from vocab without a doc, 
-                    # we use a small frame for a quick pre-check if needed, or just rely on morphology
-                    if re.search(r'(tion|heit|ness|mann|schaft|um|keit)$', w_lower):
+                # GROUNDED NOUN GUARD: NACIG Overrides
+                # If the dictionary or suffix says it's a noun, we force the noun frame.
+                common = self.common_casing.get(w_lower, "")
+                is_ironclad = (common and common[0].isupper()) or w_lower.endswith(self.NOUN_SUFFIXES)
+                
+                is_grounded_noun = is_ironclad
+                if not is_grounded_noun and self.spacy_nlp:
+                    # Fallback to Spacy pre-check
+                    doc = self.spacy_nlp(w_lower)
+                    if doc and len(doc) > 0 and doc[0].pos_ in ['NOUN', 'PROPN']:
                         is_grounded_noun = True
-                    else:
-                        # Fallback: quick light-weight spacy check on the word alone
-                        doc = self.spacy_nlp(w_lower)
-                        if doc and len(doc) > 0 and doc[0].pos_ in ['NOUN', 'PROPN']:
-                            is_grounded_noun = True
                 
                 # VERB: 6+ chars ending in past tense markers
                 is_verb = (len(w_lower) >= 6 and re.search(r'(te|ten|iert|et)$', w_lower))
