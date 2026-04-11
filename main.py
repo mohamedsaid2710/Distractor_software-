@@ -37,20 +37,33 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
         pass
 
     total = len(sents)
-    for i, ss in enumerate(sents.values(), 1):
+    executed_ids = []
+    for i, (ss_id, ss) in enumerate(sents.items(), 1):
         # Get tag from the first sentence in the set (most sets only have one)
         tag = ss.sentences[0].tag if ss.sentences else "None"
-        print(f"\n>>> [{i}/{total}] Processing Sentence: {tag} (ID: {ss.id})")
+        print(f"\n>>> [{i}/{total}] Processing Item ID: {ss_id} (Tag: {tag})", flush=True)
         
-        ss.do_model(m)
-        ss.do_surprisals(m)
-        ss.make_labels(params)
-        ss.do_distractors(m, d, threshold_func, params, repeats)
-        
-        # INCREMENTAL SAVE: Save this sentence set immediately
-        append_results(outfile, ss, outformat)
+        try:
+            ss.do_model(m)
+            ss.do_surprisals(m)
+            ss.make_labels(params)
+            ss.do_distractors(m, d, threshold_func, params, repeats)
+            
+            # INCREMENTAL SAVE: Save this sentence set immediately
+            append_results(outfile, ss, outformat)
+            executed_ids.append(ss_id)
+            print(f"    ✅ Success: Item {ss_id} saved to {outfile}")
+            
+        except Exception as e:
+            print(f"    ❌ ERROR on Item {ss_id}: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            continue
         
         ss.clean_up()
+    
+    print(f"\n>>> GENERATION COMPLETE. Processed {len(executed_ids)}/{total} items.")
+    print(f">>> Successfully saved IDs: {executed_ids}")
     
     
     # FINAL CACHE SAVE: Persist all tagged words to disk
@@ -83,8 +96,12 @@ def pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=True
                 words_to_process = words_to_process[1:]
                 
             for word in words_to_process:
-                stripped = _strip(word)
+                # STRIP PUNCTUATION: Ensure we only tag the base word 
+                # (prevents cache pollution like 'angereist.')
+                stripped = re.sub(r"[^\w\s\u0600-\u06FFäöüÄÖÜß]", "", word)
                 if not stripped: continue
+                # Lowercase for canonical cache entry
+                word_clean = stripped.lower()
                 
                 # Get thresholds for this word
                 try:
@@ -92,7 +109,7 @@ def pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=True
                     target_freq = (min_f + max_f) / 2
                     
                     # Fetch candidates of the exact required length
-                    pool = d.get_best_frequency_pool(len(stripped), target_freq, n=100)
+                    pool = d.get_best_frequency_pool(len(word_clean), target_freq, n=100)
                     for cand in pool:
                         all_candidates.add(cand.lower())
                 except Exception:

@@ -788,6 +788,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         try:
             import stanza
             # Try to load; download if necessary
+            stanza.download('de')
             use_gpu = True
             try:
                 self.nlp_sp = stanza.Pipeline('de', processors='tokenize,mwt,pos,lemma', use_gpu=use_gpu)
@@ -892,10 +893,22 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             to_tag = list(set(w.lower() for w in words))
             print(f"    [STANZA] Force-verifying {len(to_tag)} candidates to purge messy cache...", flush=True)
         else:
-            to_tag = list(set(w.lower() for w in words if w.lower() not in self.pos_cache))
+            # RE-TAG 'X' ENTRIES: If it was marked as 'X' before, it likely failed. 
+            # We re-check it with the new Grounded Noun Guard.
+            to_tag = []
+            for w in set(words):
+                w_lower = w.lower()
+                # Defensive strip punctuation to prevent cache pollution early
+                w_clean = re.sub(r"[^\w\säöüÄÖÜß]", "", w_lower).strip()
+                if not w_clean: continue
+                
+                if w_clean not in self.pos_cache or self.pos_cache[w_clean] == 'X':
+                    to_tag.append(w_clean)
+            
+            to_tag = list(set(to_tag)) # Deduplicate clean words
             if not to_tag:
                 return
-            print(f"    [STANZA] Batch tagging {len(to_tag)} new German candidates with selective framing...", flush=True)
+            print(f"    [STANZA] Batch tagging {len(to_tag)} German candidates (including unknown 'X' entries)...", flush=True)
 
 
         import re

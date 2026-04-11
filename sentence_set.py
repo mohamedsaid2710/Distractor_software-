@@ -269,7 +269,9 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
         else:
             # SAFETY FALLBACK: If target is capitalized and distractor is unknown, 
             # assume it might need TitleCase in German (better to over-capitalize than under-capitalize).
-            if target_is_cap and not distractor_is_noun:
+            # If target is lower, distractor MUST be lower. 
+            # If target is capitalized, distractor MUST be capitalized.
+            if target_is_cap:
                 new_body = body[0].upper() + body[1:].lower()
             else:
                 new_body = body.lower()
@@ -714,10 +716,11 @@ class Label:
                         # Note: We hard-bypass dictionary.has_titlecase_variant() here 
                         # because it can trigger individual neural passes for words not in cache.
 
-                        # Enforce target_is_noun vs distractor_is_noun
-                        # (Using target_is_noun from params for stability)
-                        t_is_n = params.get('target_is_noun', False)
-                        if t_is_n != _is_noun_d:
+                        # Hard Neutralization: Target Casing MUST match Distractor Category
+                        # This prevents "Igel" (Noun) from ever being used for "der" (Lower),
+                        # and prevents "kandidiert" (Verb) from being used for "Dirigenten" (Noun).
+                        target_is_cap = params.get('target_is_capitalized', False)
+                        if target_is_cap != _is_noun_d:
                             continue
 
 
@@ -1052,14 +1055,21 @@ class Label:
                                             continue
                                 if is_propn_candidate(cand):
                                     continue
-                                if match_casing_only:
-                                    _pc2 = getattr(dictionary, 'pos_cache', {})
-                                    if cand_l in _pc2:
-                                        _is_noun_d2 = _pc2[cand_l] in ('NOUN', 'PROPN')
-                                        if not target_is_cap and _is_noun_d2:
-                                            continue
-                                        if target_is_cap and not _is_noun_d2:
-                                            continue
+                                
+                                # TIGHTENED END-GAMES: 
+                                # Even in desperation fallback, we never cross the Noun/non-Noun wall.
+                                _pc2 = getattr(dictionary, 'pos_cache', {})
+                                _is_noun_d2 = False
+                                if cand_l in _pc2:
+                                    _is_noun_d2 = _pc2[cand_l] in ('NOUN', 'PROPN')
+                                elif hasattr(dictionary, 'nouns_by_len'):
+                                    l_len2 = len(cand_l)
+                                    if l_len2 in dictionary.nouns_by_len and cand_l in dictionary.nouns_by_len[l_len2]:
+                                        _is_noun_d2 = True
+                                
+                                target_is_cap = params.get('target_is_capitalized', False)
+                                if target_is_cap != _is_noun_d2:
+                                    continue
                             best_word = cand
                             break
                         if best_word is None:
@@ -1429,7 +1439,7 @@ class Sentence_Set:
             if apply_postcase:
                 try:
                     for j in range(len(sentence.distractors)):
-                        target_tok = sentence.words[j] if j < len(sentence.words) else ""
+                        target_tok = strip_punct(sentence.words[j]) if j < len(sentence.words) else ""
                         sentence.distractors[j] = _normalize_distractor_token(
                             sentence.distractors[j], d, lang=lang, is_first_word=(j==0),
                             target_token=target_tok, match_casing_only=_match_casing_only)
