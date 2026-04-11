@@ -920,14 +920,20 @@ class Label:
                     exact_full_pool = dictionary.get_best_frequency_pool(desired_len, target_zipf)
                 except Exception:
                     exact_full_pool = []
-                # Enforce noun/non-noun split in casing mode regardless of pos_filter.
-                # Previously this check required pos_filter to be truthy, but
-                # pos_filter=None in casing-only mode — so the guard was never applied.
-                if match_casing_only and exact_full_pool:
-                    _is_noun_check = lambda w: (
-                        (hasattr(dictionary, 'pos_cache') and dictionary.pos_cache.get(w.lower()) in ('NOUN', 'PROPN'))
-                        or (hasattr(dictionary, 'has_titlecase_variant') and dictionary.has_titlecase_variant(w))
-                    )
+                # Enforce noun/non-noun split in German regardless of match_casing_only.
+                # This ensures linguistic category matching even if orthographic matching is False.
+                if (match_casing_only or lang == 'de') and exact_full_pool:
+                    _pc = getattr(dictionary, 'pos_cache', {})
+                    _has_tc = hasattr(dictionary, 'has_titlecase_variant')
+                    
+                    def _is_noun_check(w):
+                        w_l = w.lower()
+                        if w_l in _pc:
+                            return _pc[w_l] in ('NOUN', 'PROPN')
+                        if _has_tc:
+                            return dictionary.has_titlecase_variant(w)
+                        return w[0].isupper() # last resort heuristic
+
                     if not target_is_cap:
                         exact_full_pool = [w for w in exact_full_pool if not _is_noun_check(w)]
                     else:

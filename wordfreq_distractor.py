@@ -462,6 +462,12 @@ class wordfreq_dict(distractor_dict):
             # Long compounds (≥ 8 chars) are exempt: wordfreq may not know them.
             if _lang == 'de':
                 w_body = strip_punct(w).lower()
+                
+                # LEXICAL GARBAGE FILTER (IRONCLAD)
+                # Removes 'ua', 'xy', 'uv', 'og', 'uefa', etc.
+                if _is_lexically_garbage(w_body, 'de'):
+                    continue
+
                 if len(w_body) < 8:
                     # Must contain at least one German vowel
                     if not _german_vowels.search(w_body):
@@ -503,23 +509,25 @@ class wordfreq_dict(distractor_dict):
             if exclude_propn and is_propn:
                 continue
 
-            # 2. GERMAN GRAMMAR GUARD (match_casing_only mode)
+            # 2. GERMAN GRAMMAR GUARD
             # Use target_is_noun from params for maximum precision (handles sentence-starts).
             # If target is a noun, distractor must be a noun.
             # If target is NOT a noun (even if capitalized at start), distractor must NOT be a noun.
-            if _lang == 'de' and match_casing_only:
+            # ARMED ALWAYS FOR GERMAN (even if match_casing_only is False)
+            if _lang == 'de':
                 target_is_noun_pos = params.get('target_is_noun', target_is_capitalized)
                 
-                # REJECTION 1: Noun used for Non-Noun target (high surprisal, but avoid giveaways)
+                # REJECTION 1: Noun used for Non-Noun target (prevents giveaways like 'das' -> 'Merz')
                 if not target_is_noun_pos and is_noun:
                     continue
                 
-                # REJECTION 2: Non-Noun used for Noun target (mandatory alignment)
+                # REJECTION 2: Non-Noun used for Noun target (mandatory category alignment)
                 if target_is_noun_pos and not is_noun:
                     continue
 
                 # REJECTION 3: Noun-candidate is LOWERCASE (Fatal giveaway in German)
-                if is_noun and w[0].islower():
+                # Only apply if we are in casing-aware modes
+                if is_noun and w[0].islower() and (match_casing_only or params.get('match_noun_pos', True)):
                     continue
 
 
@@ -980,6 +988,46 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             # print(f"    [CACHE] Saved {len(self.pos_cache)} entries to {cache_file}")
         except Exception as e:
             logging.error(f"Failed to save German POS cache: {e}")
+
+
+def _is_lexically_garbage(word, lang='de'):
+    """Ironclad filter for Non-Lexical Noise.
+    
+    Rejects:
+    - Words with no vowels (if < 6 chars)
+    - Words with digits or special symbols (mixed with alphanumeric)
+    - Known garbage stems or fragments ('ua', 'xy', 'uv', 'tp', 'og', 'ogm', 'uefa')
+    """
+    if not word: return True
+    w = word.lower()
+    
+    # 1. Blacklist for known noisy fragments from frequency dicts
+    blacklist = {'ua', 'uv', 'xy', 'tp', 'og', 'ogm', 'uefa', 'usw', 'zb', 'dpa', 'mrd', 'uvm', 'bzw'}
+    if w in blacklist:
+        return True
+        
+    # 2. Non-Alpha detection (kills 09, 2024, v2.0, etc.)
+    if not w.isalpha():
+        # Allow only simple single hyphens for compounds
+        if '-' in w:
+            parts = w.split('-')
+            if any(not p.isalpha() for p in parts):
+                return True
+        else:
+            return True
+            
+    # 3. Vowel Check (Short fragments must have vowels)
+    vowels = 'aeiouyäöü' if lang == 'de' else 'aeiouy'
+    if len(w) < 6:
+        if not any(c in vowels for c in w):
+            return True
+            
+    # 4. Repeating character threshold (kills aaa, xxx, etc.)
+    for char in set(w):
+        if w.count(char) > 3 and len(w) < 10:
+            return True
+            
+    return False
 
 
 def get_frequency_de(word):
