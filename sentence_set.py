@@ -536,7 +536,6 @@ class Label:
         target_stripped = strip_punct(orig_target)
         target_is_cap = target_stripped[0].isupper() if target_stripped else False
         params['target_is_capitalized'] = target_is_cap
-
         # Calculate target Zipf for frequency-matched fallback lookups
         target_zipf = 5.0 # default
         if _wordfreq_mod:
@@ -546,7 +545,6 @@ class Label:
         # NOTE: PRE-TAGGING now handled at SentenceSet-level for optimal batch performance
 
         print(f"  [Batch] Finding distractors for '{orig_target}' (Cap: {target_is_cap})...")
-        params['target_is_noun'] = target_is_noun
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
         
@@ -698,16 +696,18 @@ class Label:
                     # (mirrors get_potential_distractors FINAL FILTER so no garbage can
                     # enter through Stage 1/3/5/6 or ultimate desperation either).
                     if lang == 'de':
+                        _pc = getattr(dictionary, 'pos_cache', {})
+                        _cand_tag = _pc.get(dist_l, None)
+                        
                         # Absolute Lexical Quality Guard
-                        if _is_lexically_garbage(dist_l, lang='de'):
+                        if _is_lexically_garbage(dist_l, lang='de') or _cand_tag == 'X':
                             continue
 
                         # Absolute POS Isolation
                         # We MUST NOT use nouns for non-nouns, or non-nouns for nouns.
-                        _pc = getattr(dictionary, 'pos_cache', {})
                         _is_noun_d = False
-                        if dist_l in _pc:
-                            _is_noun_d = _pc[dist_l] in ('NOUN', 'PROPN')
+                        if _cand_tag:
+                            _is_noun_d = _cand_tag in ('NOUN', 'PROPN')
                         elif hasattr(dictionary, 'nouns_by_len'):
                             # High-speed O(1) lookup in pre-loaded 634k JSON set
                             l_len = len(dist_l)
@@ -720,8 +720,12 @@ class Label:
                         # Hard Neutralization: Target Casing MUST match Distractor Category
                         # This prevents "Igel" (Noun) from ever being used for "der" (Lower),
                         # and prevents "kandidiert" (Verb) from being used for "Dirigenten" (Noun).
-                        target_is_cap = params.get('target_is_capitalized', False)
-                        if target_is_cap != _is_noun_d:
+                        target_is_cap_val = params.get('target_is_capitalized', False)
+                        if target_is_cap_val != _is_noun_d:
+                            continue
+
+                        # Inviolable Guard: Never use Proper Nouns as distractors
+                        if _cand_tag == 'PROPN' or is_propn_candidate(dist):
                             continue
 
 
@@ -769,8 +773,33 @@ class Label:
                             continue
                         if not candidate_length_ok(dist):
                             continue
-                        if is_propn_candidate(dist):
-                            continue
+                        
+                        # German Inviolable Guards: Noun-match, No X, No PROPN
+                        if lang == 'de':
+                            _pc = getattr(dictionary, 'pos_cache', {})
+                            _cand_tag = _pc.get(dist_l, None)
+                            
+                            # Reject X and PROPN
+                            if _cand_tag in ('X', 'PROPN') or is_propn_candidate(dist):
+                                continue
+                                
+                            # Reject Lexical Garbage
+                            if _is_lexically_garbage(dist_l, lang='de'):
+                                continue
+
+                            # Enforce Noun Wall
+                            _is_noun_d = False
+                            if _cand_tag:
+                                _is_noun_d = _cand_tag in ('NOUN', 'PROPN')
+                            elif hasattr(dictionary, 'nouns_by_len'):
+                                l_len = len(dist_l)
+                                if l_len in dictionary.nouns_by_len and dist_l in dictionary.nouns_by_len[l_len]:
+                                    _is_noun_d = True
+                            
+                            t_is_cap = params.get('target_is_capitalized', False)
+                            if t_is_cap != _is_noun_d:
+                                continue
+
                         # light continuation filter: skip if candidate literally contains the target
                         skip = False
                         for target in self.words:

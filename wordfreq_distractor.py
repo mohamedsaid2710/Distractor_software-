@@ -511,6 +511,8 @@ class wordfreq_dict(distractor_dict):
             
             if in_cache:
                 tag = self.pos_cache[w_lower]
+                if tag == 'X':
+                    continue # Ironclad X Rejection
                 is_propn = (tag == 'PROPN')
                 is_noun = (tag in ('NOUN', 'PROPN'))
             
@@ -531,17 +533,15 @@ class wordfreq_dict(distractor_dict):
             if not is_noun and not in_cache and not _lang == 'de':
                 is_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
 
-            
             # 1. Reject Proper Nouns (the "rubbish" fragments like Obb, Dha)
             if exclude_propn and is_propn:
                 continue
 
-            # 2. GERMAN GRAMMAR GUARD
+            # 2. GERMAN GRAMMAR GUARD (Inviolable)
             # Use target_is_noun from params for maximum precision (handles sentence-starts).
             # If target is a noun, distractor must be a noun.
             # If target is NOT a noun (even if capitalized at start), distractor must NOT be a noun.
-            # RELAXED if match_casing_only is True
-            if _lang == 'de' and not match_casing_only:
+            if _lang == 'de':
                 target_is_noun_pos = params.get('target_is_noun', target_is_capitalized)
                 
                 # REJECTION 1: Noun used for Non-Noun target (prevents giveaways like 'das' -> 'Merz')
@@ -555,7 +555,6 @@ class wordfreq_dict(distractor_dict):
                 # REJECTION 3: Noun-candidate is LOWERCASE (Fatal giveaway in German)
                 if is_noun and w[0].islower():
                     continue
-
 
             filtered.append(w)
         distractor_opts = filtered
@@ -1062,10 +1061,42 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 self.others_by_len[l].add(word)
 
     def save_pos_cache(self):
-        """Logic disabled: POS cache is now a read-only 'Absolute Truth' file.
-        No new wordfreq results or neural tags will be added to the v2 file.
+        """Safe-Growth Mode: Only populates truly new words.
+        Never overwrites existing entries in the 'Absolute Truth' file.
         """
-        pass
+        import json
+        import os
+        cache_path = self.params.get('pos_cache_path', 'models/german_code/german_pos_cache_v2.json')
+        if not os.path.exists(cache_path):
+            return
+
+        print(f"\n>>> [SAFE-GROWTH] Saving new discoveries to {os.path.basename(cache_path)}...")
+        
+        # 1. Load the current 'Absolute Truth' from disk
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                disk_cache = json.load(f)
+        except Exception as e:
+            print(f"    [ERROR] Could not read cache for saving: {e}")
+            return
+
+        # 2. Identify new words that are NOT in the disk version
+        new_entries = 0
+        for word, tag in self.pos_cache.items():
+            if word not in disk_cache:
+                disk_cache[word] = tag
+                new_entries += 1
+
+        # 3. Save only if we actually found something new
+        if new_entries > 0:
+            try:
+                with open(cache_path, 'w', encoding='utf-8') as f:
+                    json.dump(disk_cache, f, ensure_ascii=False, indent=2)
+                print(f"    ✅ Success: Added {new_entries} new verified words to cache.")
+            except Exception as e:
+                print(f"    ❌ ERROR: Failed to write to cache: {e}")
+        else:
+            print("    [SAFE-GROWTH] No new words to add. Cache remains untouched.")
 
 
 def _is_lexically_garbage(word, lang='de'):
