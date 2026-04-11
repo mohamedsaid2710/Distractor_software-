@@ -764,14 +764,25 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         if not self.pos_cache:
             return
         
-        for word, upos in self.pos_cache.items():
-            l = len(word)
+        for word_l, upos in self.pos_cache.items():
+            l = len(word_l)
+            if l not in self.nouns_by_len: continue # Bounds check
+            
+            # NACIG STARTUP GUARD:
+            # If the cache says it is a non-noun, but our NACIG Guard is sure it is a Noun,
+            # we correct it immediately at startup.
+            common = self.common_casing.get(word_l, "")
+            is_ironclad = (common and common[0].isupper()) or word_l.endswith(self.NOUN_SUFFIXES)
+            
+            if is_ironclad:
+                upos = "NOUN"
+            
             if upos in ('NOUN', 'PROPN'):
-                self.case_map[word] = word.capitalize()
-                self.nouns_by_len[l].add(word)
+                self.case_map[word_l] = word_l.capitalize()
+                self.nouns_by_len[l].add(word_l)
             else:
-                self.case_map[word] = None
-                self.others_by_len[l].add(word)
+                self.case_map[word_l] = None
+                self.others_by_len[l].add(word_l)
 
 
     def _load_pos_overrides(self, path):
