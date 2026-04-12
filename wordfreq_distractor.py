@@ -929,15 +929,8 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             if not to_tag:
                 return
             
-            if len(to_tag) > 20:
-                # HYPER-SPEED FIX: Do not run neural Stanza inference on massive 2000-word fallback pools!
-                # It takes 15 minutes. The pipeline will automatically fallback to capitalisation heuristics 
-                # (t[0].isupper()) for German grammar rules in get_potential_distractors and sentence_set.py
-                return
+            # (Air-gap limit removed. Run Stanza on all out-of-cache candidate pools to ensure POS accuracy.)
             
-            # IN-MEMORY ONLY TAGGING: We run Stanza for new words so they aren't rejected as 'X',
-            # but they will NEVER be saved to the master JSON file (air gap protected).
-
 
         BATCH_SIZE = int(params.get('nlp_batch_size', 256)) if params else 256
         
@@ -1061,12 +1054,40 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 self.others_by_len[l].add(word)
 
     def save_pos_cache(self):
-        """Safe-Growth Mode: Only populates truly new words in memory.
-        Disk saving is disabled mid-run to maintain high performance.
-        """
-        # Disk writing removed to restore 'Amazing' speed (preventing 60MB slams).
-        # New words stay in self.pos_cache for the duration of the run.
-        pass
+        """Append-only disk write. If a word is already in the cache on disk, do NOT overwrite it!"""
+        import json
+        import os
+        cache_file = "models/german_code/german_pos_cache_v2.json"
+        
+        # Determine appropriate language cache file
+        if getattr(self, 'lang', None) == 'en':
+            cache_file = "models/english_code/english_pos_cache.json"
+            
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        
+        try:
+            existing_cache = {}
+            if os.path.exists(cache_file):
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    existing_cache = json.load(f)
+            
+            # Count how many new keys we add
+            added_count = 0
+            for k, v in self.pos_cache.items():
+                if k not in existing_cache:
+                    existing_cache[k] = v
+                    added_count += 1
+            
+            if added_count > 0:
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump(existing_cache, f, ensure_ascii=False, indent=2)
+                # Keep memory perfectly in sync with the canonical disk truth
+                self.pos_cache = existing_cache
+                print(f"    [CACHE] ADDED {added_count} new POS tags safely to {cache_file} (No Overwrites).")
+                
+        except Exception as e:
+            import logging
+            logging.error(f"Failed to safely append POS cache: {e}")
 
 
 def _is_lexically_garbage(word, lang='de'):

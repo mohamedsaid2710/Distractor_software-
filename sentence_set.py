@@ -528,8 +528,13 @@ class Label:
             # Pure POS mode: prioritize dictionary cache via target_pos (checked first in get_candidate_pos)
             target_is_noun = (target_pos in ('NOUN', 'PROPN'))
 
-        # --- POS FILTER (Deprecated) ---
+        # --- POS FILTER ---
         pos_filter = None
+        if params.get('match_noun_pos', False) or match_casing_only:
+            if target_is_noun:
+                pos_filter = 'NOUN'
+            else:
+                pos_filter = '!NOUN'
         
         # Ironclad Casing: Inject target casing into params for this word
         orig_target = self.words[0] if self.words else ""
@@ -1381,6 +1386,8 @@ class Sentence_Set:
             params['target_is_capitalized'] = target_is_capitalized
             
             pos_filter = None
+            if params.get('match_noun_pos', False) or params.get('match_casing_only', False):
+                pos_filter = 'NOUN' if target_is_noun_first else '!NOUN'
             
             print(f"  [First] Finding first-word distractor for '{target}' (Cap: {target_is_capitalized})...")
             params['target_is_noun'] = target_is_noun_first
