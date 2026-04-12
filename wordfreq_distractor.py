@@ -517,20 +517,7 @@ class wordfreq_dict(distractor_dict):
                 is_propn = (tag == 'PROPN')
                 is_noun = (tag in ('NOUN', 'PROPN'))
             
-            # German-Specific isolation hardening:
-            # Check the TitleCase variants from the wordfreq dictionary itself.
-            if _lang == 'de' and not is_noun:
-                # If we have a TitleCase version in our pre-indexed pools, it's a noun.
-                l_len = len(w_lower)
-                if hasattr(self, 'nouns_by_len') and l_len in self.nouns_by_len:
-                    if w_lower in self.nouns_by_len[l_len]:
-                        is_noun = True
-                
-                # Fallback to general TitleCase variant check
-                if not is_noun and hasattr(self, 'has_titlecase_variant'):
-                    is_noun = self.has_titlecase_variant(w_lower)
-            
-            # Generic fallback if not already determined
+            # Generic fallback if not already determined in cache
             if not is_noun and not in_cache and not _lang == 'de':
                 is_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
 
@@ -915,23 +902,14 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             to_tag = list(set(w.lower() for w in words))
             print(f"    [STANZA] Force-verifying {len(to_tag)} candidates to purge messy cache...", flush=True)
         else:
-            # NACIG SELF-HEALING: If it is marked as 'X', 'VERB', or 'ADJ' but 
-            # our NACIG Guard says it's a NOUN, we MUST re-tag it properly.
             to_tag = []
             for w in set(words):
                 w_lower = w.lower()
-                # Defensive strip punctuation to prevent cache pollution
                 w_clean = re.sub(r"[^\w\säöüÄÖÜß]", "", w_lower).strip()
                 if not w_clean: continue
                 
-                # NACIG Protocol Check: Is this an 'Ironclad Noun'?
-                common = self.common_casing.get(w_clean, "")
-                is_ironclad = (common and common[0].isupper()) or w_clean.endswith(self.NOUN_SUFFIXES)
-                
-                current_tag = self.pos_cache.get(w_clean, None)
-                needs_refresh = (current_tag is None)
-                
-                if needs_refresh:
+                # STRICT CACHE TRUTH: If it exists in cache (even as 'X'), do NOT re-tag.
+                if w_clean not in self.pos_cache:
                     to_tag.append(w_clean)
             
             to_tag = list(set(to_tag))

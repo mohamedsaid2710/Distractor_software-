@@ -705,14 +705,7 @@ class Label:
 
                         # Absolute POS Isolation
                         # We MUST NOT use nouns for non-nouns, or non-nouns for nouns.
-                        _is_noun_d = False
-                        if _cand_tag:
-                            _is_noun_d = _cand_tag in ('NOUN', 'PROPN')
-                        elif hasattr(dictionary, 'nouns_by_len'):
-                            # High-speed O(1) lookup in pre-loaded 634k JSON set
-                            l_len = len(dist_l)
-                            if l_len in dictionary.nouns_by_len and dist_l in dictionary.nouns_by_len[l_len]:
-                                _is_noun_d = True
+                        _is_noun_d = (_cand_tag in ('NOUN', 'PROPN'))
                         
                         # Note: We hard-bypass dictionary.has_titlecase_variant() here 
                         # because it can trigger individual neural passes for words not in cache.
@@ -788,13 +781,7 @@ class Label:
                                 continue
 
                             # Enforce Noun Wall
-                            _is_noun_d = False
-                            if _cand_tag:
-                                _is_noun_d = _cand_tag in ('NOUN', 'PROPN')
-                            elif hasattr(dictionary, 'nouns_by_len'):
-                                l_len = len(dist_l)
-                                if l_len in dictionary.nouns_by_len and dist_l in dictionary.nouns_by_len[l_len]:
-                                    _is_noun_d = True
+                            _is_noun_d = (_cand_tag in ('NOUN', 'PROPN'))
                             
                             t_is_cap = params.get('target_is_capitalized', False)
                             if t_is_cap != _is_noun_d:
