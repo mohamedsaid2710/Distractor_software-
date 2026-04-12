@@ -752,7 +752,6 @@ class Label:
                     
                 scored.sort(key=lambda x: x[1], reverse=True)
                 top_n = min(15, len(scored))
-                import random
                 idx = random.randint(0, top_n - 1)
                 return scored[idx][0], scored[idx][1]
                 
@@ -1169,7 +1168,6 @@ class Label:
                             break
                         if best_word is None:
                             # Total desperation: ignore banned list, take first clean word
-                            import random
                             random.shuffle(final_pool) # Shuffle to get variety in desperation
                             for cand in final_pool:
                                 cand_l = cand.lower()
