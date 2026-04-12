@@ -708,8 +708,6 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         except Exception as e:
             logging.error(f"[CACHE] Error loading German POS cache: {e}")
 
-        print(f"\n>>> LINGUISTIC AIR-GAP: {self.__class__.__name__} (JSON Cache ONLY mode)", flush=True)
-
         # Grounded Noun Guard: using spacy's German model for robust orthography
         import spacy
         try:
@@ -764,7 +762,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         
         for word_l, upos in self.pos_cache.items():
             l = len(word_l)
-            if l not in self.others_by_len: continue # Bounds check
+            if not (1 < l < 100): continue # Bounds check
             
             # 3. ABSOLUTE TRUTH: The Cache is final.
             # We trust the UPOS in the JSON file above all else.
