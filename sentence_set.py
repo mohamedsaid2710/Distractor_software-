@@ -619,13 +619,17 @@ class Label:
 
         def candidate_surprisal(i, candidate):
             """Score candidate using full-context method when the model provides it."""
+            target_tok = self.words[0] if self.words else ""
+            norm_cand = _normalize_distractor_token(candidate, dictionary, lang=lang,
+                                                    target_token=target_tok,
+                                                    match_casing_only=match_casing_only)
             if hasattr(model, 'get_surprisal_from_hidden'):
                 try:
                     if i < len(self.hiddens) and self.hiddens[i] is not None:
-                        return model.get_surprisal_from_hidden(self.hiddens[i], candidate)
+                        return model.get_surprisal_from_hidden(self.hiddens[i], norm_cand)
                 except Exception:
                     pass
-            return model.get_surprisal(self.probs[i], candidate)
+            return model.get_surprisal(self.probs[i], norm_cand)
         def is_propn_candidate(candidate):
             # FAST CPU BATCH CACHE: We already tagged them, don't re-run
             if nlp_model is None:
@@ -692,8 +696,8 @@ class Label:
                         else:
                             _is_noun_d = strip_punct(dist)[0].isupper()
                         
-                        target_is_cap_val = params.get('target_is_capitalized', False)
-                        if target_is_cap_val != _is_noun_d:
+                        target_is_noun_val = params.get('target_is_noun', False)
+                        if target_is_noun_val != _is_noun_d:
                             continue
 
                         if _cand_tag == 'PROPN' or is_propn_candidate(dist):
@@ -702,7 +706,10 @@ class Label:
                     valid_pool.append(dist)
                 
                 if not valid_pool:
-                    print("  [TIMING] No valid pool found.", flush=True)
+                    if allow_banned:
+                        print("  [TIMING] No valid pool found even with repeats allowed.", flush=True)
+                    else:
+                        print("  [TIMING] Unique pool exhausted. Trying fallback rules...", flush=True)
                     return None, float('-inf')
                     
                 import time
@@ -713,7 +720,9 @@ class Label:
                     can_batch = hasattr(model, 'get_surprisal_batch_from_hidden') and i < len(self.hiddens) and self.hiddens[i] is not None
                     if can_batch:
                         try:
-                            batch_surps = model.get_surprisal_batch_from_hidden(self.hiddens[i], valid_pool)
+                            target_tok = self.words[0] if self.words else ""
+                            norm_pool = [_normalize_distractor_token(dist, dictionary, lang=lang, target_token=target_tok, match_casing_only=match_casing_only) for dist in valid_pool]
+                            batch_surps = model.get_surprisal_batch_from_hidden(self.hiddens[i], norm_pool)
                             for idx, dist in enumerate(valid_pool):
                                 surp_matrix[dist].append(batch_surps[idx])
                         except Exception as e:
@@ -794,8 +803,8 @@ class Label:
                             else:
                                 _is_noun_d = strip_punct(dist)[0].isupper()
                             
-                            t_is_cap = params.get('target_is_capitalized', False)
-                            if t_is_cap != _is_noun_d:
+                            t_is_noun_val = params.get('target_is_noun', False)
+                            if t_is_noun_val != _is_noun_d:
                                 continue
 
                         # light continuation filter: skip if candidate literally contains the target
@@ -819,7 +828,9 @@ class Label:
                         can_batch = hasattr(model, 'get_surprisal_batch_from_hidden') and i < len(self.hiddens) and self.hiddens[i] is not None
                         if can_batch:
                             try:
-                                batch_surps = model.get_surprisal_batch_from_hidden(self.hiddens[i], valid_pool)
+                                target_tok = self.words[0] if self.words else ""
+                                norm_pool = [_normalize_distractor_token(dist, dictionary, lang=lang, target_token=target_tok, match_casing_only=match_casing_only) for dist in valid_pool]
+                                batch_surps = model.get_surprisal_batch_from_hidden(self.hiddens[i], norm_pool)
                                 for idx, dist in enumerate(valid_pool):
                                     surp_matrix[dist].append(batch_surps[idx])
                             except Exception:
@@ -895,7 +906,7 @@ class Label:
         if not qualified_candidates:
             # handle empty pool via fallback logic below
             target_rep = self.words[0] if self.words else "???"
-            print(f"  [Batch] Scoring 0 candidates for target '{target_rep}'...")
+            print(f"  [Batch] Initial unique pool size is 0 for target '{target_rep}'. Activating robust fallback...")
         else:
             # 2. Batch score the qualified pool for all sentence contexts
             target_rep = self.words[0] if self.words else "???"
@@ -910,15 +921,17 @@ class Label:
                 chunk_size = int(params.get('chunk_size', 512))
                 
                 all_scores = []
+                target_tok = self.words[0] if self.words else ""
                 for i in range(0, len(qualified_candidates), chunk_size):
                     chunk = qualified_candidates[i : i + chunk_size]
+                    norm_chunk = [_normalize_distractor_token(c, dictionary, lang=lang, target_token=target_tok, match_casing_only=match_casing_only) for c in chunk]
                     try:
-                        chunk_scores = model.get_surprisal_batch_from_hidden(hidden, chunk, batch_size=m_batch_size)
+                        chunk_scores = model.get_surprisal_batch_from_hidden(hidden, norm_chunk, batch_size=m_batch_size)
                         all_scores.extend(chunk_scores)
                     except Exception as e:
                         logging.error(f"Batch scoring failed for chunk {i}: {e}")
                         # Fallback to slower single scoring for this chunk if GPU fails
-                        for c in chunk:
+                        for c in norm_chunk:
                             all_scores.append(model.get_surprisal(self.probs[j], c))
                 
                 # Map them back to the words
@@ -975,6 +988,8 @@ class Label:
             cand, cand_surp = pick_best_from_pool(fallback, allow_banned=False)
             if cand is None and allow_banned_fallback:
                 cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True)
+                if cand is not None:
+                    print(f"  [TIMING] Target '{target_rep}' resolved via Banned/Repeat Pool! (cand: {cand})")
                 
             if cand is None and enforce_length_match and desired_len is not None:
                 # Fallback stage 2: Strict exact-length fallback from full in-memory dictionary first.
@@ -1144,8 +1159,8 @@ class Label:
                                     if l_len2 in dictionary.nouns_by_len and cand_l in dictionary.nouns_by_len[l_len2]:
                                         _is_noun_d2 = True
                                 
-                                target_is_cap = params.get('target_is_capitalized', False)
-                                if target_is_cap != _is_noun_d2:
+                                target_is_noun_val = params.get('target_is_noun', False)
+                                if target_is_noun_val != _is_noun_d2:
                                     continue
                             best_word = cand
                             break
