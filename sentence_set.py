@@ -1125,17 +1125,12 @@ class Label:
                 
                 if hasattr(dictionary, 'get_emergency_pool'):
                     # Fetch entirely from pre-sorted JSON (lightning fast, guaranteed)
-                    if target_is_noun:
-                        final_pool = dictionary.get_emergency_pool(target_l_len, is_noun=True)
-                    else:
-                        final_pool = dictionary.get_emergency_pool(target_l_len, is_noun=False)
-                    
-                    # If empty, just grab +/- 1 length
-                    if not final_pool:
-                        if target_is_noun:
-                            final_pool = dictionary.get_emergency_pool(target_l_len+1, is_noun=True) + dictionary.get_emergency_pool(target_l_len-1, is_noun=True)
-                        else:
-                            final_pool = dictionary.get_emergency_pool(target_l_len+1, is_noun=False) + dictionary.get_emergency_pool(target_l_len-1, is_noun=False)
+                    # Expand length search heavily to tolerate +/- 3 characters for maximum candidates
+                    final_pool = []
+                    lens_to_try = [target_l_len, target_l_len+1, target_l_len-1, target_l_len+2, target_l_len-2, target_l_len+3, target_l_len-3]
+                    for l in lens_to_try:
+                        if l > 0:
+                            final_pool.extend(dictionary.get_emergency_pool(l, is_noun=target_is_noun))
 
                     if final_pool:
                         random.shuffle(final_pool)
@@ -1150,7 +1145,8 @@ class Label:
                                     if not re.search(r'[aeiouyäöü]', cand_l):
                                         continue
                                     if _wordfreq_mod is not None:
-                                        if _wordfreq_mod.zipf_frequency(cand_l, 'de') < float(params.get('json_min_zipf', 1.5)):
+                                        # Extremely tolerant frequency check for maximum candidates
+                                        if _wordfreq_mod.zipf_frequency(cand_l, 'de') < float(params.get('json_min_zipf', 0.5)):
                                             continue
                                 if is_propn_candidate(cand):
                                     continue
