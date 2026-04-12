@@ -373,10 +373,12 @@ class Label:
         # pos will be filled by make_labels if available; placeholder None
         self.pos.append(None)
 
-    def choose_distractor(self, model, dictionary, threshold_func, params, banned):
+    def choose_distractor(self, model, dictionary, threshold_func, params, banned, local_banned=None):
         """Given a parameters specified in params and stuff
         Find a distractor not on banned (banned=already used in same sentence set)
         That hopefully meets threshold"""
+        if local_banned is None:
+            local_banned = []
         lang = _detect_language(params)
         # Identify if we should strictly match noun POS (default False, except if enabled in params)
         match_casing_only = bool(params.get('match_casing_only', False))
@@ -603,6 +605,8 @@ class Label:
         avoid=[]
         for word in self.words: # it's awkward if the distractor is the same as the real word
             avoid.append(strip_punct(word).lower())
+        for l_banned in local_banned:
+            avoid.append(strip_punct(l_banned).lower())
             
         # load exact exclude words just in case a fallback reads from unfiltered sources
         global_exclude = set()
@@ -736,18 +740,23 @@ class Label:
                 
                 print(f"  [TIMING] Batch scoring finished on {len(valid_pool)} items in {time.time() - _t0_batch:.2f}s", flush=True)
 
+                scored = []
                 for dist in valid_pool:
                     surps = surp_matrix[dist]
                     if any(s is None for s in surps):
                         continue
                     s = min(surps) if surps else None
-                    if s is None:
-                        continue
-                    if s > local_best_surp:
-                        local_best_surp = s
-                        local_best = dist
-                
-                return local_best, local_best_surp
+                    if s is not None:
+                        scored.append((dist, s))
+                        
+                if not scored:
+                    return None, float('-inf')
+                    
+                scored.sort(key=lambda x: x[1], reverse=True)
+                top_n = min(15, len(scored))
+                import random
+                idx = random.randint(0, top_n - 1)
+                return scored[idx][0], scored[idx][1]
                 
             return _find_best(pool)
 
@@ -1404,9 +1413,11 @@ class Sentence_Set:
                 d.batch_tag_words(list(all_targets), params=params)
 
         banned = repeats.banned[:] #don't allow duplicate distractors within the set
+        local_banned = []
         for label in self.labels.values(): #get distractors for each label
-            dist = label.choose_distractor(model, d, threshold_func, params, banned)
+            dist = label.choose_distractor(model, d, threshold_func, params, banned, local_banned=local_banned)
             banned.append(dist)
+            local_banned.append(dist)
             repeats.increment(dist)
 
         def choose_first_word(sentence):
@@ -1417,6 +1428,7 @@ class Sentence_Set:
             target_l = target.lower()
             target_len = len(target)
             banned_l = set([strip_punct(b).lower() for b in banned])
+            local_banned_l = set([strip_punct(b).lower() for b in local_banned])
 
             min_length, max_length, min_freq, max_freq = threshold_func([sentence.words[0]], params)
             # detect if target is a noun
@@ -1455,8 +1467,11 @@ class Sentence_Set:
                 if len(base) != target_len:
                     continue
                 low = base.lower()
-                # ALLOW SHORT WORD REPEATS
+                # ALLOW SHORT WORD REPEATS from global pool, but NEVER allow local (in-sentence) repeats
                 banned_violation = (low in banned_l) if target_len > 3 else False
+                if low in local_banned_l:
+                    banned_violation = True
+                    
                 if low == target_l or banned_violation:
                     continue
                 return cand
@@ -1483,8 +1498,11 @@ class Sentence_Set:
                     if (not base) or (not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", base)):
                         continue
                     low = base.lower()
-                    # ALLOW SHORT WORD REPEATS
+                    # ALLOW SHORT WORD REPEATS from global pool, but NEVER allow local (in-sentence) repeats
                     banned_violation = (low in banned_l) if target_len > 3 else False
+                    if low in local_banned_l:
+                        banned_violation = True
+                        
                     if low == target_l or banned_violation:
                         continue
                     diff = abs(len(base) - target_len)
