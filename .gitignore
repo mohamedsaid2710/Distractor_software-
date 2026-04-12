@@ -82,3 +82,9 @@ DISTRACTOR_QUALITY_CHECKLIST.md
 software logic.md
 models/german_code/german_pos_cache_v2.json
 progress_summary.md
+FUTURE_REFACTOR_PLAN.md
+scripts/plot_length_scatter.py
+scripts/plot_frequency_scatter.py
+length_scatter.png
+frequency_scatter.png
+semantic_similarity_histogram.png

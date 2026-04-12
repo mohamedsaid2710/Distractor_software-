@@ -622,6 +622,7 @@ nahm
 nehm
 rar
 rät
+liga
 teilnahm
 unangenehm
 unternahm

@@ -15,7 +15,7 @@ language: "de"
 match_noun_pos: False
 match_casing_only: True
 len_tolerance: 1
-min_zipf: 3.5
+min_zipf: 3.0
 short_word_min_zipf: 3.5
 short_word_boost: 5
 short_word_max_len: 3
@@ -34,9 +34,9 @@ semantic_threshold: 0.35
 # --- Model & Hardware Settings ---
 hf_model_name: "benjamin/gerpt2"
 device: "cuda"
-model_batch_size: 1024
-nlp_batch_size: 2000
-chunk_size: 1024
+model_batch_size: 256
+nlp_batch_size: 500
+chunk_size: 512
 
 # --- File Paths & Resources ---
 exclude_words: "exclude_de.txt"

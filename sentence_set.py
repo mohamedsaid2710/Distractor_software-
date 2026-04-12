@@ -245,35 +245,23 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
     # When False: apply grammatical rules (nouns titlecase, others lowercase)
     target_is_cap = target_token[0].isupper() if target_token else False
     
-    if match_casing_only and target_token:
-        # Casing-only mode: just mirror target casing
-        new_body = body[0].upper() + body[1:].lower() if target_is_cap else body.lower()
+    # Standard German grammar: determine if *distractor* is a noun and apply rules strictly
+    distractor_is_noun = False
+    t_lower = body.lower()
+    
+    if hasattr(dict_obj, 'pos_cache') and t_lower in dict_obj.pos_cache:
+        distractor_is_noun = dict_obj.pos_cache[t_lower] in ('NOUN', 'PROPN')
+    elif hasattr(dict_obj, 'get_titlecase_variant'):
+        try:
+            tv = dict_obj.get_titlecase_variant(body)
+            distractor_is_noun = isinstance(tv, str)
+        except Exception:
+            pass
+
+    if distractor_is_noun:
+        new_body = body[0].upper() + body[1:].lower()
     else:
-        # Standard German grammar: determine if *distractor* is a noun and apply rules
-        distractor_is_noun = False
-        t_lower = body.lower()
-        
-        if hasattr(dict_obj, 'pos_cache') and t_lower in dict_obj.pos_cache:
-            distractor_is_noun = dict_obj.pos_cache[t_lower] in ('NOUN', 'PROPN')
-        elif hasattr(dict_obj, 'get_titlecase_variant'):
-            try:
-                tv = dict_obj.get_titlecase_variant(body)
-                distractor_is_noun = isinstance(tv, str)
-            except Exception:
-                pass
-
-        if distractor_is_noun:
-            new_body = body[0].upper() + body[1:].lower()
-        else:
-            # SAFETY FALLBACK: If target is capitalized and distractor is unknown, 
-            # assume it might need TitleCase in German (better to over-capitalize than under-capitalize).
-            # If target is lower, distractor MUST be lower. 
-            # If target is capitalized, distractor MUST be capitalized.
-            if target_is_cap:
-                new_body = body[0].upper() + body[1:].lower()
-            else:
-                new_body = body.lower()
-
+        new_body = body.lower()
 
     if is_first_word and new_body:
         new_body = new_body[0].upper() + new_body[1:]

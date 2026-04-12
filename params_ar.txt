@@ -27,7 +27,7 @@ semantic_filter: True
 semantic_threshold: 0.35
 
 # --- Model & Hardware Settings ---
-hf_model_name: "aubmindlab-aragpt2-medium"
+hf_model_name: "aubmindlab/aragpt2-medium"
 device: "cuda"
 model_batch_size: 1024  # GPT-2 parallel scoring batch size (256=default, 1024-2048=high-RAM systems)
 nlp_batch_size: 2000  # NLP (Stanza/spaCy) POS tagging batch size (500=default, 2000-5000=high-RAM systems)
