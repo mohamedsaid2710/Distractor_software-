@@ -358,10 +358,13 @@ class wordfreq_dict(distractor_dict):
         # TIER 1: Frequency-Matched Fetch (Status Quo)
         distractor_opts = self.get_words(min_length, max_length, min_freq, max_freq, pos_filter=None, use_spacy=False)
         
-        # SHORT-WORD PROTECTION: For ≤5 char words, require JSON cache verification + QUALITY GATE
+        # SHORT-WORD PROTECTION: For ≤5 char words, apply QUALITY GATE
         # (Protects against web-scraping junk like 'fug', 'xte', 'uru' that enter via wordfreq)
-        if max_length <= 5 and hasattr(self, 'pos_cache') and self.pos_cache:
-            distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() in self.pos_cache and _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length, lang=_lang)]
+        # NOTE: AIR-GAP OPTIMIZATION - Do NOT require words to be in JSON cache.
+        # Instead, rely on _is_valid_cache_word() quality gates (Zipf, vowels, etc.)
+        # Pre-batch-tagging happens later in the pipeline if needed.
+        if max_length <= 5:
+            distractor_opts = [w for w in distractor_opts if _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length, lang=_lang)]
         
         # PRE-FILTER: Remove excluded words
         if exclude_words_set:
@@ -375,7 +378,7 @@ class wordfreq_dict(distractor_dict):
             
             # Use binary-search-based neighborhood identifier
             # Start with a generous neighborhood (n=1000) for fast retrieval
-            target_exact_len = (min_length + max_length) // 2
+            target_exact_len = params.get('target_exact_length') or ((min_length + max_length) // 2)
             # Try exact length neighborhood first
             neighbor_pool = self.get_best_frequency_pool(target_exact_len, target_zipf, n=1000)
             
@@ -389,7 +392,7 @@ class wordfreq_dict(distractor_dict):
         # TIER 2: Quality Gate Fallback
         # If still starving, we can pull from other nearby lengths using the same frequency search
         if len(distractor_opts) < target_pool_size:
-            target_exact_len = (min_length + max_length) // 2
+            target_exact_len = params.get('target_exact_length') or ((min_length + max_length) // 2)
             target_zipf = params.get('target_zipf', 5.0)
             for length_diff in [1, -1]: # Try nearby length neighborhoods
                 adj_len = target_exact_len + length_diff
@@ -405,7 +408,7 @@ class wordfreq_dict(distractor_dict):
         # TIER 3: GRADUAL EMERGENCY EXPANSION (Ultimate Quality fallback)
         # If thresholds are NOT met, gradually expand length tolerance.
         if len(distractor_opts) < target_pool_size and hasattr(self, 'get_emergency_pool'):
-            target_exact_len = (min_length + max_length) // 2
+            target_exact_len = params.get('target_exact_length') or ((min_length + max_length) // 2)
             
             # Expansion Tiers: +/- 1, then +/- 2 (if word is long enough)
             expansion_scales = [1]
@@ -444,14 +447,7 @@ class wordfreq_dict(distractor_dict):
         # 4. FINAL FILTER: Apply Ironclad Casing, Noise, and PROPN checks
         # [German Cache Injection]: Ensure ANY leftover untagged words get a heuristic pass 
         # before they hit the Grammar Guard.
-        if _lang == 'de' and hasattr(self, 'pos_cache'):
-             untagged = [w for w in distractor_opts if w.lower() not in self.pos_cache]
-             if untagged:
-                 for w in untagged:
-                     w_l = w.lower()
-                     self.pos_cache[w_l] = 'X'
-                     self.case_map[w_l] = None
-
+        
         match_casing_only = params.get('match_casing_only', False)
         target_is_capitalized = params.get('target_is_capitalized', False)
         exclude_propn = params.get('exclude_propn_candidates', False)
@@ -518,7 +514,8 @@ class wordfreq_dict(distractor_dict):
                 is_noun = (tag in ('NOUN', 'PROPN'))
             
             # Generic fallback if not already determined in cache
-            if not is_noun and not in_cache and not _lang == 'de':
+            if not is_noun and not in_cache:
+                # Use titlecase variant check for ANY language, not just non-German
                 is_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
 
             # 1. Reject Proper Nouns (the "rubbish" fragments like Obb, Dha)
@@ -540,16 +537,27 @@ class wordfreq_dict(distractor_dict):
                 if target_is_noun_pos and not is_noun:
                     continue
 
-                # REJECTION 3: Noun-candidate is LOWERCASE (Fatal giveaway in German)
-                if is_noun and w[0].islower():
+                # Apply dictionary's native casing to properly check for lowercase violations
+                # Nouns in German MUST be capitalized. If they remain lowercase even after mapping, reject.
+                canonical_w = self.case_map.get(w, None) if hasattr(self, 'case_map') else None
+                native_w = canonical_w if canonical_w else w
+
+                # REJECTION 3: Noun-candidate is NATIVELY LOWERCASE (Fatal giveaway in German)
+                if is_noun and native_w[0].islower():
                     continue
 
             filtered.append(w)
         distractor_opts = filtered
 
+        # 5. LIMIT SIZE (Return Target Pool)
         random.shuffle(distractor_opts)
-        return distractor_opts[:n]
+        
+        # --- CASING RE-ENFORCEMENT ---
+        # Ensure returned strings have correct casing so downstream sentence_set heuristics work on untagged words!
+        if _lang == 'de' and target_is_capitalized:
+            distractor_opts = [w.capitalize() for w in distractor_opts]
 
+        return distractor_opts[:n]
 
 
 class wordfreq_English_zipf_dict(wordfreq_dict):
@@ -700,7 +708,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         except Exception as e:
             logging.error(f"[CACHE] Error loading German POS cache: {e}")
 
-        print(f"\n>>> LOADING GERMAN DICTIONARY: {self.__class__.__name__} (Runtime Stanza tagging enabled)", flush=True)
+        print(f"\n>>> LINGUISTIC AIR-GAP: {self.__class__.__name__} (JSON Cache ONLY mode)", flush=True)
 
         # Grounded Noun Guard: using spacy's German model for robust orthography
         import spacy
@@ -859,6 +867,11 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             result = pos_tag in ('NOUN', 'PROPN')
             return result
         
+        # PRIORITY 2: Check JSON Dictionary Pre-filtered Noun List (Critical for 0-Candidate Fallback pools)
+        if getattr(self, 'lang', None) == 'de' and hasattr(self, 'nouns_by_len'):
+            if t_lower in self.nouns_by_len.get(len(t_lower), set()):
+                return True
+
         # PRIORITY 3: Fallback to titlecase heuristic (Suffix-based ONLY)
         # We NO LONGER trigger neural _eval_single_word_case for the German Absolute Truth phase.
         # Unknown words are treated as Non-Nouns unless they have a classic noun suffix.
@@ -915,7 +928,15 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             to_tag = list(set(to_tag))
             if not to_tag:
                 return
-            print(f"    [DICT] Found {len(to_tag)} new words missing from cache. Tagging...", flush=True)
+            
+            if len(to_tag) > 20:
+                # HYPER-SPEED FIX: Do not run neural Stanza inference on massive 2000-word fallback pools!
+                # It takes 15 minutes. The pipeline will automatically fallback to capitalisation heuristics 
+                # (t[0].isupper()) for German grammar rules in get_potential_distractors and sentence_set.py
+                return
+            
+            # IN-MEMORY ONLY TAGGING: We run Stanza for new words so they aren't rejected as 'X',
+            # but they will NEVER be saved to the master JSON file (air gap protected).
 
 
         BATCH_SIZE = int(params.get('nlp_batch_size', 256)) if params else 256
@@ -1040,42 +1061,12 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 self.others_by_len[l].add(word)
 
     def save_pos_cache(self):
-        """Safe-Growth Mode: Only populates truly new words.
-        Never overwrites existing entries in the 'Absolute Truth' file.
+        """Safe-Growth Mode: Only populates truly new words in memory.
+        Disk saving is disabled mid-run to maintain high performance.
         """
-        import json
-        import os
-        cache_path = self.params.get('pos_cache_path', 'models/german_code/german_pos_cache_v2.json')
-        if not os.path.exists(cache_path):
-            return
-
-        print(f"\n>>> [SAFE-GROWTH] Saving new discoveries to {os.path.basename(cache_path)}...")
-        
-        # 1. Load the current 'Absolute Truth' from disk
-        try:
-            with open(cache_path, 'r', encoding='utf-8') as f:
-                disk_cache = json.load(f)
-        except Exception as e:
-            print(f"    [ERROR] Could not read cache for saving: {e}")
-            return
-
-        # 2. Identify new words that are NOT in the disk version
-        new_entries = 0
-        for word, tag in self.pos_cache.items():
-            if word not in disk_cache:
-                disk_cache[word] = tag
-                new_entries += 1
-
-        # 3. Save only if we actually found something new
-        if new_entries > 0:
-            try:
-                with open(cache_path, 'w', encoding='utf-8') as f:
-                    json.dump(disk_cache, f, ensure_ascii=False, indent=2)
-                print(f"    ✅ Success: Added {new_entries} new verified words to cache.")
-            except Exception as e:
-                print(f"    ❌ ERROR: Failed to write to cache: {e}")
-        else:
-            print("    [SAFE-GROWTH] No new words to add. Cache remains untouched.")
+        # Disk writing removed to restore 'Amazing' speed (preventing 60MB slams).
+        # New words stay in self.pos_cache for the duration of the run.
+        pass
 
 
 def _is_lexically_garbage(word, lang='de'):
@@ -1172,8 +1163,8 @@ def get_thresholds_de(words, params=None):
     freqs = []
     for word in words:
         stripped = strip_punct(word)
-        # Clamp word lengths to Boyce-style bins [3, 15] before range creation.
-        lengths.append(max(3, min(len(stripped), 15)))
+        # Allow unlimited word lengths (no clamping)
+        lengths.append(max(3, len(stripped)))
         freqs.append(get_frequency_de(stripped))
     min_length = min(lengths)
     max_length = max(lengths)

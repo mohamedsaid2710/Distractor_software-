@@ -536,6 +536,7 @@ class Label:
         target_stripped = strip_punct(orig_target)
         target_is_cap = target_stripped[0].isupper() if target_stripped else False
         params['target_is_capitalized'] = target_is_cap
+        params['target_exact_length'] = len(target_stripped) if target_stripped else None
         # Calculate target Zipf for frequency-matched fallback lookups
         target_zipf = 5.0 # default
         if _wordfreq_mod:
@@ -544,36 +545,18 @@ class Label:
 
         # NOTE: PRE-TAGGING now handled at SentenceSet-level for optimal batch performance
 
+        import time
+        START_TB = time.time()
         print(f"  [Batch] Finding distractors for '{orig_target}' (Cap: {target_is_cap})...")
+        params['target_is_noun'] = target_is_noun
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
         
-        # --- ADAPTIVE LENGTH SEARCH (Fix for 0-candidate long words) ---
-        # If still nothing, dictionary already tried frequency widening.
-        # Now we only widen LENGTH as a last resort.
-        if not distractor_opts:
-            for extra_len in range(1, 11): # Try widening up to +/- 10 characters
-                logging.info(f"0 candidates. Widening length by +/- {extra_len}")
-                min_len_search = max(2, min_length - extra_len)
-                max_len_search = max_length + (extra_len // 2) if target_is_noun else (max_length + extra_len)
-                
-                distractor_opts = dictionary.get_potential_distractors(
-                    min_len_search, max_len_search, 
-                    min_freq, max_freq, params, pos_filter=pos_filter
-                )
-                if distractor_opts:
-                    break                
-                # --- FINAL FALLBACK: Frequency Relaxation ---
-                # If still nothing, try ignoring frequency thresholds for this length widening
-                logging.info(f"Still 0 candidates. Relaxing frequency constraints for +/- {extra_len}")
-                distractor_opts = dictionary.get_potential_distractors(
-                    min_len_search, max_len_search, 
-                    None, None, params, pos_filter=pos_filter
-                )
-                if distractor_opts:
-                    break
+        # --- ADAPTIVE LENGTH SEARCH DEPRECATED ---
+        # The dictionary now automatically handles length expansion and fallback layers internally
+        # (Tier 1.5, Tier 2, Tier 3). No need to pound it with 20 separate function calls.
 
-
+        print(f"  [TIMING] Found {len(distractor_opts) if distractor_opts else 0} opts in {time.time()-START_TB:.2f}s")
         # Skip the POS cascade; it is now deprecated for German.
 
         enforce_length_match = bool(params.get('enforce_length_match', True))
@@ -677,6 +660,8 @@ class Label:
                 local_best_surp = float('-inf')
                 # In relaxed mode, use 3x tolerance but still enforce length bounds
                 relax_mult = 3.0 if relax_length else 1.0
+                
+                valid_pool = []
                 for dist in sub_pool:
                     dist_l = strip_punct(dist).lower()
                     if not dist_l:
@@ -692,48 +677,67 @@ class Label:
                     if not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", strip_punct(dist)):
                         continue
 
-                    # QUALITY GATE + GRAMMAR GUARD — applied to every fallback stage
-                    # (mirrors get_potential_distractors FINAL FILTER so no garbage can
-                    # enter through Stage 1/3/5/6 or ultimate desperation either).
+                    # QUALITY GATE + GRAMMAR GUARD
                     if lang == 'de':
                         _pc = getattr(dictionary, 'pos_cache', {})
                         _cand_tag = _pc.get(dist_l, None)
                         
-                        # Absolute Lexical Quality Guard
                         if _is_lexically_garbage(dist_l, lang='de') or _cand_tag == 'X':
                             continue
 
-                        # Absolute POS Isolation
-                        # We MUST NOT use nouns for non-nouns, or non-nouns for nouns.
-                        _is_noun_d = (_cand_tag in ('NOUN', 'PROPN'))
+                        if _cand_tag is not None:
+                            _is_noun_d = (_cand_tag in ('NOUN', 'PROPN'))
+                        else:
+                            _is_noun_d = strip_punct(dist)[0].isupper()
                         
-                        # Note: We hard-bypass dictionary.has_titlecase_variant() here 
-                        # because it can trigger individual neural passes for words not in cache.
-
-                        # Hard Neutralization: Target Casing MUST match Distractor Category
-                        # This prevents "Igel" (Noun) from ever being used for "der" (Lower),
-                        # and prevents "kandidiert" (Verb) from being used for "Dirigenten" (Noun).
                         target_is_cap_val = params.get('target_is_capitalized', False)
                         if target_is_cap_val != _is_noun_d:
                             continue
 
-                        # Inviolable Guard: Never use Proper Nouns as distractors
                         if _cand_tag == 'PROPN' or is_propn_candidate(dist):
                             continue
 
-
-                    # NOTE: Similarity filtering is handled by semantic_filter (fastText embeddings)
-                    # Levenshtein distance check removed for performance (was causing 6.4B+ operations)
+                    valid_pool.append(dist)
+                
+                if not valid_pool:
+                    print("  [TIMING] No valid pool found.", flush=True)
+                    return None, float('-inf')
                     
-                    s = candidate_min_surprisal(dist)
+                import time
+                _t0_batch = time.time()
+                # --- HYPER-SPEED BATCH SCORING ---
+                surp_matrix = {dist: [] for dist in valid_pool}
+                for i in range(len(self.probs)):
+                    can_batch = hasattr(model, 'get_surprisal_batch_from_hidden') and i < len(self.hiddens) and self.hiddens[i] is not None
+                    if can_batch:
+                        try:
+                            batch_surps = model.get_surprisal_batch_from_hidden(self.hiddens[i], valid_pool)
+                            for idx, dist in enumerate(valid_pool):
+                                surp_matrix[dist].append(batch_surps[idx])
+                        except Exception as e:
+                            print(f"[ERROR] Batch scoring failed: {e}", flush=True)
+                            can_batch = False
+                    
+                    if not can_batch:
+                        for dist in valid_pool:
+                            s = candidate_surprisal(i, dist)
+                            surp_matrix[dist].append(s)
+                
+                print(f"  [TIMING] Batch scoring finished on {len(valid_pool)} items in {time.time() - _t0_batch:.2f}s", flush=True)
+
+                for dist in valid_pool:
+                    surps = surp_matrix[dist]
+                    if any(s is None for s in surps):
+                        continue
+                    s = min(surps) if surps else None
                     if s is None:
                         continue
                     if s > local_best_surp:
                         local_best_surp = s
                         local_best = dist
+                
                 return local_best, local_best_surp
-
-            
+                
             return _find_best(pool)
 
         # initialize
@@ -760,6 +764,8 @@ class Label:
                 def _find_best_match(sub_pool):
                     best_diff = float('inf')
                     best_cand = None
+                    
+                    valid_pool = []
                     for dist in sub_pool:
                         dist_l = strip_punct(dist).lower()
                         if dist_l in banned_l or dist_l in avoid or dist_l in global_exclude:
@@ -780,8 +786,11 @@ class Label:
                             if _is_lexically_garbage(dist_l, lang='de'):
                                 continue
 
-                            # Enforce Noun Wall
-                            _is_noun_d = (_cand_tag in ('NOUN', 'PROPN'))
+                            # Enforce Noun Wall using cache, fallback to casing for new words
+                            if _cand_tag is not None:
+                                _is_noun_d = (_cand_tag in ('NOUN', 'PROPN'))
+                            else:
+                                _is_noun_d = strip_punct(dist)[0].isupper()
                             
                             t_is_cap = params.get('target_is_capitalized', False)
                             if t_is_cap != _is_noun_d:
@@ -796,25 +805,43 @@ class Label:
                                 break
                         if skip:
                             continue
-                        # compute mean surprisal of this candidate across all sentences
-                        ssum = 0.0
-                        count = 0
-                        for i in range(len(self.probs)):
+
+                        valid_pool.append(dist)
+                        
+                    if not valid_pool:
+                        return None
+                        
+                    # --- HYPER-SPEED BATCH SCORING ---
+                    surp_matrix = {dist: [] for dist in valid_pool}
+                    for i in range(len(self.probs)):
+                        can_batch = hasattr(model, 'get_surprisal_batch_from_hidden') and i < len(self.hiddens) and self.hiddens[i] is not None
+                        if can_batch:
                             try:
-                                dist_surp = candidate_surprisal(i, dist)
+                                batch_surps = model.get_surprisal_batch_from_hidden(self.hiddens[i], valid_pool)
+                                for idx, dist in enumerate(valid_pool):
+                                    surp_matrix[dist].append(batch_surps[idx])
                             except Exception:
-                                dist_surp = None
-                            if dist_surp is None:
-                                continue
-                            ssum += dist_surp
-                            count += 1
-                        if count == 0:
+                                can_batch = False
+                        
+                        if not can_batch:
+                            for dist in valid_pool:
+                                try:
+                                    s = candidate_surprisal(i, dist)
+                                except Exception:
+                                    s = None
+                                surp_matrix[dist].append(s)
+
+                    for dist in valid_pool:
+                        surps = surp_matrix[dist]
+                        valid_surps = [s for s in surps if s is not None]
+                        if not valid_surps:
                             continue
-                        mean_surp = ssum / float(count)
+                        mean_surp = sum(valid_surps) / float(len(valid_surps))
                         diff = abs(mean_surp - target_mean)
                         if diff < best_diff:
                             best_diff = diff
                             best_cand = dist
+                            
                     return best_cand
 
                 best_candidate = None
