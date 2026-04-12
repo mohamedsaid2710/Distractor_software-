@@ -1173,10 +1173,24 @@ class Label:
                             break
                         if best_word is None:
                             # Total desperation: ignore banned list, take first clean word
+                            import random
+                            random.shuffle(final_pool) # Shuffle to get variety in desperation
                             for cand in final_pool:
                                 cand_l = cand.lower()
-                                if lang == 'de' and len(cand_l) < 8:
-                                    if not re.search(r'[aeiouyäöü]', cand_l):
+                                if lang == 'de':
+                                    if len(cand_l) < 8:
+                                        if not re.search(r'[aeiouyäöü]', cand_l):
+                                            continue
+                                    _pc2 = getattr(dictionary, 'pos_cache', {})
+                                    _is_noun_d2 = False
+                                    if cand_l in _pc2:
+                                        _is_noun_d2 = _pc2[cand_l] in ('NOUN', 'PROPN')
+                                    elif hasattr(dictionary, 'nouns_by_len'):
+                                        l_len2 = len(cand_l)
+                                        if l_len2 in dictionary.nouns_by_len and cand_l in dictionary.nouns_by_len[l_len2]:
+                                            _is_noun_d2 = True
+                                    target_is_noun_val = params.get('target_is_noun', False)
+                                    if target_is_noun_val != _is_noun_d2:
                                         continue
                                 if is_propn_candidate(cand):
                                     continue
