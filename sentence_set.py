@@ -140,11 +140,9 @@ def _is_x_placeholder_token(token):
 
 
 def _placeholder_for_length(length):
-    """Build a first-position placeholder with one 'x' per character in the target word."""
+    """Build a first-position placeholder exactly matching the target word's length."""
     n = max(1, int(length))
-    if n == 1:
-        return "x"
-    return "-".join(["x"] * n)
+    return "x" * n
 
 
 def _copy_edge_punct_no_case(source_token, token):
