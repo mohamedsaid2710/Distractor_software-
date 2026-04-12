@@ -415,16 +415,19 @@ class Label:
         # decide whether this label refers to nouns (use POS info if available)
         noun_tags = set(['NOUN', 'PROPN'])
         target_is_noun = False
+        pos_available = False
         try:
             # if any POS tag for this label is a noun/proper noun, consider it a noun label
             for p in self.pos:
+                if p is not None and p != 'X':
+                    pos_available = True
                 if p in noun_tags:
                     target_is_noun = True
                     break
         except Exception:
             target_is_noun = False
         # If POS info is unavailable or non-conclusive, fall back to dictionary hints
-        if not target_is_noun:
+        if not target_is_noun and not pos_available:
             try:
                 currency_whitelist = set(['euro', 'dollar', 'pound', 'yen'])
                 for w in self.words:
