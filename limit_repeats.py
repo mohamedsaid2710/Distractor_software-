@@ -1,4 +1,3 @@
-import logging
 
 class Repeatcounter:
     """Keeps track of how many times each distractor has been used so far in the entire set of all items.

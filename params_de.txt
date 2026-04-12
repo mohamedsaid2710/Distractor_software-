@@ -12,7 +12,7 @@ absolute_threshold_only: False
 
 # --- Linguistic & POS Matching ---
 language: "de"
-match_noun_pos = False
+match_noun_pos: False
 match_casing_only: True
 len_tolerance: 1
 min_zipf: 3.5

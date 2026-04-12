@@ -1,4 +1,3 @@
-import logging
 
 
 def strip_punct(word):

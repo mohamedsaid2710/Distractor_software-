@@ -12,9 +12,11 @@ Checks:
 import argparse
 import csv
 import importlib
+import math
 import os
 import re
 import sys
+import wordfreq
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -145,6 +147,8 @@ def main():
     model = build_model(params)
     first_token_placeholder = bool(params.get("first_token_placeholder", True))
     enforce_length_match = bool(params.get("enforce_length_match", True))
+    match_casing_only = bool(params.get("match_casing_only", False))
+    freq_tolerance = params.get("freq_tolerance", None)
     min_delta = args.min_delta if args.min_delta is not None else float(params.get("min_delta", 0.0))
     min_abs = args.min_abs if args.min_abs is not None else float(params.get("min_abs", 0.0))
     exclusions = load_exclusions(params)
@@ -166,6 +170,7 @@ def main():
     abs_errors = 0
     banned_errors = 0
     casing_errors = 0
+    freq_errors = 0
     examples = []
 
     for row in rows:
@@ -244,8 +249,17 @@ def main():
             if nlp_sp and lang == 'de':
                 clean_w = strip_punct(dtoks[i])
                 if clean_w:
-                    # German function words whitelist
-                    FUNCTION_WORDS = {
+                    is_cap = dtoks[i][0].isupper()
+                    if match_casing_only:
+                        tgt_tok = strip_punct(sentence_obj.words[i])
+                        tgt_is_cap = tgt_tok[0].isupper() if tgt_tok else False
+                        if is_cap != tgt_is_cap:
+                            casing_errors += 1
+                            if len(examples) < args.max_examples:
+                                examples.append((item_id, i, f"casing-mirror-fail:tgt={tgt_is_cap},dist={is_cap}", dtoks[i]))
+                    else:
+                        # German function words whitelist
+                        FUNCTION_WORDS = {
                         'ins', 'im', 'am', 'ans', 'zum', 'zur', 'vom', 'beim', 'durchs', 'fürs',
                         'ums', 'aufs', 'übers', 'unters', 'hinters', 'vors',
                         'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einem', 'eines', 'einer', 'einen',
@@ -280,6 +294,18 @@ def main():
                                 if len(examples) < args.max_examples:
                                     examples.append((item_id, i, f"casing-NonNoun-is-capped:{pos}", dtoks[i]))
 
+            # 2.5 Frequency check
+            if freq_tolerance is not None:
+                tgt_tok = strip_punct(sentence_obj.words[i])
+                if tgt_tok and tok:
+                    tfreq = wordfreq.zipf_frequency(tgt_tok.lower(), lang) * math.log(10)
+                    dfreq = wordfreq.zipf_frequency(tok.lower(), lang) * math.log(10)
+                    tol_natlog = float(freq_tolerance) * math.log(10)
+                    if abs(dfreq - tfreq) > tol_natlog + 0.001:
+                        freq_errors += 1
+                        if len(examples) < args.max_examples:
+                            examples.append((item_id, i, f"freq-out-of-bounds:dist={dfreq:.2f},tgt={tfreq:.2f}+/-{tol_natlog:.2f}", tok))
+
             # 3. Surprisal checks
             try:
                 delta, dist_s = score_distractor(model, sentence_obj, i, dtoks[i])
@@ -302,11 +328,12 @@ def main():
     print(f"length_errors={length_errors}")
     print(f"banned_word_errors={banned_errors}")
     print(f"casing_errors={casing_errors}")
+    print(f"freq_errors={freq_errors}")
     print(f"low_abs_surprisal_errors={abs_errors}")
     print(f"low_delta_surprisal_errors={plausible_errors}")
 
     if total_positions > 0:
-        total_errs = placeholder_errors + nonword_errors + length_errors + banned_errors + casing_errors + abs_errors + plausible_errors
+        total_errs = placeholder_errors + nonword_errors + length_errors + banned_errors + casing_errors + freq_errors + abs_errors + plausible_errors
         rate = 100.0 * total_errs / total_positions
         print(f"total_error_rate_pct={rate:.2f}")
 
@@ -316,7 +343,7 @@ def main():
             print(f"  Item {ex[0]} [pos {ex[1]}]: {ex[2]} -> '{ex[3]}'")
 
     failed = (placeholder_errors > 0) or (nonword_errors > 0) or (length_errors > 0) or \
-             (plausible_errors > 0) or (abs_errors > 0) or (banned_errors > 0) or (casing_errors > 0)
+             (plausible_errors > 0) or (abs_errors > 0) or (banned_errors > 0) or (casing_errors > 0) or (freq_errors > 0)
     if args.strict and failed:
         return 1
     return 0

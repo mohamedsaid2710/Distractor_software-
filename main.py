@@ -3,7 +3,7 @@ import importlib
 from set_params import set_params
 from limit_repeats import Repeatcounter
 from input import read_input
-from output import save_ibex, save_delim, append_results
+from output import append_results
 import re
 
 
@@ -33,7 +33,7 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
 
     
     # PRE-CLEAR OUTFILE to allow incremental appending
-    with open(outfile, 'w', encoding='utf-8') as f:
+    with open(outfile, 'w', encoding='utf-8'):
         pass
 
     total = len(sents)

@@ -1,5 +1,4 @@
 import os
-import sys
 import compileall
 from set_params import set_params
 from input import read_input

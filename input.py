@@ -40,7 +40,6 @@ def read_input(filename):
         # it's likely a false positive (data row), so we process it.
         # We handle this by not using next(reader) but rather iterating and checking row 1.
         
-        first_row_skipped = False
         if has_header:
             # Peek at the first row without consuming it irrevocably from the loop
             try:
@@ -52,10 +51,9 @@ def read_input(filename):
                     # We need to re-create reader because seek resets file ptr but reader might have buffer
                     # Note: csv.reader doesn't support seek directly well, usually better to re-create
                     reader = csv.reader(f, delimiter=delim, quotechar='"')
-                    first_row_skipped = False
                 else:
                     # It looks like a real header (not a digit). We successfully skipped it.
-                    first_row_skipped = True
+                    pass
             except StopIteration:
                 pass
             except Exception:
@@ -70,10 +68,10 @@ def read_input(filename):
             id = row[1]
             word_sentence = row[2]
             # Tokenize: capture contiguous letter sequences (including ÄÖÜäöüß, accented letters,
-            # and Arabic characters U+0600–U+06FF).
+            # and Arabic characters U+0600–U+06FF). Also keeps surrounding punctuation like quotes/brackets.
             # Also keep apostrophes and hyphens inside words so contractions (it's)
             # and hyphenated compounds (well-known) are treated as single tokens.
-            words = re.findall(r"[A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ\u0600-\u06FF]+(?:[-'][A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ\u0600-\u06FF]+)*[.,!?;]*", word_sentence, flags=re.UNICODE)
+            words = re.findall(r"[^\s\w0-9]*[A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ\u0600-\u06FF0-9]+(?:[-'][A-Za-zÄÖÜäöüßÀ-ÖØ-öø-ÿ\u0600-\u06FF0-9]+)*[^\s\w0-9]*[.,!?;]*", word_sentence, flags=re.UNICODE)
             if len(row) > 3 and row[3].strip() != "":
                 label_sentence = row[3]
                 labels = label_sentence.split()

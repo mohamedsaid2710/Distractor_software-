@@ -653,25 +653,22 @@ class Label:
                 if dist_surp < min_surp_val:
                     min_surp_val = dist_surp
             return min_surp_val
-        def pick_best_from_pool(pool, allow_banned=False, relax_length=False, enforce_pos=None):
+        def pick_best_from_pool(pool, allow_banned=False, relax_length_mult=1.0, enforce_pos=None):
             """Pick the most implausible candidate from a pool, respecting filters.
             
             Args:
-                relax_length: If True, use 3x tolerance for length matching (still enforces bounds)
-                              If False, use strict tolerance from params
+                relax_length_mult: Multiplier for tolerance in relaxed mode (e.g., 3.0 = 3x normal tolerance)
             """
             def _find_best(sub_pool):
                 local_best = None
                 local_best_surp = float('-inf')
-                # In relaxed mode, use 3x tolerance but still enforce length bounds
-                relax_mult = 3.0 if relax_length else 1.0
                 
                 valid_pool = []
                 for dist in sub_pool:
                     dist_l = strip_punct(dist).lower()
                     if not dist_l:
                         continue
-                    if not candidate_length_ok(dist, relax_mult=relax_mult):
+                    if not candidate_length_ok(dist, relax_mult=relax_length_mult):
                         continue
                     if dist_l in avoid or dist_l in global_exclude:
                         continue
@@ -964,6 +961,13 @@ class Label:
         # If no candidate survived strict filters, relax constraints in stages.
         if best_word is None:
             allow_banned_fallback = bool(params.get("allow_banned_fallback", False))
+            desired_len = target_exact_len if target_exact_len is not None else target_preferred_len
+            
+            # --- SHORT WORD REPEAT TOLERANCE ---
+            # If target word is 3 letters or fewer, automatically allow repeats on fallback
+            if desired_len is not None and desired_len <= 3:
+                allow_banned_fallback = True
+
             # Fallback stage 1: Use distractor_opts without surprisal threshold
             logging.debug(f"FALLBACK Stage 1: Relaxed pool (no surprisal threshold) for item {self.id}, label {self.lab}")
             fallback = list(distractor_opts)
@@ -971,7 +975,7 @@ class Label:
             cand, cand_surp = pick_best_from_pool(fallback, allow_banned=False)
             if cand is None and allow_banned_fallback:
                 cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True)
-            desired_len = target_exact_len if target_exact_len is not None else target_preferred_len
+                
             if cand is None and enforce_length_match and desired_len is not None:
                 # Fallback stage 2: Strict exact-length fallback from full in-memory dictionary first.
                 logging.debug(f"FALLBACK Stage 2: Full dictionary exact-length search for item {self.id}, label {self.lab}")
@@ -1012,9 +1016,33 @@ class Label:
             if cand is None:
                 # Fallback stage 3: Relax length requirements
                 logging.debug(f"FALLBACK Stage 3: Relaxed length matching for item {self.id}, label {self.lab}")
-                cand, cand_surp = pick_best_from_pool(fallback, allow_banned=False, relax_length=True)
+                cand, cand_surp = pick_best_from_pool(fallback, allow_banned=False, relax_length_mult=3.0)
                 if cand is None and allow_banned_fallback:
-                    cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True, relax_length=True)
+                    cand, cand_surp = pick_best_from_pool(fallback, allow_banned=True, relax_length_mult=3.0)
+            if cand is None:
+                # Fallback stage 4: Very Liberal Frequency & Length Pool (Neighborhood Expansion)
+                logging.debug(f"FALLBACK Stage 4: Extended Frequency & Length search for item {self.id}, label {self.lab}")
+                liberal_pool = []
+                # Expand frequency window massively (n=5000) and check surrounding lengths
+                for diff in [0, 1, -1, 2, -2]:
+                    adj_len = desired_len + diff if desired_len is not None else 5
+                    if adj_len >= 2:
+                        try:
+                            pool_expansion = dictionary.get_best_frequency_pool(adj_len, target_zipf, n=5000)
+                            if pool_expansion:
+                                liberal_pool.extend(pool_expansion)
+                        except Exception:
+                            pass
+                
+                if liberal_pool:
+                    liberal_pool = list(set(liberal_pool))
+                    random.shuffle(liberal_pool)
+                    
+                    # Use a very generous relax_mult=4.0 for length tolerance
+                    cand, cand_surp = pick_best_from_pool(liberal_pool, allow_banned=False, relax_length_mult=4.0)
+                    if cand is None and allow_banned_fallback:
+                        cand, cand_surp = pick_best_from_pool(liberal_pool, allow_banned=True, relax_length_mult=4.0)
+
             if cand is None:
                 # Fallback stage 5: Emergency pool with POS-aware cascade
                 logging.warning(f"FALLBACK Stage 5: Emergency pool (800 random words) for item {self.id}, label {self.lab}")
@@ -1032,9 +1060,9 @@ class Label:
                         if cand is None and allow_banned_fallback:
                             cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=True)
                         if cand is None:
-                            cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=False, relax_length=True)
+                            cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=False, relax_length_mult=3.0)
                             if cand is None and allow_banned_fallback:
-                                cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=True, relax_length=True)
+                                cand, cand_surp = pick_best_from_pool(fallback_emerg, allow_banned=True, relax_length_mult=3.0)
                 except Exception as e:
                     logging.error(f"Emergency pool construction failed: {e}")
             
@@ -1044,9 +1072,9 @@ class Label:
                 fallback_pool = list(distractor_opts)
                 if fallback_pool:
                     random.shuffle(fallback_pool)
-                    cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=False, relax_length=True)
+                    cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=False, relax_length_mult=3.0)
                     if cand is None and allow_banned_fallback:
-                        cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=True, relax_length=True)
+                        cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=True, relax_length_mult=3.0)
 
             if cand is None:
                 # Final fallback: we exhausted the staged relaxation, leaving it None for desperation blocks
@@ -1058,9 +1086,9 @@ class Label:
             fallback_pool = list(distractor_opts)
             random.shuffle(fallback_pool)
             # Find the absolute best available word regardless of threshold
-            cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=False, relax_length=True)
+            cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=False, relax_length_mult=3.0)
             if cand is None:
-                cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=True, relax_length=True)
+                cand, cand_surp = pick_best_from_pool(fallback_pool, allow_banned=True, relax_length_mult=3.0)
             
             if cand is not None:
                 best_word = cand
@@ -1412,7 +1440,9 @@ class Sentence_Set:
                 if len(base) != target_len:
                     continue
                 low = base.lower()
-                if low == target_l or low in banned_l:
+                # ALLOW SHORT WORD REPEATS
+                banned_violation = (low in banned_l) if target_len > 3 else False
+                if low == target_l or banned_violation:
                     continue
                 return cand
 
@@ -1438,7 +1468,9 @@ class Sentence_Set:
                     if (not base) or (not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", base)):
                         continue
                     low = base.lower()
-                    if low == target_l or low in banned_l:
+                    # ALLOW SHORT WORD REPEATS
+                    banned_violation = (low in banned_l) if target_len > 3 else False
+                    if low == target_l or banned_violation:
                         continue
                     diff = abs(len(base) - target_len)
                     if diff < best_diff:

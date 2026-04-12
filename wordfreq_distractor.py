@@ -292,7 +292,12 @@ class wordfreq_dict(distractor_dict):
                         # FINAL NACIG GUARD: 
                         # If our heuristics are 100% sure it's a NOUN, we override Stanza's last word.
                         common = self.common_casing.get(word_raw, "")
-                        if (common and common[0].isupper()) or word_raw.endswith(self.NOUN_SUFFIXES):
+                        
+                        # Only apply noun suffix override if the word is capitalized or known to be a noun
+                        is_cap = (word_raw and word_raw[0].isupper()) or (common and common[0].isupper())
+                        if is_cap and word_raw.endswith(self.NOUN_SUFFIXES):
+                            upos = "NOUN"
+                        elif (common and common[0].isupper()):
                             upos = "NOUN"
                         
                         # ABSOLUTE TRUTH: Once in Cache, it is immutable. 

@@ -1,5 +1,4 @@
 import csv
-import os
 
 
 def save_delim(outfile, all_sentences):
