@@ -48,17 +48,26 @@ def run_maintenance():
     
     for w, old_pos in cache.items():
         try:
-            # We enforce capitalizing nouns here to test morphological compatibility
+            # Enforce capitalizing to test morphological compatibility
             w_cap = w.capitalize()
             tags_cap = tagger.tag_word(w_cap)
             tags_low = tagger.tag_word(w.lower())
             
-            # Determine if fundamentally a noun/verb depending on likelihood
-            pos = 'X'
-            if tags_cap and tags_cap[0][1] in ('NN', 'NE'):
-                pos = stts_map.get(tags_cap[0][1], 'NOUN')
-            elif tags_low and tags_low[0][1]:
-                pos = stts_map.get(tags_low[0][1], 'X')
+            clean_tag_cap = tags_cap[0][0].replace('(', '').replace(')', '') if tags_cap else 'X'
+            clean_tag_low = tags_low[0][0].replace('(', '').replace(')', '') if tags_low else 'X'
+            
+            score_cap = float(tags_cap[0][1]) if tags_cap else -100.0
+            score_low = float(tags_low[0][1]) if tags_low else -100.0
+            
+            pos = stts_map.get(clean_tag_cap, 'X')
+            
+            if pos == 'NOUN':
+                upos_low = stts_map.get(clean_tag_low, 'X')
+                if upos_low in ('VERB', 'ADJ', 'ADV', 'AUX') and score_low > -20.0:
+                    pos = upos_low
+            else:
+                # Use the lowercase tag directly for non-nouns
+                pos = stts_map.get(clean_tag_low, 'X')
                 
             if pos not in ('NOUN', 'ADJ', 'VERB', 'ADV', 'PRON', 'NUM', 'DET', 'PART', 'PROPN', 'ADP', 'CCONJ', 'SCONJ', 'AUX', 'INTJ'):
                 pos = 'X'

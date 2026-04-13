@@ -520,13 +520,23 @@ class wordfreq_dict(distractor_dict):
                 if tag == 'X':
                     continue # Ironclad X Rejection
                 is_propn = (tag == 'PROPN')
-                # Gold Standard: PROPN is a Non-Noun distractor (lowercased)
                 is_noun = (tag == 'NOUN')
+                
+                # NEW STRICT RULE: If we specifically asked for !NOUN, ONLY allow verified grammatical tags.
+                # If a word is tagged 'X' or is not in the safe non-noun list, REJECT IT.
+                if pos_filter == '!NOUN':
+                    if tag not in ('VERB', 'ADJ', 'ADV', 'PRON', 'NUM', 'DET', 'PART', 'ADP', 'CCONJ', 'SCONJ', 'AUX'):
+                        continue
             
             # Generic fallback if not already determined in cache
             if not is_noun and not in_cache:
                 # Use titlecase variant check for ANY language, not just non-German
                 is_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
+                
+                # If it's NOT in cache, we cannot trust it to be a real non-noun.
+                # For safety, if pos_filter == '!NOUN' and it's not in cache, reject it to avoid garbage.
+                if pos_filter == '!NOUN' and _lang == 'de':
+                    continue
 
             # 1. Reject Proper Nouns (the "rubbish" fragments like Obb, Dha)
             if exclude_propn and is_propn:
@@ -925,11 +935,13 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 
             w_cap = w.capitalize()
             _, tag = self.hanta.analyze(w_cap)
-            upos = stts_map.get(tag, 'X')
+            clean_tag = tag.replace('(', '').replace(')', '')
+            upos = stts_map.get(clean_tag, 'X')
             
             if upos == 'NOUN':
                 _, tag_low = self.hanta.analyze(w.lower())
-                upos_low = stts_map.get(tag_low, 'X')
+                clean_tag_low = tag_low.replace('(', '').replace(')', '')
+                upos_low = stts_map.get(clean_tag_low, 'X')
                 if upos_low in ('VERB', 'ADJ', 'ADV', 'AUX'):
                     upos = upos_low
                     
@@ -986,16 +998,26 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             _, tag = self.hanta.analyze(w_cap)
             
             # Map HanTa's STTS tag to universal UPOS
-            upos = stts_map.get(tag, 'X')
+            # HanTa returns tags with parentheses like VV(INF) or ADJ(A), but standard STTS is VVINF or ADJA.
+            clean_tag = tag.replace('(', '').replace(')', '')
+            upos = stts_map.get(clean_tag, 'X')
             
             # Additional safety: If HanTa says it's a noun, ensure the true lowercase form isn't natively a verb/adj
             if upos == 'NOUN':
-                _, tag_low = self.hanta.analyze(w.lower())
-                upos_low = stts_map.get(tag_low, 'X')
-                
-                # If it's a verb/adjective natively (lowercased), reject the false Noun classification
-                if upos_low in ('VERB', 'ADJ', 'ADV', 'AUX'):
-                    upos = upos_low
+                # Use tag_word to get the confidence score. Real adverbs/verbs are > -15.
+                # Hallucinations (like 'zombie' -> ADV) are < -30.
+                low_results = self.hanta.tag_word(w.lower())
+                if low_results:
+                    tag_low_str = low_results[0][0]
+                    score_low = float(low_results[0][1])
+                    
+                    # Clean HanTa parentheses (VV(INF) -> VVINF)
+                    clean_tag_low = tag_low_str.replace('(', '').replace(')', '')
+                    
+                    # Only overwrite if HanTa is actually confident it's a real word (> -20)
+                    upos_low = stts_map.get(clean_tag_low, 'X')
+                    if upos_low in ('VERB', 'ADJ', 'ADV', 'AUX') and score_low > -20.0:
+                        upos = upos_low
                     
             self._record_pos_tag(w, upos)
 
