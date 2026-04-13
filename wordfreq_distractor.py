@@ -727,14 +727,13 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
         # HanTa Morphological Dictionary Bouncer
         self.hanta = None
-        if HANTA_AVAILABLE:
-            try:
-                self.hanta = ht.HanoverTagger('morphmodel_ger.pgz')
-                print("    [HanTa] Hannover Tagger loaded for strict dictionary lookups.", flush=True)
-            except Exception as e:
-                print(f"    [HanTa] WARNING: HanTa model not loaded ({e}).", flush=True)
-        else:
-            print("    [HanTa] WARNING: HanTa not installed. Please install HanTa.", flush=True)
+        try:
+            self.hanta = ht.HanoverTagger('morphmodel_ger.pgz')
+            print("    [HanTa] Hannover Tagger loaded for strict dictionary lookups.", flush=True)
+        except NameError:
+            print("    [HanTa] WARNING: HanoverTagger (ht) not imported globally.", flush=True)
+        except Exception as e:
+            print(f"    [HanTa] WARNING: HanTa model not loaded ({e}).", flush=True)
 
         freq_dict = wordfreq.get_frequency_dict("de")
         source_words = list(freq_dict.keys())
