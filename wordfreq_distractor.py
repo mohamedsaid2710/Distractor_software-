@@ -530,13 +530,46 @@ class wordfreq_dict(distractor_dict):
             
             # Generic fallback if not already determined in cache
             if not is_noun and not in_cache:
-                # Use titlecase variant check for ANY language, not just non-German
-                is_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
-                
-                # If it's NOT in cache, we cannot trust it to be a real non-noun.
-                # For safety, if pos_filter == '!NOUN' and it's not in cache, reject it to avoid garbage.
-                if pos_filter == '!NOUN' and _lang == 'de':
-                    continue
+                if pos_filter == '!NOUN':
+                    # DYNAMIC TAGGING FALLBACK
+                    # If we need a !NOUN but don't know it, check it live using NLP models
+                    safe_tag = None
+                    try:
+                        if _lang == 'de' and getattr(self, 'hanta', None) is not None:
+                            w_cap = w.capitalize()
+                            _, safe_tag = self.hanta.analyze(w_cap)
+                        elif _lang == 'ar' and getattr(self, 'nlp_sp', None) is not None:
+                            tagged = self.nlp_sp.tag(w)
+                            parts = tagged.split('+')
+                            pos = 'X'
+                            for part in reversed(parts):
+                                if '/' in part:
+                                    curr = part.split('/')[-1].strip().upper()
+                                    if curr not in ('CONJ', 'PREP', 'DET', 'PART', 'PUNC'):
+                                        pos = curr
+                                        break
+                            if pos == 'X' and parts and '/' in parts[-1]:
+                                pos = parts[-1].split('/')[-1].strip().upper()
+                            farasa_map = {'V': 'VERB', 'ADJ': 'ADJ', 'PRON': 'PRON', 'NUM': 'NUM', 'ADV': 'ADV', 'PART': 'PART', 'NOUN': 'NOUN', 'PROPN': 'PROPN', 'PREP': 'ADP', 'CONJ': 'CCONJ'}
+                            safe_tag = farasa_map.get(pos, pos)
+                        elif _lang == 'en' and getattr(self, 'nlp_sp', None) is not None:
+                            doc = self.nlp_sp(w)
+                            if len(doc) > 0:
+                                safe_tag = doc[0].pos_
+                    except Exception:
+                        pass
+                        
+                    if safe_tag and hasattr(self, 'pos_cache'):
+                        self.pos_cache[w_lower] = safe_tag
+                        
+                    if not safe_tag or safe_tag not in ('VERB', 'ADJ', 'ADV', 'PRON', 'NUM', 'DET', 'PART', 'ADP', 'CCONJ', 'SCONJ', 'AUX'):
+                        continue
+                        
+                    is_propn = (safe_tag == 'PROPN')
+                    is_noun = (safe_tag == 'NOUN')
+                else:
+                    # Use titlecase variant check for ANY language, not just non-German
+                    is_noun = self.has_titlecase_variant(w) if hasattr(self, 'has_titlecase_variant') else False
 
             # 1. Reject Proper Nouns (the "rubbish" fragments like Obb, Dha)
             if exclude_propn and is_propn:
