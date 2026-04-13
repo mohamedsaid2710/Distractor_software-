@@ -933,7 +933,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
         # STTS to UPOS Map
         stts_map = {
-            'NN': 'NOUN', 'NE': 'PROPN',
+            'NN': 'NOUN', # 'NE' (Proper Nouns) purposely omitted so they evaluate as 'X',
             'ADJA': 'ADJ', 'ADJD': 'ADJ',
             'VVFIN': 'VERB', 'VVIMP': 'VERB', 'VVINF': 'VERB', 'VVIZU': 'VERB', 'VVPP': 'VERB',
             'VMFIN': 'VERB', 'VMINF': 'VERB', 'VMPP': 'VERB',
