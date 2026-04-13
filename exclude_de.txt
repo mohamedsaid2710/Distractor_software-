@@ -533,7 +533,7 @@ Sähe
 Aufgang
 Hineingestossen
 # SpaCy mistagging audit (April 2026)
-# Non-words, abbreviations, and problematic forms from txt.txt
+# Non-words, abbreviations, and problematic forms 
 etc
 Etc
 abs
@@ -548,7 +548,8 @@ hey
 Hey
 wow
 Wow
-ehe 
+ehe
+ih 
 # NACIG Stubborn Nouns (Words that leak as lowercase)
 vieh
 heer

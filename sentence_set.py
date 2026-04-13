@@ -549,6 +549,14 @@ class Label:
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
         
+        # --- SHUFFLE SHORT WORDS ---
+        # The user requested 3 and 4-letter words be completely randomized from their candidate pool
+        # rather than processed in strict frequency order, which prevents "weh" and "nah" oversaturation.
+        target_lens_for_shuffle = [len(strip_punct(w)) for w in self.words if strip_punct(w)]
+        if target_lens_for_shuffle and max(target_lens_for_shuffle) <= 4:
+            import random
+            random.shuffle(distractor_opts)
+        
         # --- ADAPTIVE LENGTH SEARCH DEPRECATED ---
         # The dictionary now automatically handles length expansion and fallback layers internally
         # (Tier 1.5, Tier 2, Tier 3). No need to pound it with 20 separate function calls.

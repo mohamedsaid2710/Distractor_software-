@@ -725,6 +725,24 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             except:
                 self.spacy_nlp = None
 
+        # HanTa Morphological Dictionary Bouncer
+        try:
+            from HanTa import HanoverTagger as ht
+            self.hanta = ht.HanoverTagger('morphmodel_ger.pgz')
+            print("    [HanTa] Hannover Tagger loaded for strict dictionary lookups.", flush=True)
+        except Exception as e:
+            print(f"    [HanTa] WARNING: HanTa not loaded ({e}). Please pip install HanTa.", flush=True)
+            self.hanta = None
+
+        # HanTa Morphological Dictionary Bouncer
+        try:
+            from HanTa import HanoverTagger as ht
+            self.hanta = ht.HanoverTagger('morphmodel_ger.pgz')
+            print("    [HanTa] Hannover Tagger loaded for strict dictionary lookups.", flush=True)
+        except Exception as e:
+            print(f"    [HanTa] WARNING: HanTa not loaded ({e}). Please pip install HanTa.", flush=True)
+            self.hanta = None
+
         freq_dict = wordfreq.get_frequency_dict("de")
         source_words = list(freq_dict.keys())
 
@@ -903,142 +921,62 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         return ans if ans is not None else token
 
     def batch_tag_words(self, words, params=None, force_refresh=False):
-        """Batch-tag German candidates using Stanza with SMART SELECTIVE FRAMING.
-        
-        Categorizes words by morphology and uses context-appropriate sentences:
-        - Verbs (6+ chars ending -te, -ten, -iert, -et): Frame "Er {word} es."
-        - Adjectives (-lich, -ig, -isch, -keit): Frame "Das ist {word}."
-        - Nouns (capitalized or -e, -in, -tion, -heit): Frame "Das ist ein {word}."
-        - Others: Isolated tagging
-        """
-        if self.nlp_sp is None or not words:
+        \"\"\"Batch-tag German candidates strictly using HanTa Morphological Dictionary.\"\"\"
+        if not self.hanta or not words:
             return
 
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
 
-        # Identify words that need tagging
-        if force_refresh:
-            to_tag = list(set(w.lower() for w in words))
-            print(f"    [STANZA] Force-verifying {len(to_tag)} candidates to purge messy cache...", flush=True)
-        else:
-            to_tag = []
-            for w in set(words):
-                w_lower = w.lower()
-                w_clean = re.sub(r"[^\w\säöüÄÖÜß]", "", w_lower).strip()
-                if not w_clean: continue
-                
-                # STRICT CACHE TRUTH: If it exists in cache (even as 'X'), do NOT re-tag.
-                if w_clean not in self.pos_cache:
-                    to_tag.append(w_clean)
-            
-            to_tag = list(set(to_tag))
-            if not to_tag:
-                return
-            
-            # (Air-gap limit removed. Run Stanza on all out-of-cache candidate pools to ensure POS accuracy.)
-            
-
-        BATCH_SIZE = int(params.get('nlp_batch_size', 256)) if params else 256
+        to_tag = []
+        for w in set(words):
+            w_lower = w.lower()
+            w_clean = re.sub(r"[^\w\säöüÄÖÜß]", "", w_lower).strip()
+            if not w_clean: continue
+            if force_refresh or w_clean not in self.pos_cache:
+                to_tag.append(w_clean)
         
-        # Performance Upgrade: Batch the SpaCy pre-check for the ENTIRE list at once
-        spacy_noun_map = {}
-        if self.spacy_nlp and to_tag:
-            try:
-                # Use nlp.pipe for massively parallel SpaCy processing
-                # FIX: Capitalize the words so SpaCy accurately detects nouns
-                capitalized_to_tag = [w.capitalize() for w in to_tag]
-                for doc in self.spacy_nlp.pipe(capitalized_to_tag, batch_size=BATCH_SIZE):
-                    if len(doc) > 0 and doc[0].pos_ in ['NOUN', 'PROPN']:
-                        spacy_noun_map[doc.text.lower()] = True
-            except Exception as e:
-                logging.warning(f"[SPACY] Batched pre-check failed: {e}")
+        to_tag = list(set(to_tag))
+        if not to_tag: return
 
-        for i in range(0, len(to_tag), BATCH_SIZE):
-            batch = to_tag[i : i + BATCH_SIZE]
-            
-            # Categorize by morphology
-            verb_words = []
-            adj_words = []
-            noun_words = []
-            other_words = []
-            
-            for w in batch:
-                w_lower = w.lower()
-                common = self.common_casing.get(w_lower, "")
-                is_ironclad = (common and common[0].isupper()) or w_lower.endswith(self.NOUN_SUFFIXES)
-                
-                # Check our pre-calculated SpaCy map
-                is_grounded_noun = is_ironclad or spacy_noun_map.get(w_lower, False)
-                
-                # VERB: 6+ chars ending in past tense markers
-                is_verb = (len(w_lower) >= 6 and re.search(r'(te|ten|iert|et)$', w_lower))
-                
-                if is_grounded_noun:
-                    noun_words.append(w_lower)
-                elif is_verb:
-                    verb_words.append(w_lower)
-                elif re.search(r'(lich|ig|isch|keit)$', w_lower):
-                    adj_words.append(w_lower)
-                elif w[0].isupper() or re.search(r'(tion|heit|ness|mann|schaft|um)$', w_lower):
-                    noun_words.append(w_lower)
-                else:
-                    other_words.append(w_lower)
-            
-            try:
-                import stanza
-                # 1. VERB FRAME: "Er {word} es."
-                if verb_words:
-                    frames = [f"Er {w} es." for w in verb_words]
-                    docs = self.nlp_sp([stanza.Document([], text=t) for t in frames])
-                    for word, doc in zip(verb_words, docs):
-                        if doc.sentences and len(doc.sentences[0].words) >= 2:
-                            final_pos = doc.sentences[0].words[1].upos
-                        else:
-                            final_pos = 'X'
-                        self._record_pos_tag(word, final_pos)
-                
-                # 2. ADJECTIVE FRAME: "Das ist {word}."
-                if adj_words:
-                    frames = [f"Das ist {w}." for w in adj_words]
-                    docs = self.nlp_sp([stanza.Document([], text=t) for t in frames])
-                    for word, doc in zip(adj_words, docs):
-                        if doc.sentences and len(doc.sentences[0].words) >= 3:
-                            final_pos = doc.sentences[0].words[2].upos
-                        else:
-                            final_pos = 'X'
-                        self._record_pos_tag(word, final_pos)
-                
-                # 3. NOUN FRAME: "Das ist ein {word}."
-                if noun_words:
-                    # We capitalize the word in the frame to help Stanza recognize the noun
-                    frames = [f"Das ist ein {w.capitalize()}." for w in noun_words]
-                    docs = self.nlp_sp([stanza.Document([], text=t) for t in frames])
-                    for word, doc in zip(noun_words, docs):
-                        if doc.sentences and len(doc.sentences[0].words) >= 4:
-                            final_pos = doc.sentences[0].words[3].upos
-                        else:
-                            final_pos = 'X'
-                        self._record_pos_tag(word, final_pos)
-                
-                # 4. ISOLATED: No frame
-                if other_words:
-                    docs = self.nlp_sp([stanza.Document([], text=w) for w in other_words])
-                    for word, doc in zip(other_words, docs):
-                        if doc.sentences and doc.sentences[0].words:
-                            final_pos = doc.sentences[0].words[0].upos
-                        else:
-                            final_pos = 'X'
-                        self._record_pos_tag(word, final_pos)
-                        
-            except Exception as e:
-                logging.error(f"[STANZA] Max-Throttle batching failed: {e}")
-                for w in batch:
-                    self._eval_single_word_case(w)
+        # STTS to UPOS Map
+        stts_map = {
+            'NN': 'NOUN', 'NE': 'PROPN',
+            'ADJA': 'ADJ', 'ADJD': 'ADJ',
+            'VVFIN': 'VERB', 'VVIMP': 'VERB', 'VVINF': 'VERB', 'VVIZU': 'VERB', 'VVPP': 'VERB',
+            'VMFIN': 'VERB', 'VMINF': 'VERB', 'VMPP': 'VERB',
+            'VAFIN': 'AUX', 'VAIMP': 'AUX', 'VAINF': 'AUX', 'VAPP': 'AUX',
+            'ADV': 'ADV', 'PROAV': 'ADV', 'PTKA': 'ADV',
+            'APPR': 'ADP', 'APPRART': 'ADP', 'APPO': 'ADP', 'APZR': 'ADP',
+            'ART': 'DET', 'PDAT': 'DET', 'PIAT': 'DET', 'PIDAT': 'DET', 'PPOSAT': 'DET', 'PWAT': 'DET',
+            'PDS': 'PRON', 'PIS': 'PRON', 'PPER': 'PRON', 'PPOSS': 'PRON', 'PRELS': 'PRON', 'PRF': 'PRON', 'PWS': 'PRON',
+            'KON': 'CCONJ', 'KOUI': 'SCONJ', 'KOUS': 'SCONJ', 'KOKOM': 'SCONJ',
+            'PTKZU': 'PART', 'PTKNEG': 'PART', 'PTKVZ': 'PART', 'PTKANT': 'PART',
+            'ITJ': 'INTJ'
+        }
 
-        # Persist to disk
-        self.save_pos_cache()
-    
+        print(f"    [HanTa] Looking up {len(to_tag)} words in strict morphological dictionary...", flush=True)
+        
+        for w in to_tag:
+            # Check with proper noun casing for HanTa to evaluate correctly
+            w_cap = w.capitalize()
+            # HanTa returns (lemma, STTS_TAG)
+            _, tag = self.hanta.analyze(w_cap)
+            
+            # Map HanTa's STTS tag to universal UPOS
+            upos = stts_map.get(tag, 'X')
+            
+            # Additional safety: If HanTa says it's a noun, ensure the true lowercase form isn't natively a verb/adj
+            if upos in ('NOUN', 'PROPN'):
+                _, tag_low = self.hanta.analyze(w.lower())
+                upos_low = stts_map.get(tag_low, 'X')
+                
+                # If it's a verb/adjective natively (lowercased), reject the false Noun classification
+                if upos_low in ('VERB', 'ADJ', 'ADV', 'AUX'):
+                    upos = upos_low
+                    
+            self._record_pos_tag(w, upos)
+
     def _record_pos_tag(self, word, upos):
         """Cache-aware POS tagging that populates length-indexed pools.
         TIGHTENED: Ensures nouns never enter the 'others' pool even if tagged with 
