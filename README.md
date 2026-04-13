@@ -12,11 +12,11 @@ Based on the original [Maze repository](https://github.com/vboyce/Maze) by Victo
 
 - **Supported Languages:** 
   - English (`gpt2-medium` via spaCy `en_core_web_lg`)
-  - German (`benjamin/gerpt2` via Stanza neural tagging)
+  - German (`benjamin/gerpt2` via `Stanza` neural tagging & spaCy `de_core_news_lg`)
   - Arabic (`aubmindlab/aragpt2-medium` via Farasa `farasapy`)
 - **Generation Modes:** Choose between threshold-first (Mode A) or maximum-implausibility scoring (Mode B).
 - **Linguistic Precision:**
-  - Length and ZIPF frequency matching.
+  - Length and Zipf frequency matching.
   - Optional **fastText Semantic Filtering** to reject words from similar domains (e.g., avoiding "Apple" -> "Orange").
   - **Part-Of-Speech Matching** to ensure natural grammar structure (Verbs match Verbs, Nouns match Nouns).
 - **Fast GPU Processing:** Batch-optimized surprisal scoring scales automatically to available hardware.
@@ -43,17 +43,17 @@ source .venv/bin/activate  # (Optional) Activate for cleaner commands
 
 Run the pipeline using the `-i` (input), `-o` (output), and `-p` (parameter configuration) flags.
 
-**English (EN)**:
+**English (en)**:
 ```bash
 python distract.py -i English_sample.txt -o output_en.txt -p params_en.txt -f delim
 ```
 
-**German (DE)**:
+**German (de)**:
 ```bash
 python distract.py -i german_sample.txt -o output_de.txt -p params_de.txt -f delim
 ```
 
-**Arabic (AR)**:
+**Arabic (ar)**:
 ```bash
 python distract.py -i arabic_sample.txt -o output_ar.txt -p params_ar.txt -f delim
 ```
@@ -78,6 +78,13 @@ python assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en.
 - 📦 **[Ibex Integration](https://github.com/mohamedsaid2710/Distractor_software-/wiki/Ibex-Integration)** (Generating and using PCIbex outputs)
 - 🛠️ **[Troubleshooting](https://github.com/mohamedsaid2710/Distractor_software-/wiki/Troubleshooting)** (Common errors and solutions)
 - 🗺️ **[Code Map](https://github.com/mohamedsaid2710/Distractor_software-/wiki/Code-Map)** (File-by-file overview of the codebase)
+
+
+>## $\color{red}\text{CAUTION}$ 
+>This software utilizes large language models trained on massive datasets. Consequently, generated distractors may occasionally contain offensive or harmful terms. Therefore, make sure to always add these to exclude_*.txt files.\
+
+>## $\color{green}\text{Important Note:}$ 
+> The output is not guaranteed to be **error-free** or **linguistically** perfect. Manual review and verification are recommended before using generated stimuli in formal research.
 
 ## License
 
