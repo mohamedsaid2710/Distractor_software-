@@ -1353,6 +1353,96 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         """Arabic has no title casing; always returns False."""
         return False
 
+    def batch_tag_inputs(self, input_stanza_tags, params=None):
+        """
+        HYBRID APPROACH FOR INPUT WORDS in Arabic (Stanza + Farasa):
+        input_stanza_tags: dict of {word_lower: set_of_stanza_UPOS_tags}
+        
+        Reads the input words that were previously POS tagged by Stanza using their context.
+        Checks them against Farasa. 
+        If Stanza and Farasa agree, they are cached as 100% correct.
+        This safely grows the cache using verified context-aware data!
+        Distractors remain purely tagged by Farasa.
+        """
+        if getattr(self, 'nlp_sp', None) is None or not input_stanza_tags:
+            return
+
+        if not hasattr(self, 'pos_cache'):
+            self.pos_cache = {}
+
+        # Clean words and aggregate tags
+        clean_stanza_tags = {}
+        for w_lower, tags in input_stanza_tags.items():
+            w_clean = strip_arabic_diacritics(w_lower)
+            if not w_clean: continue
+            if w_clean not in clean_stanza_tags:
+                clean_stanza_tags[w_clean] = set()
+            clean_stanza_tags[w_clean].update(tags)
+
+        to_tag = []
+        for w_clean in clean_stanza_tags.keys():
+            if w_clean not in self.pos_cache:
+                to_tag.append(w_clean)
+        
+        to_tag = list(set(to_tag))
+        if not to_tag: return
+
+        print(f"[HYBRID Cache] Validating {len(to_tag)} Arabic inputs via Stanza-Farasa consensus...", flush=True)
+
+        added = 0
+        for w in to_tag:
+            try:
+                tagged = self.nlp_sp.tag(w)
+                parts = tagged.split('+')
+                pos = 'X'
+                for part in reversed(parts):
+                    if '/' in part:
+                        curr = part.split('/')[-1].strip().upper()
+                        if curr not in ('CONJ', 'PREP', 'DET', 'PART', 'PUNC'):
+                            pos = curr
+                            break
+                if pos == 'X' and parts:
+                    if '/' in parts[-1]:
+                        pos = parts[-1].split('/')[-1].strip().upper()
+                
+                # Standardize
+                if pos == 'V': pos = 'VERB'
+                elif pos == 'PREP': pos = 'ADP'
+                elif pos == 'CONJ': pos = 'CCONJ'
+                elif 'PRON' in pos: pos = 'PRON'
+                elif pos not in ('NOUN', 'ADJ', 'ADV', 'NUM', 'DET', 'PART', 'PROPN'):
+                    pos = 'X'
+
+                # Hybrid Agreement Check!
+                stanza_tags = clean_stanza_tags[w]
+                if pos in stanza_tags and pos != 'X':
+                    self.pos_cache[w] = pos
+                    added += 1
+            except Exception:
+                pass
+
+        if added > 0:
+            print(f"    [HYBRID] Added {added} high-confidence Arabic POS entries to runtime cache.", flush=True)
+            try:
+                cache_file = "models/arabic_code/arabic_pos_cache.json"
+                existing = {}
+                if os.path.exists(cache_file):
+                    with open(cache_file, "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                
+                # Append only
+                cache_updated = False
+                for k, v in self.pos_cache.items():
+                    if k not in existing and v != 'X':
+                        existing[k] = v
+                        cache_updated = True
+                        
+                if cache_updated:
+                    with open(cache_file, "w", encoding="utf-8") as f:
+                        json.dump(existing, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"[HYBRID] Cache save failed: {e}")
+
     def batch_tag_words(self, words, params=None):
         """Tag Arabic words using Farasa POSTagger."""
         if getattr(self, 'nlp_sp', None) is None or not words:

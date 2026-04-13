@@ -52,17 +52,14 @@ def _get_nlp_model(lang='de', params=None):
     elif lang_lower.startswith('de'):
         key = 'de'
     elif lang_lower.startswith('ar'):
-        # For Arabic, POS tagging is done exclusively via Farasa inside wordfreq_distractor
-        # We return a dummy object just so `nlp_model is None` checks pass, allowing
-        # get_candidate_pos to read from dictionary.pos_cache
-        return "FARASA_DELEGATE"
+        key = 'ar'
     else:
         return None
         
     if key in _nlp_model:
         return _nlp_model[key]
         
-    if key == 'de':
+    if key in ('de', 'ar'):
         try:
             import stanza
             # Use GPU if available, default to True
@@ -72,10 +69,10 @@ def _get_nlp_model(lang='de', params=None):
             
             try:
                 # Try to load; download if necessary
-                _nlp_model[key] = stanza.Pipeline('de', processors='tokenize,mwt,pos,lemma', use_gpu=use_gpu)
+                _nlp_model[key] = stanza.Pipeline(key, processors='tokenize,mwt,pos,lemma' if key == 'de' else 'tokenize,pos,lemma', use_gpu=use_gpu)
             except Exception:
-                stanza.download('de')
-                _nlp_model[key] = stanza.Pipeline('de', processors='tokenize,mwt,pos,lemma', use_gpu=use_gpu)
+                stanza.download(key)
+                _nlp_model[key] = stanza.Pipeline(key, processors='tokenize,mwt,pos,lemma' if key == 'de' else 'tokenize,pos,lemma', use_gpu=use_gpu)
             return _nlp_model[key]
         except ImportError:
             logging.error("Stanza not found. Please install with: pip install stanza")
@@ -468,26 +465,7 @@ class Label:
             key = clean
             if key in _pos_cache: return _pos_cache[key]
             try:
-                if nlp_model == "FARASA_DELEGATE":
-                    if hasattr(dictionary, 'nlp_sp') and dictionary.nlp_sp is not None:
-                        tagged = dictionary.nlp_sp.tag(clean)
-                        parts = tagged.split('+')
-                        val = 'X'
-                        for part in reversed(parts):
-                            if '/' in part:
-                                curr = part.split('/')[-1].strip()
-                                if curr not in ('CONJ', 'PREP', 'DET', 'PART', 'PUNC'):
-                                    val = curr
-                                    break
-                        if val == 'X' and parts and '/' in parts[-1]:
-                            val = parts[-1].split('/')[-1].strip()
-                        if val == 'NOUN': val = 'NOUN'
-                        elif val == 'ADJ': val = 'ADJ'
-                        elif val == 'V': val = 'VERB'
-                        elif 'PRON' in val: val = 'PRON'
-                    else:
-                        val = None
-                elif lang == 'de':
+                if lang in ('de', 'ar'):
                     # Stanza
                     doc = nlp_model(clean)
                     val = doc.sentences[0].words[0].upos if doc.sentences and doc.sentences[0].words else None
@@ -1286,7 +1264,7 @@ class Sentence_Set:
         if nlp_model is not None:
             for sentence in self.sentences:
                 try:
-                    if lang == 'de':
+                    if lang in ('de', 'ar'):
                         # Stanza processing. We join words to let Stanza tokenize natively
                         # to avoid pipeline pretokenized conflicts, then map back roughly.
                         # It's better to just pass the string and align.
@@ -1427,8 +1405,8 @@ class Sentence_Set:
         
         # --- HYBRID APPROACH: INPUT-LEVEL BATCH TAGGING ---
         # Aggregate all target words and their Stanza POS tags, 
-        # then verify them against HanTa to grow the POS cache perfectly.
-        if lang == 'de' and hasattr(d, 'batch_tag_inputs'):
+        # then verify them against HanTa (or Farasa) to grow the POS cache perfectly.
+        if lang in ('de', 'ar') and hasattr(d, 'batch_tag_inputs'):
             input_stanza_tags = {}
             for sent in self.sentences:
                 for i, w in enumerate(sent.words):

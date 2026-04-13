@@ -8,7 +8,7 @@ Built on Transformer-based language models (GPT-2), the pipeline selects real-wo
 
 >Based on the original [Maze repository](https://github.com/vboyce/Maze) by Victoria Boyce. This implementation has been extensively adapted and now features distinct Transformer models, automated language-specific NLP tools, GPU batch processing, semantic embeddings, and an interactive config-tuning workflow.
 
->Special thanks to [Titus von der Malsburg](https://tmalsburg.github.io/) for all his input, help, and recommendations which made this software always get better. 
+>Special thanks to [Titus von der Malsburg](https://tmalsburg.github.io/) for all the help. His suggestions and feedback have been a huge part of why this software keeps improving.
 
 ## $\color{SteelBlue}\text{Overview and Capabilities}$
 
