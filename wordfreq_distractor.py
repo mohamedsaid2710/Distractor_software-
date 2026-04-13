@@ -865,6 +865,83 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         ans = self.case_map.get(t_lower, None)
         return ans if ans is not None else token
 
+    def batch_tag_inputs(self, input_stanza_tags, params=None):
+        """
+        HYBRID APPROACH FOR INPUT WORDS:
+        input_stanza_tags: dict of {word_lower: set_of_stanza_UPOS_tags}
+        
+        Reads the input words that were previously POS tagged by Stanza.
+        Checks them against HanTa. 
+        If Stanza and HanTa agree, they are cached as 100% correct.
+        This safely grows the cache using verified context-aware data!
+        Distractors remain purely tagged by HanTa.
+        """
+        if not self.hanta or not input_stanza_tags:
+            return
+
+        if not hasattr(self, 'pos_cache'):
+            self.pos_cache = {}
+
+        # Clean words and aggregate tags
+        clean_stanza_tags = {}
+        for w_lower, tags in input_stanza_tags.items():
+            w_clean = re.sub(r"[^\w\säöüÄÖÜß]", "", w_lower).strip()
+            if not w_clean: continue
+            if w_clean not in clean_stanza_tags:
+                clean_stanza_tags[w_clean] = set()
+            clean_stanza_tags[w_clean].update(tags)
+
+        to_tag = []
+        for w_clean in clean_stanza_tags.keys():
+            if w_clean not in self.pos_cache:
+                to_tag.append(w_clean)
+        
+        to_tag = list(set(to_tag))
+        if not to_tag: return
+
+        # STTS to UPOS Map
+        stts_map = {
+            'NN': 'NOUN', 'NE': 'PROPN',
+            'ADJA': 'ADJ', 'ADJD': 'ADJ',
+            'VVFIN': 'VERB', 'VVIMP': 'VERB', 'VVINF': 'VERB', 'VVIZU': 'VERB', 'VVPP': 'VERB',
+            'VMFIN': 'VERB', 'VMINF': 'VERB', 'VMPP': 'VERB',
+            'VAFIN': 'AUX', 'VAIMP': 'AUX', 'VAINF': 'AUX', 'VAPP': 'AUX',
+            'ADV': 'ADV', 'PROAV': 'ADV', 'PTKA': 'ADV',
+            'APPR': 'ADP', 'APPRART': 'ADP', 'APPO': 'ADP', 'APZR': 'ADP',
+            'ART': 'DET', 'PDAT': 'DET', 'PIAT': 'DET', 'PIDAT': 'DET', 'PPOSAT': 'DET', 'PWAT': 'DET',
+            'PDS': 'PRON', 'PIS': 'PRON', 'PPER': 'PRON', 'PPOSS': 'PRON', 'PRELS': 'PRON', 'PRF': 'PRON', 'PWS': 'PRON',
+            'KON': 'CCONJ', 'KOUI': 'SCONJ', 'KOUS': 'SCONJ', 'KOKOM': 'SCONJ',
+            'PTKZU': 'PART', 'PTKNEG': 'PART', 'PTKVZ': 'PART', 'PTKANT': 'PART',
+            'ITJ': 'INTJ'
+        }
+
+        print(f"    [Hybrid] Verifying {len(to_tag)} Stanza-tagged inputs against HanTa...", flush=True)
+        
+        new_entries = 0
+        for w in to_tag:
+            stanza_tags = clean_stanza_tags.get(w, set())
+            if not stanza_tags or ('X' in stanza_tags and len(stanza_tags) == 1):
+                continue 
+                
+            w_cap = w.capitalize()
+            _, tag = self.hanta.analyze(w_cap)
+            upos = stts_map.get(tag, 'X')
+            
+            if upos == 'NOUN':
+                _, tag_low = self.hanta.analyze(w.lower())
+                upos_low = stts_map.get(tag_low, 'X')
+                if upos_low in ('VERB', 'ADJ', 'ADV', 'AUX'):
+                    upos = upos_low
+                    
+            # The Verification Rule: If HanTa confirms any of the Stanza tags, we cache it
+            if upos in stanza_tags and upos != 'X':
+                self._record_pos_tag(w, upos)
+                new_entries += 1
+                
+        if new_entries > 0:
+            print(f"    [Hybrid] Successfully verified and cached {new_entries} new input words!", flush=True)
+            self.save_pos_cache()
+
     def batch_tag_words(self, words, params=None, force_refresh=False):
         """Batch-tag German candidates strictly using HanTa Morphological Dictionary."""
         if not self.hanta or not words:

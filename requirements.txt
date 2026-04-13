@@ -2,7 +2,6 @@
 torch>=2.0.0
 transformers>=4.30.0
 huggingface_hub>=0.20.0
-spacy>=3.5.0
 # Fixes C-header binary incompatibility bug with SpaCy pipelines
 numpy>=2.0.0
 wordfreq>=3.0.0
@@ -11,6 +10,12 @@ wordfreq>=3.0.0
 # Uncomment to enable semantic_filter feature:
 fasttext>=0.9.2
 
-# German Neural NLP (Stanford Stanza)
+# Sentence Context Tagging (Stanza / SpaCy)
 stanza>=1.8.0
+spacy>=3.5.0
+
+# Arabic NLP
+farasapy>=0.0.14
+
+# German Isolated Distractor Tagging
 HanTa>=0.2.0

@@ -750,7 +750,12 @@ class Label:
                     return None, float('-inf')
                     
                 scored.sort(key=lambda x: x[1], reverse=True)
-                top_n = min(15, len(scored))
+                
+                # Dynamic top_n rule: 15 for long words, 150 for short words
+                sample_dist_l = strip_punct(scored[0][0]).lower() if scored else ""
+                _is_short = len(sample_dist_l) <= 4 if sample_dist_l else False
+                top_n = min(150, len(scored)) if _is_short else min(15, len(scored))
+                
                 idx = random.randint(0, top_n - 1)
                 return scored[idx][0], scored[idx][1]
                 
@@ -977,7 +982,7 @@ class Label:
                 if passed_candidates:
                     passed_candidates.sort(key=lambda x: x[1], reverse=True)
                     if _is_short:
-                        top_n = min(15, len(passed_candidates))
+                        top_n = min(150, len(passed_candidates))
                         idx = random.randint(0, top_n - 1)
                     else:
                         idx = 0  # Strict highest for long words
@@ -986,7 +991,7 @@ class Label:
                 if early_passed_candidates:
                     early_passed_candidates.sort(key=lambda x: x[1], reverse=True)
                     if _is_short:
-                        top_n = min(15, len(early_passed_candidates))
+                        top_n = min(150, len(early_passed_candidates))
                         idx = random.randint(0, top_n - 1)
                     else:
                         idx = 0  # Strict highest for long words
@@ -1420,24 +1425,25 @@ class Sentence_Set:
         """Get distractors using specified stuff"""
         lang = _detect_language(params)
         
-        # --- NEW: SENTENCE-LEVEL BATCH TAGGING ---
-        # Aggregate all target words from all labels to minimize neural inference calls.
-        if lang == 'de' and hasattr(d, 'batch_tag_words'):
-            all_targets = set()
-            for label in self.labels.values():
-                if label.words:
-                    t = strip_punct(label.words[0]).lower()
-                    if t: all_targets.add(t)
-            
-            # Also include first-word targets if they differ
+        # --- HYBRID APPROACH: INPUT-LEVEL BATCH TAGGING ---
+        # Aggregate all target words and their Stanza POS tags, 
+        # then verify them against HanTa to grow the POS cache perfectly.
+        if lang == 'de' and hasattr(d, 'batch_tag_inputs'):
+            input_stanza_tags = {}
             for sent in self.sentences:
-                if sent.words:
-                    t = strip_punct(sent.words[0]).lower()
-                    if t: all_targets.add(t)
+                for i, w in enumerate(sent.words):
+                    t = strip_punct(w).lower()
+                    if t:
+                        if t not in input_stanza_tags:
+                            input_stanza_tags[t] = set()
+                        if hasattr(sent, 'pos_tags') and sent.pos_tags and i < len(sent.pos_tags):
+                            pos = sent.pos_tags[i]
+                            if pos and pos != 'X':
+                                input_stanza_tags[t].add(pos)
             
-            if all_targets:
-                logging.info(f"[PERFORMANCE] Batch-tagging {len(all_targets)} targets for optimized selection.")
-                d.batch_tag_words(list(all_targets), params=params)
+            if input_stanza_tags:
+                logging.info(f"[PERFORMANCE] Hybrid Batch-tagging {len(input_stanza_tags)} target types.")
+                d.batch_tag_inputs(input_stanza_tags, params=params)
 
         banned = repeats.banned[:] #don't allow duplicate distractors within the set
         local_banned = []
