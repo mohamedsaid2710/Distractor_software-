@@ -8,7 +8,7 @@ Built on Transformer-based language models (GPT-2), the pipeline selects real-wo
 
 Based on the original [Maze repository](https://github.com/vboyce/Maze) by Victoria Boyce. This implementation has been extensively adapted and now features distinct Transformer models, automated language-specific NLP tools, GPU batch processing, semantic embeddings, and an interactive config-tuning workflow.
 
-## $\color{SteelBlue}\text{Overview \& Capabilities}$
+## $\color{SteelBlue}\text{Overview and Capabilities}$
 
 - **Supported Languages:** 
   - English (`gpt2-medium` via spaCy `en_core_web_lg`)
@@ -63,7 +63,7 @@ For quality validation of a generated file, run:
 python assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en.txt --min-delta 0 --strict
 ```
 
-## $\color{SteelBlue}\text{Documentation \& Wiki}$
+## $\color{SteelBlue}\text{Wiki Documentation}$
 
 > 💡 **Why is this README not ENOUGH?**
 > Because this software offers granular control over surprisal thresholds, BPE tokenization scaling, and semantic filtering logic, **all detailed documentation has been moved to the Wiki.**
