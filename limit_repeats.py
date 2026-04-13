@@ -21,7 +21,9 @@ class Repeatcounter:
             self.distractors[word_key] += 1
         else:
             self.distractors[word_key] = 1
-        if self.limit:
+        
+        # Don't ban short words (3 or 4 letters) from repeating
+        if self.limit and len(word_key) > 4:
             if self.distractors[word_key] >= self.max:
                 self.banned.append(word_key)
 

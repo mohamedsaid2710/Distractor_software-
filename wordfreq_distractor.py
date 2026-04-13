@@ -29,7 +29,7 @@ def _is_english_dominant(token: str, margin: float = 0.3) -> bool:
 
 
 # QUALITY GATE: Runtime validator for cache words
-def _is_valid_cache_word(word: str, min_target_length: int = 3, lang: str = 'de') -> bool:
+def _is_valid_cache_word(word: str, min_target_length: int = 3, lang: str = 'de', short_min_zipf: float = 3.5, mid_min_zipf: float = 3.0) -> bool:
     """
     Quality gate for words pulled from POS cache.
     Rejects garbage patterns that pass frequency checks but are corrupted (xte, odr, rav, etc).
@@ -38,6 +38,8 @@ def _is_valid_cache_word(word: str, min_target_length: int = 3, lang: str = 'de'
         word: Word to validate
         min_target_length: Minimum target word length (relaxes gates for short words)
         lang: Language code ('de' for German enforcement)
+        short_min_zipf: Minimum Zipf for short words <= 5 chars
+        mid_min_zipf: Minimum Zipf for medium words 6-8 chars
     """
     word_lower = word.lower()
     word_len = len(word_lower)
@@ -80,19 +82,16 @@ def _is_valid_cache_word(word: str, min_target_length: int = 3, lang: str = 'de'
         if not re.search(r'[bcdfghjklmnpqrstvwxz]', word_lower):
             return False
     
-    # Gate 5: CRITICAL ZIPF VALIDATION (catches 'xte' Zipf:2.04, 'odr' Zipf:2.55, etc)
-    # For German, enforce strict minimum Zipf for short words
-    # Short words (≤5 chars) must have Zipf ≥ 4.0 (very confident)
-    # Medium words (6-8 chars) must have Zipf ≥ 3.5 (confident)
-    # Long words (9+ chars) can relax to Zipf ≥ 3.0 (wordfreq may not know compounds)
+    # Gate 5: CRITICAL ZIPF VALIDATION
+    # For German, enforce strict minimum Zipf configured by params
     if lang == 'de' and word_len < 9:
         try:
             z = wordfreq.zipf_frequency(word_lower, 'de')
             if word_len <= 5:
-                if z < 4.0:  # STRICT for short words
+                if z < short_min_zipf:  # STRICT for short words
                     return False
             elif word_len <= 8:
-                if z < 3.5:  # MEDIUM for medium words
+                if z < mid_min_zipf:  # MEDIUM for medium words
                     return False
         except Exception:
             return False  # If wordfreq fails, reject the word
@@ -173,13 +172,16 @@ class wordfreq_dict(distractor_dict):
             # QUALITY GATE: Skip garbage patterns
             # Validate each word relative to its own length
             _lang = getattr(self, 'lang', 'de')  # Default to German for legacy code
-            if not _is_valid_cache_word(lw, min_target_length=len(lw), lang=_lang):
+            _sz = float(self.params.get('short_word_min_zipf', 3.5)) if hasattr(self, 'params') else 3.5
+            _mz = float(self.params.get('min_zipf', 3.0)) if hasattr(self, 'params') else 3.0
+            
+            if not _is_valid_cache_word(lw, min_target_length=len(lw), lang=_lang, short_min_zipf=_sz, mid_min_zipf=_mz):
                 continue
                 
             l = len(lw)
             # TIGHTENED: A word is a noun if its category says so, OR if it's already in the noun pool
             # This prevents lowercased nouns from leaking into others_by_len
-            if category in ('NOUN', 'PROPN'):
+            if category == 'NOUN':
                 self.nouns_by_len[l].add(lw)
             else:
                 # Double-check: if it has been marked as a noun elsewhere, don't put in 'others'
@@ -307,7 +309,7 @@ class wordfreq_dict(distractor_dict):
                             self.pos_cache[word_l] = upos
                         
                         # Map casing in JSON cache
-                        if self.pos_cache[word_l] in ('NOUN', 'PROPN'):
+                        if self.pos_cache[word_l] == 'NOUN':
                             self.case_map[word_l] = word_raw.capitalize()
                         else:
                             self.case_map[word_l] = None
@@ -321,7 +323,7 @@ class wordfreq_dict(distractor_dict):
                         else:
                             upos = 'X'
                         self.pos_cache[word_l] = upos
-                        self.case_map[word_l] = word_l.capitalize() if upos in ('NOUN', 'PROPN') else None
+                        self.case_map[word_l] = word_l.capitalize() if upos == 'NOUN' else None
                     
         except Exception as e:
             print(f"[DIAG] batch_tag_words Stanza failed: {e}", flush=True)
@@ -369,7 +371,9 @@ class wordfreq_dict(distractor_dict):
         # Instead, rely on _is_valid_cache_word() quality gates (Zipf, vowels, etc.)
         # Pre-batch-tagging happens later in the pipeline if needed.
         if max_length <= 5:
-            distractor_opts = [w for w in distractor_opts if _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length, lang=_lang)]
+            _sz = float(params.get('short_word_min_zipf', 3.5)) if params else 3.5
+            _mz = float(params.get('min_zipf', 3.0)) if params else 3.0
+            distractor_opts = [w for w in distractor_opts if _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length, lang=_lang, short_min_zipf=_sz, mid_min_zipf=_mz)]
         
         # PRE-FILTER: Remove excluded words
         if exclude_words_set:
@@ -444,7 +448,7 @@ class wordfreq_dict(distractor_dict):
                     break
 
         # 3. --- HYPER-SPEED OPTIMIZATION: BATCH TAGGING ---
-        if self.nlp_sp is not None:
+        if getattr(self, 'nlp_sp', None) is not None or getattr(self, 'hanta', None) is not None:
             self.batch_tag_words(distractor_opts, params=params)
         
         # Pre-compute quality gate params once (German only)
@@ -516,7 +520,8 @@ class wordfreq_dict(distractor_dict):
                 if tag == 'X':
                     continue # Ironclad X Rejection
                 is_propn = (tag == 'PROPN')
-                is_noun = (tag in ('NOUN', 'PROPN'))
+                # Gold Standard: PROPN is a Non-Noun distractor (lowercased)
+                is_noun = (tag == 'NOUN')
             
             # Generic fallback if not already determined in cache
             if not is_noun and not in_cache:
@@ -713,18 +718,6 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         except Exception as e:
             logging.error(f"[CACHE] Error loading German POS cache: {e}")
 
-        # Grounded Noun Guard: using spacy's German model for robust orthography
-        import spacy
-        try:
-            # Using 'lg' (Large) model for better accuracy if available
-            self.spacy_nlp = spacy.load("de_core_news_lg")
-        except:
-            # Fallback to 'sm' (Small) if only that is installed
-            try:
-                self.spacy_nlp = spacy.load("de_core_news_sm")
-            except:
-                self.spacy_nlp = None
-
         # HanTa Morphological Dictionary Bouncer
         self.hanta = None
         try:
@@ -765,8 +758,6 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             # If the common casing is Titlecase, it's almost certainly a NOUN.
             self.common_casing[lw] = raw.strip()
 
-        self.nlp_sp = None
-        self._init_spacy()
         self._build_length_index()
         self._load_pos_overrides(params.get('pos_overrides', 'pos_overrides.txt'))
 
@@ -781,7 +772,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             
             # 3. ABSOLUTE TRUTH: The Cache is final.
             # We trust the UPOS in the JSON file above all else.
-            if upos in ('NOUN', 'PROPN'):
+            if upos == 'NOUN':
                 self.case_map[word_l] = word_l.capitalize()
                 self.nouns_by_len[l].add(word_l)
                 if word_l in self.others_by_len[l]:
@@ -814,56 +805,18 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         except Exception as e:
             logging.error(f"Failed to load POS overrides: {e}")
 
-    def _init_spacy(self):
-        """Load Stanza model for German NLP (replacing legacy SpaCy)."""
-        try:
-            import stanza
-            # Try to load; download if necessary
-            stanza.download('de')
-            use_gpu = True
-            try:
-                self.nlp_sp = stanza.Pipeline('de', processors='tokenize,mwt,pos,lemma', use_gpu=use_gpu)
-            except Exception:
-                stanza.download('de')
-                self.nlp_sp = stanza.Pipeline('de', processors='tokenize,mwt,pos,lemma', use_gpu=use_gpu)
-            logging.info("Loaded Stanza model for DE token classification.")
-        except ImportError:
-            logging.error("Stanza not found. Please install with: pip install stanza")
-            self.nlp_sp = None
-        except Exception as e:
-            logging.error(f"Error loading Stanza: {e}")
-            self.nlp_sp = None
-
     def _eval_single_word_case(self, token_lower):
-        """POS check using Stanza."""
+        """POS check using HanTa Morphological Dictionary (Replacing Stanza)."""
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
 
-        if self.nlp_sp is not None:
-            try:
-                # USE NEUTRAL SENTENCE FRAME FOR 100% ACCURACY
-                # "Das ist ein {word}." forces Stanza to see the word in a noun slot.
-                # Verbs like 'zog' will be correctly tagged as VERB because they fail the noun slot.
-                frame = f"Das ist ein {token_lower}."
-                doc = self.nlp_sp(frame)
-                
-                # The word we care about is at index 3: "Das(0) ist(1) ein(2) {token}(3) .(4)"
-                if len(doc.sentences) > 0 and len(doc.sentences[0].words) >= 4:
-                    final_pos = doc.sentences[0].words[3].upos
-                elif doc.sentences and doc.sentences[0].words:
-                    # Fallback to first word if frame failed
-                    final_pos = doc.sentences[0].words[0].upos
-                else:
-                    final_pos = 'X'
-                
-                self._record_pos_tag(token_lower, final_pos)
-            except Exception as e:
-                logging.error(f"[STANZA] Frame tagging error for {token_lower}: {e}")
-                self.case_map[token_lower] = None
+        if getattr(self, 'hanta', None) is not None:
+            # Re-use the flawless batch engine rather than writing duplicate HanTa logic
+            self.batch_tag_words([token_lower])
         else:
             self.case_map[token_lower] = None
 
-        return self.case_map[token_lower]
+        return self.case_map.get(token_lower)
 
     def has_titlecase_variant(self, token):
         """Public check for noun/titlecase status of a token (lowercase or otherwise).
@@ -876,12 +829,12 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         
         # PRIORITY 0: Manual Overrides
         if hasattr(self, 'overrides') and t_lower in self.overrides:
-            return self.overrides[t_lower] in ('NOUN', 'PROPN')
+            return self.overrides[t_lower] == 'NOUN'
 
         # PRIORITY 1: Check RUNTIME POS cache (populated by batch_tag_words with correct Stanza)
         if hasattr(self, 'pos_cache') and t_lower in self.pos_cache:
             pos_tag = self.pos_cache[t_lower]
-            result = pos_tag in ('NOUN', 'PROPN')
+            result = pos_tag == 'NOUN'
             return result
         
         # PRIORITY 2: Check JSON Dictionary Pre-filtered Noun List (Critical for 0-Candidate Fallback pools)
@@ -933,7 +886,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
         # STTS to UPOS Map
         stts_map = {
-            'NN': 'NOUN', # 'NE' (Proper Nouns) purposely omitted so they evaluate as 'X',
+            'NN': 'NOUN', 'NE': 'PROPN', # NE explicitly mapped to PROPN so the parameter controls it
             'ADJA': 'ADJ', 'ADJD': 'ADJ',
             'VVFIN': 'VERB', 'VVIMP': 'VERB', 'VVINF': 'VERB', 'VVIZU': 'VERB', 'VVPP': 'VERB',
             'VMFIN': 'VERB', 'VMINF': 'VERB', 'VMPP': 'VERB',
@@ -959,7 +912,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             upos = stts_map.get(tag, 'X')
             
             # Additional safety: If HanTa says it's a noun, ensure the true lowercase form isn't natively a verb/adj
-            if upos in ('NOUN', 'PROPN'):
+            if upos == 'NOUN':
                 _, tag_low = self.hanta.analyze(w.lower())
                 upos_low = stts_map.get(tag_low, 'X')
                 
@@ -978,7 +931,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         self.pos_cache[word] = upos
         l = len(word)
         
-        is_noun = upos in ('NOUN', 'PROPN')
+        is_noun = upos == 'NOUN'
         
         if is_noun:
             self.case_map[word] = word.capitalize()

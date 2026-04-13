@@ -10,7 +10,7 @@ except ImportError:
     _wordfreq_mod = None
 
 print("\n" + "="*60)
-print("GERMAN CASING V2.2: DUAL-CHECK + SENTENCE-FRAME TAGGING ACTIVE")
+print("GERMAN CASING V3.0: STRICT MORPHOLOGICAL DICTIONARY (HanTa) ACTIVE")
 print("="*60 + "\n")
 
 from wordfreq_distractor import _is_lexically_garbage
@@ -943,6 +943,9 @@ class Label:
                 candidate_scores.append(dict(zip(qualified_candidates, all_scores)))
                 
             # 3. Iterate through candidates and apply surprisal filters/selection
+            passed_candidates = []
+            early_passed_candidates = []
+            
             for dist in qualified_candidates:
                 # Get the min surprisal across contexts (min of surprisals = worst case)
                 vals = [candidate_scores[j][dist] for j in range(len(self.probs))]
@@ -955,20 +958,39 @@ class Label:
                         meets_all = False
                         break
                 
-                # Update best_word trackers
-                if meets_all and min_surp_val > best_min_surp:
-                    best_min_surp = min_surp_val
-                    best_word = dist
-
-                if force_max_surprisal and is_early and early_boost > 0:
-                    if meets_all and min_surp_val > best_qualified_surp:
-                        best_qualified_surp = min_surp_val
-                        best_qualified_word = dist
-
-                if not force_max_surprisal and meets_all:
-                    # Apply grammatical casing based on the DISTRACTOR'S class
-                    best_word = dist
-                    break
+                if meets_all:
+                    if force_max_surprisal:
+                        passed_candidates.append((dist, min_surp_val))
+                        if is_early and early_boost > 0:
+                            early_passed_candidates.append((dist, min_surp_val))
+                    else:
+                        best_word = dist
+                        best_min_surp = min_surp_val
+                        break
+            
+            # If we enforce max surprisal, randomly select from the elite Top N to ensure dynamism for SHORT words.
+            # Long words revert to the strict #1 highest surprisal candidate.
+            if force_max_surprisal:
+                _desired_len = target_exact_len if target_exact_len is not None else target_preferred_len
+                _is_short = _desired_len is not None and _desired_len <= 4
+                
+                if passed_candidates:
+                    passed_candidates.sort(key=lambda x: x[1], reverse=True)
+                    if _is_short:
+                        top_n = min(15, len(passed_candidates))
+                        idx = random.randint(0, top_n - 1)
+                    else:
+                        idx = 0  # Strict highest for long words
+                    best_word, best_min_surp = passed_candidates[idx]
+                    
+                if early_passed_candidates:
+                    early_passed_candidates.sort(key=lambda x: x[1], reverse=True)
+                    if _is_short:
+                        top_n = min(15, len(early_passed_candidates))
+                        idx = random.randint(0, top_n - 1)
+                    else:
+                        idx = 0  # Strict highest for long words
+                    best_qualified_word, best_qualified_surp = early_passed_candidates[idx]
         # Mode B + early position boost: prefer the best candidate that meets
         # the boosted threshold.  Falls back to the unconstrained best_word if
         # nothing passed the threshold.
