@@ -81,7 +81,7 @@ python assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en.
 
 
 >## $\color{Crimson}\text{CAUTION}$ 
->This software utilizes large language models trained on massive datasets. Consequently, generated distractors may occasionally contain offensive or harmful terms. Therefore, make sure to always add these to exclude_*.txt files.\
+>This software utilizes large language models trained on massive datasets. Consequently, generated distractors may occasionally contain offensive or harmful terms. Therefore, make sure to always add these to exclude_*.txt files. 
 
 >## $\color{SeaGreen}\text{Important Note:}$ 
 > The output is not guaranteed to be **error-free** or **linguistically** perfect. Manual review and verification are recommended before using generated stimuli in formal research.
