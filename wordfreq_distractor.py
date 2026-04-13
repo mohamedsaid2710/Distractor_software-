@@ -921,7 +921,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         return ans if ans is not None else token
 
     def batch_tag_words(self, words, params=None, force_refresh=False):
-        \"\"\"Batch-tag German candidates strictly using HanTa Morphological Dictionary.\"\"\"
+        """Batch-tag German candidates strictly using HanTa Morphological Dictionary."""
         if not self.hanta or not words:
             return
 
