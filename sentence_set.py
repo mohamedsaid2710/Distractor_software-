@@ -505,19 +505,20 @@ class Label:
         sw_target = strip_punct(self.words[0]) if self.words else ""
         target_is_lower = sw_target[0].islower() if sw_target else True
 
-        if lang == 'de' and match_casing_only:
-            # ABSOLUTE TRUTH: Trust dictionary cache above all else for German.
-            # Mirror the target casing IF our dictionary confirms the category.
-            target_is_noun_dict = dictionary.has_titlecase_variant(sw_target)
-            if target_pos in ('NOUN', 'PROPN') or target_is_noun_dict:
-                target_is_noun = True
-            elif target_pos is not None:
-                target_is_noun = False
-            else:
-                target_is_noun = target_is_noun_dict
-        elif not match_casing_only:
-            # Pure POS mode: prioritize dictionary cache via target_pos (checked first in get_candidate_pos)
-            target_is_noun = (target_pos in ('NOUN', 'PROPN'))
+        if not pos_available:
+            if lang == 'de' and match_casing_only:
+                # ABSOLUTE TRUTH: Trust dictionary cache above all else for German.
+                # Mirror the target casing IF our dictionary confirms the category.
+                target_is_noun_dict = dictionary.has_titlecase_variant(sw_target)
+                if target_pos in ('NOUN', 'PROPN') or target_is_noun_dict:
+                    target_is_noun = True
+                elif target_pos is not None:
+                    target_is_noun = False
+                else:
+                    target_is_noun = target_is_noun_dict
+            elif not match_casing_only:
+                # Pure POS mode: prioritize dictionary cache via target_pos (checked first in get_candidate_pos)
+                target_is_noun = (target_pos in ('NOUN', 'PROPN'))
 
         # --- POS FILTER ---
         pos_filter = None

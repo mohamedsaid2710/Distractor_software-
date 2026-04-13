@@ -774,9 +774,13 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             if upos in ('NOUN', 'PROPN'):
                 self.case_map[word_l] = word_l.capitalize()
                 self.nouns_by_len[l].add(word_l)
+                if word_l in self.others_by_len[l]:
+                    self.others_by_len[l].remove(word_l)
             else:
                 self.case_map[word_l] = None
                 self.others_by_len[l].add(word_l)
+                if word_l in self.nouns_by_len[l]:
+                    self.nouns_by_len[l].remove(word_l)
 
 
     def _load_pos_overrides(self, path):
@@ -942,7 +946,9 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         if self.spacy_nlp and to_tag:
             try:
                 # Use nlp.pipe for massively parallel SpaCy processing
-                for doc in self.spacy_nlp.pipe(to_tag, batch_size=BATCH_SIZE):
+                # FIX: Capitalize the words so SpaCy accurately detects nouns
+                capitalized_to_tag = [w.capitalize() for w in to_tag]
+                for doc in self.spacy_nlp.pipe(capitalized_to_tag, batch_size=BATCH_SIZE):
                     if len(doc) > 0 and doc[0].pos_ in ['NOUN', 'PROPN']:
                         spacy_noun_map[doc.text.lower()] = True
             except Exception as e:
