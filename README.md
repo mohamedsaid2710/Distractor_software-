@@ -1,14 +1,14 @@
-# Distractor Software
+# $\color{RoyalBlue}\text{Distractor Software}$
 
-**Maze-style distractor stimulus generator for psycholinguistic experiments in English, German, and Arabic.**
+**Maze-style distractor stimulus generator for (psycho)linguistic experiments in English, German, and Arabic.**
 
 Built on Transformer-based language models (GPT-2), the pipeline selects real-word distractors that are contextually implausible while matching the target word in length and frequency range.
 
-## Attribution
+## $\color{DarkSlateGray}\text{Attribution}$
 
 Based on the original [Maze repository](https://github.com/vboyce/Maze) by Victoria Boyce. This implementation has been extensively adapted and now features distinct Transformer models, automated language-specific NLP tools, GPU batch processing, semantic embeddings, and an interactive config-tuning workflow.
 
-## Overview & Capabilities
+## $\color{SteelBlue}\text{Overview \& Capabilities}$
 
 - **Supported Languages:** 
   - English (`gpt2-medium` via spaCy `en_core_web_lg`)
@@ -23,7 +23,7 @@ Based on the original [Maze repository](https://github.com/vboyce/Maze) by Victo
 - **First-Word Placeholder:** Because the first word of a sentence has no prior context, generating a meaningful linguistic distractor is impossible. The software automatically uses a length-matched placeholder (e.g., `x-x-x`) for the first token to ensure a neutral start for participants.
 - **Output Formats:** Standard delimited tables or ready-to-deploy PCIbex lines (`ibexify`).
 
-## Quick Start
+## $\color{SteelBlue}\text{Quick Start}$
 
 It is **highly recommended** to run this software on a GPU-enabled environment (like Google Colab or an academic computing cluster).
 
@@ -63,7 +63,7 @@ For quality validation of a generated file, run:
 python assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en.txt --min-delta 0 --strict
 ```
 
-## Documentation & Wiki
+## $\color{SteelBlue}\text{Documentation \& Wiki}$
 
 > 💡 **Why is this README not ENOUGH?**
 > Because this software offers granular control over surprisal thresholds, BPE tokenization scaling, and semantic filtering logic, **all detailed documentation has been moved to the Wiki.**
@@ -80,12 +80,12 @@ python assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en.
 - 🗺️ **[Code Map](https://github.com/mohamedsaid2710/Distractor_software-/wiki/Code-Map)** (File-by-file overview of the codebase)
 
 
->## $\color{red}\text{CAUTION}$ 
+>## $\color{Crimson}\text{CAUTION}$ 
 >This software utilizes large language models trained on massive datasets. Consequently, generated distractors may occasionally contain offensive or harmful terms. Therefore, make sure to always add these to exclude_*.txt files.\
 
->## $\color{green}\text{Important Note:}$ 
+>## $\color{SeaGreen}\text{Important Note:}$ 
 > The output is not guaranteed to be **error-free** or **linguistically** perfect. Manual review and verification are recommended before using generated stimuli in formal research.
 
-## License
+## $\color{DarkSlateGray}\text{License}$
 
 MIT License. See [LICENSE](LICENSE) for details.
