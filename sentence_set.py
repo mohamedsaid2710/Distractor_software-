@@ -554,7 +554,6 @@ class Label:
         # rather than processed in strict frequency order, which prevents "weh" and "nah" oversaturation.
         target_lens_for_shuffle = [len(strip_punct(w)) for w in self.words if strip_punct(w)]
         if target_lens_for_shuffle and max(target_lens_for_shuffle) <= 4:
-            import random
             random.shuffle(distractor_opts)
         
         # --- ADAPTIVE LENGTH SEARCH DEPRECATED ---

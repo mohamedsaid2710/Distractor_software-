@@ -7,7 +7,7 @@ import logging
 import json
 import bisect
 from collections import defaultdict
-
+from HanTa import HanoverTagger as ht
 from utils import strip_punct
 from distractor import distractor_dict, distractor
 
@@ -726,13 +726,15 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 self.spacy_nlp = None
 
         # HanTa Morphological Dictionary Bouncer
-        try:
-            from HanTa import HanoverTagger as ht
-            self.hanta = ht.HanoverTagger('morphmodel_ger.pgz')
-            print("    [HanTa] Hannover Tagger loaded for strict dictionary lookups.", flush=True)
-        except Exception as e:
-            print(f"    [HanTa] WARNING: HanTa not loaded ({e}). Please pip install HanTa.", flush=True)
-            self.hanta = None
+        self.hanta = None
+        if HANTA_AVAILABLE:
+            try:
+                self.hanta = ht.HanoverTagger('morphmodel_ger.pgz')
+                print("    [HanTa] Hannover Tagger loaded for strict dictionary lookups.", flush=True)
+            except Exception as e:
+                print(f"    [HanTa] WARNING: HanTa model not loaded ({e}).", flush=True)
+        else:
+            print("    [HanTa] WARNING: HanTa not installed. Please install HanTa.", flush=True)
 
         freq_dict = wordfreq.get_frequency_dict("de")
         source_words = list(freq_dict.keys())
