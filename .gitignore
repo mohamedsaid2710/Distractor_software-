@@ -64,20 +64,14 @@ models/aubmindlab-aragpt2-medium/[0-9a-f]*[0-9a-f]
 # Keep generated wiki builds out (GitHub wiki is separate)
 /docs/wiki/
 *.wiki/
-Untitled spreadsheet - Sheet1.csv 
-notes.txt
-txt.txt 
-3.5zipf.txt
-txt1.txt 
 cc.de.300.bin
 cc.de.300.bin.gz.part
-list.txt 
-plot_semantic_histogram.py
-plot_length_match.py
-plot_frequency_match.py
-find_silence.py 
-german_pipeline_audit.md
-ready.txt 
+cc.en.300.bin
+cc.en.300.bin.gz.part
+cc.ar.300.bin
+cc.ar.300.bin.gz.part
+
+scripts/plot_semantic_histogram.py
 DISTRACTOR_QUALITY_CHECKLIST.md
 software logic.md
 models/german_code/german_pos_cache_v2.json

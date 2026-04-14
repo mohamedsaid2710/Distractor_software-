@@ -10,7 +10,7 @@ except ImportError:
     _wordfreq_mod = None
 
 print("\n" + "="*60)
-print("GERMAN CASING V3.0: STRICT MORPHOLOGICAL DICTIONARY (HanTa) ACTIVE")
+print("DISTRACTOR MODULE LOADED")
 print("="*60 + "\n")
 
 from wordfreq_distractor import _is_lexically_garbage
@@ -43,7 +43,7 @@ _X_PLACEHOLDER_RE = re.compile(r"^x(?:-x)*$", re.IGNORECASE)
 _nlp_model = {}
 
 def _get_nlp_model(lang='de', params=None):
-    """Return a loaded NLP pipeline. Stanza for 'de', SpaCy for 'en', None for others."""
+    """Return a loaded NLP pipeline. Stanza for 'de', SpaCy for 'en', None for 'ar' (Farasa handled in wordfreq_distractor)."""
     global _nlp_model
     lang_lower = str(lang or '').lower()
     
@@ -59,7 +59,8 @@ def _get_nlp_model(lang='de', params=None):
     if key in _nlp_model:
         return _nlp_model[key]
         
-    if key in ('de', 'ar'):
+    if key == 'de':
+        # German: use Stanza for POS tagging
         try:
             import stanza
             # Use GPU if available, default to True
@@ -69,15 +70,21 @@ def _get_nlp_model(lang='de', params=None):
             
             try:
                 # Try to load; download if necessary
-                _nlp_model[key] = stanza.Pipeline(key, processors='tokenize,mwt,pos,lemma' if key == 'de' else 'tokenize,pos,lemma', use_gpu=use_gpu)
+                _nlp_model[key] = stanza.Pipeline(key, processors='tokenize,mwt,pos,lemma', use_gpu=use_gpu)
             except Exception:
                 stanza.download(key)
-                _nlp_model[key] = stanza.Pipeline(key, processors='tokenize,mwt,pos,lemma' if key == 'de' else 'tokenize,pos,lemma', use_gpu=use_gpu)
+                _nlp_model[key] = stanza.Pipeline(key, processors='tokenize,mwt,pos,lemma', use_gpu=use_gpu)
             return _nlp_model[key]
         except ImportError:
             logging.error("Stanza not found. Please install with: pip install stanza")
             _nlp_model[key] = None
             return None
+    
+    elif key == 'ar':
+        # Arabic: uses Farasa (initialized in wordfreq_Arabic_zipf_dict class)
+        # This function returns None for Arabic as Farasa is handled separately
+        _nlp_model[key] = None
+        return None
     
     elif key == 'en':
         try:
@@ -139,7 +146,7 @@ def _is_x_placeholder_token(token):
 def _placeholder_for_length(length):
     """Build a first-position placeholder exactly matching the target word's length."""
     n = max(1, int(length))
-    return "x" * n
+    return "-".join(["x"] * n)
 
 
 def _copy_edge_punct_no_case(source_token, token):
