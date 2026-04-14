@@ -43,7 +43,7 @@ _X_PLACEHOLDER_RE = re.compile(r"^x(?:-x)*$", re.IGNORECASE)
 _nlp_model = {}
 
 def _get_nlp_model(lang='de', params=None):
-    """Return a loaded NLP pipeline. Stanza for 'de', SpaCy for 'en', None for 'ar' (Farasa handled in wordfreq_distractor)."""
+    """Return a loaded NLP pipeline. Stanza for 'de' and 'ar' (input context only), SpaCy for 'en'."""
     global _nlp_model
     lang_lower = str(lang or '').lower()
     
@@ -59,8 +59,8 @@ def _get_nlp_model(lang='de', params=None):
     if key in _nlp_model:
         return _nlp_model[key]
         
-    if key == 'de':
-        # German: use Stanza for POS tagging
+    if key in ('de', 'ar'):
+        # German/Arabic: use Stanza for context-aware POS tagging of real inputs
         try:
             import stanza
             # Use GPU if available, default to True
@@ -79,12 +79,6 @@ def _get_nlp_model(lang='de', params=None):
             logging.error("Stanza not found. Please install with: pip install stanza")
             _nlp_model[key] = None
             return None
-    
-    elif key == 'ar':
-        # Arabic: uses Farasa (initialized in wordfreq_Arabic_zipf_dict class)
-        # This function returns None for Arabic as Farasa is handled separately
-        _nlp_model[key] = None
-        return None
     
     elif key == 'en':
         try:

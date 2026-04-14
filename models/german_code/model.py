@@ -187,10 +187,10 @@ class GermanScorer(lang_model):
         return float(surprisals[token].item())
 
     def get_surprisal_batch_from_hidden(self, hidden, words, batch_size=None):
-        """Score a list of words in parallel batches using 'Hyper-Speed v4' (Selective Slicing).
+        """Score a list of words in parallel batches using Multi-Token Summation.
         
-        This version is 100% stable and provides a 60x speedup by only calculating 
-        the probabilities for the target token, keeping memory usage at ~50MB per batch.
+        This aligns identically with get_surprisal_from_hidden by scoring and 
+        summing the joint log-probability of ALL sub-tokens for a given word.
         
         Args:
             hidden: Context token IDs
@@ -200,36 +200,35 @@ class GermanScorer(lang_model):
         if not words:
             return []
         
-        # Use instance batch_size if not overridden
         if batch_size is None:
-            batch_size = self.batch_size
+            batch_size = getattr(self, 'model_batch_size', getattr(self, 'batch_size', 500))
             
         ctx_ids = list(hidden) if isinstance(hidden, (list, tuple)) else list(hidden)
         ctx_len = len(ctx_ids)
         all_results = []
         pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
         
-        # Focused Context window (Standard for Maze)
+        # Focused Context window
         MAX_CONTEXT = 64
         allowed_ctx = min(ctx_len, MAX_CONTEXT)
         active_ctx = ctx_ids[-allowed_ctx:] if ctx_len > 0 else []
+        n_ctx = len(active_ctx)
 
         for i in range(0, len(words), batch_size):
             chunk = words[i:i + batch_size]
             batch_ids = []
             batch_masks = []
+            word_lengths = []
             
             for w in chunk:
                 parts = self.tokenizer.encode(w, add_special_tokens=False)
                 if not parts:
                     parts = [pad_id]
-                
-                # Combine context and the word
+                word_lengths.append(len(parts))
                 full_seq = active_ctx + parts
                 batch_ids.append(full_seq)
                 batch_masks.append([1] * len(full_seq))
             
-            # Pad the batch
             max_batch_len = max(len(s) for s in batch_ids)
             padded_ids = []
             padded_masks = []
@@ -242,30 +241,41 @@ class GermanScorer(lang_model):
             mask_tensor = torch.tensor(padded_masks, device=self.device)
             
             with torch.no_grad():
-                # Parallel Forward Pass
                 outputs = self.model(input_tensor, attention_mask=mask_tensor)
                 
-                # SELECTIVE SLICING: Only take the last token (the distractor)
-                # This is the 3.2 GB -> 50 MB memory win.
-                logits = outputs.logits[:, -1, :] 
+                # Get log probabilities over the entire vocabulary for the sequence
+                log_probs = F.log_softmax(outputs.logits, dim=-1)
                 
-                # Memory-Efficient Surprisal calculation
-                log_sum_exp = torch.logsumexp(logits, dim=-1)
+                # We need the log-probs of the true target tokens (shift right)
+                # input_tensor[:, 1:] are the actual tokens observed
+                target_ids = input_tensor[:, 1:]
+                # Gather log-probs for the specific observed tokens
+                token_logps = log_probs[:, :-1, :].gather(2, target_ids.unsqueeze(-1)).squeeze(-1)
                 
-                # Extract the logit for the specific target token (the word itself)
-                target_token_ids = torch.tensor([s[len(active_ctx)] if len(s) > len(active_ctx) else s[-1] for s in batch_ids], device=self.device)
-                target_logits = logits.gather(1, target_token_ids.unsqueeze(-1)).squeeze(-1)
-                
-                # Final log-probability in bits
-                token_logps = target_logits - log_sum_exp
-                surprisals = -token_logps / math.log(2)
-                
-                all_results.extend(surprisals.tolist())
+                for b_idx in range(len(chunk)):
+                    c_len = word_lengths[b_idx]
+                    
+                    start_idx = n_ctx - 1
+                    end_idx = start_idx + c_len
+                    
+                    if start_idx < 0:
+                        start_idx = 0
+                        end_idx = c_len
+                    
+                    # Prevent out-of-bounds just in case
+                    end_idx = min(end_idx, token_logps.shape[1])
+                    
+                    # Slice exact sub-tokens for the word
+                    selected = token_logps[b_idx, start_idx:end_idx]
+                    
+                    # Sum log-probabilities to compute joint probability for the target word
+                    total_ln = -selected.sum().item()
+                    all_results.append(float(total_ln / math.log(2)))
                 
                 # Cleanup
-                del logits
                 del outputs
-                del target_token_ids
+                del log_probs
+                del token_logps
                 if i % (batch_size * 2) == 0:
                     torch.cuda.empty_cache()
 

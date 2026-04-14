@@ -110,6 +110,7 @@ class wordfreq_dict(distractor_dict):
         self.others_by_len = defaultdict(set)
         self.lang = None
         self.nlp_sp = None
+        self.case_map = {}
 
     def get_words_by_len(self, desired_len):
         """Standard accessor for all words of a certain length."""
@@ -238,10 +239,15 @@ class wordfreq_dict(distractor_dict):
                 matches.append(word.text)
         return matches
 
-    def batch_tag_words(self, words, params=None):
-        """Tag a list of words in bulk using Stanza neural tagging. 
+    def batch_tag_words(self, words, params=None, force_refresh=False):
+        """Tag a list of words in bulk using SpaCy neural tagging. 
         
         Simple isolated word tagging (no context frames) to preserve pure two-mode logic.
+        
+        Args:
+            words: List of words to tag
+            params: Optional parameters dict
+            force_refresh: If True, ignore cache and re-tag all words (default: False)
         """
         if self.nlp_sp is None or not words:
             if self.nlp_sp is None:
@@ -252,7 +258,8 @@ class wordfreq_dict(distractor_dict):
             self.pos_cache = {}
 
         # ABSOLUTE TRUTH GUARD: Only tag words that are NOT already in our verified cache.
-        unique_words = list(set(w.lower() for w in words if w.lower() not in self.pos_cache))
+        # If force_refresh=True, ignore cache and tag all words.
+        unique_words = list(set(w.lower() for w in words if force_refresh or w.lower() not in self.pos_cache))
         
         if not unique_words:
             # print(f"    [NLP] Skipping Stanza: All {len(words)} candidates are already verified in Cache.", flush=True)
@@ -266,67 +273,28 @@ class wordfreq_dict(distractor_dict):
                 pass
 
         try:
-            import stanza
             display_count = False
             
             for i in range(0, len(unique_words), batch_size):
                 chunk = unique_words[i:i + batch_size]
                 
                 if not display_count:
-                    print(f"    [NLP] Running Stanza (isolated tagging) on {len(unique_words)} candidates...", flush=True)
+                    print(f"    [NLP] Running SpaCy tagging on {len(unique_words)} candidates...", flush=True)
                     display_count = True
                 
-                # German Specific Stanza Logic (Case Preservation + Framing is CRITICAL)
-                if getattr(self, 'lang', None) == 'de':
-                    # WRAP candidates in a neutral frame for context-sensitive tagging.
-                    # This ensures words like 'Ausschau' are tagged as NOUN, not ADJ.
-                    framed_texts = [f"Das ist {w}." for w in chunk]
-                    in_docs = [stanza.Document([], text=t) for t in framed_texts]
-                    out_chunk = self.nlp_sp(in_docs)
-                    
-                    for word_raw, doc in zip(chunk, out_chunk):
-                        # The candidate word is the 3rd token in "Das ist [WORD]."
-                        if doc.sentences and len(doc.sentences[0].words) >= 3:
-                            upos = doc.sentences[0].words[2].upos
-                        else:
-                            upos = 'X'
-                        
-                        # FINAL NACIG GUARD: 
-                        # If our heuristics are 100% sure it's a NOUN, we override Stanza's last word.
-                        common = self.common_casing.get(word_raw, "")
-                        
-                        # Only apply noun suffix override if the word is capitalized or known to be a noun
-                        is_cap = (word_raw and word_raw[0].isupper()) or (common and common[0].isupper())
-                        if is_cap and word_raw.endswith(self.NOUN_SUFFIXES):
-                            upos = "NOUN"
-                        elif (common and common[0].isupper()):
-                            upos = "NOUN"
-                        
-                        # ABSOLUTE TRUTH: Once in Cache, it is immutable. 
-                        # We don't override existing cache entries with Stanza hallucinations.
-                        word_l = word_raw.lower()
-                        if word_l not in self.pos_cache or self.pos_cache[word_l] in ('X', 'UNKNOWN'):
-                            self.pos_cache[word_l] = upos
-                        
-                        # Map casing in JSON cache
-                        if self.pos_cache[word_l] == 'NOUN':
-                            self.case_map[word_l] = word_raw.capitalize()
-                        else:
-                            self.case_map[word_l] = None
-                else:
-                    # Non-German: standard isolated tagging
-                    in_docs = [stanza.Document([], text=w) for w in chunk]
-                    out_chunk = self.nlp_sp(in_docs)
-                    for word_l, doc in zip(chunk, out_chunk):
-                        if doc.sentences and doc.sentences[0].words:
-                            upos = doc.sentences[0].words[0].upos
-                        else:
-                            upos = 'X'
-                        self.pos_cache[word_l] = upos
-                        self.case_map[word_l] = word_l.capitalize() if upos == 'NOUN' else None
+                # English context-free tagging using SpaCy
+                # spacy's pipe is highly optimized for batches
+                docs = list(self.nlp_sp.pipe(chunk, disable=['parser', 'ner']))
+                for word_l, doc in zip(chunk, docs):
+                    if len(doc) > 0:
+                        upos = doc[0].pos_
+                    else:
+                        upos = 'X'
+                    self.pos_cache[word_l] = upos
+                    self.case_map[word_l] = word_l.capitalize() if upos == 'PROPN' else None
                     
         except Exception as e:
-            print(f"[DIAG] batch_tag_words Stanza failed: {e}", flush=True)
+            print(f"[DIAG] batch_tag_words SpaCy failed: {e}", flush=True)
             for word_l in unique_words:
                 self.case_map[word_l] = None
                 self.pos_cache[word_l] = 'X'
@@ -628,6 +596,21 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
         super().__init__(params)
         self.lang = "en"
         self.nlp_sp = None
+        
+        # Initialize SpaCy for English NLP
+        try:
+            import spacy
+            for model_name in ['en_core_web_lg', 'en_core_web_md', 'en_core_web_sm']:
+                try:
+                    self.nlp_sp = spacy.load(model_name)
+                    break
+                except Exception:
+                    continue
+            if self.nlp_sp is None:
+                print("[WARN] SpaCy is installed, but no English models ('lg', 'md', or 'sm') were found. Tagging will skip. Run: python -m spacy download en_core_web_lg", flush=True)
+        except ImportError:
+            print("[WARN] SpaCy not found. English distractor tagging will skip. Run: pip install spacy", flush=True)
+
         exclude = params.get("exclude_words", "exclude_en.txt")
         include = params.get("include_words", None)
         lowercase_only = bool(params.get("lowercase_only", True))
@@ -660,7 +643,6 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
                 with open(cache_file, "r", encoding="utf-8") as f:
                     cached_data = json.load(f)
                     self.pos_cache.update(cached_data)
-                print(f"[CACHE] Successfully loaded {len(cached_data)} POS tags from {cache_file}!", flush=True)
         except Exception as e:
             print(f"[CACHE] Error loading EN POS cache: {e}")
 
@@ -719,6 +701,8 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
     def __init__(self, params={}):
         super().__init__(params)
         self.lang = "de"
+        self.nlp_sp = None
+
         exclude = params.get("exclude_words", "exclude_de.txt")
         min_word_len = int(params.get("min_word_len", 3))
         min_zipf = float(params.get("min_zipf", 3.0))
@@ -755,7 +739,6 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 with open(cache_file, "r", encoding="utf-8") as f:
                     cached_data = json.load(f)
                     self.pos_cache.update(cached_data)
-                print(f"    [CACHE] Loaded {len(cached_data)} German POS tags from disk.", flush=True)
                 # Seed nouns_by_len and others_by_len pools with loaded data
                 self._populate_pools_from_cache()
         except Exception as e:
@@ -764,8 +747,11 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         # HanTa Morphological Dictionary Bouncer
         self.hanta = None
         try:
+            import HanTa.HanoverTagger as ht
             self.hanta = ht.HanoverTagger('morphmodel_ger.pgz')
             print("    [HanTa] Hannover Tagger loaded for strict dictionary lookups.", flush=True)
+        except ImportError:
+            print("    [HanTa] WARNING: HanTa not installed. Run: pip install HanTa", flush=True)
         except NameError:
             print("    [HanTa] WARNING: HanoverTagger (ht) not imported globally.", flush=True)
         except Exception as e:
@@ -1291,17 +1277,17 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         
         # Initialize Farasa for Arabic NLP
         try:
+            import logging
+            logging.getLogger("farasapy_logger").setLevel(logging.ERROR)
             from farasa.pos import FarasaPOSTagger
             # interactive=True spawns a persistent Java process, making it much faster
             self.nlp_sp = FarasaPOSTagger(interactive=True)
-            print("[INFO] Farasa POSTagger loaded successfully for Arabic.", flush=True)
         except Exception as e:
             print(f"[WARN] Farasa POSTagger not found or failed to load. Install 'farasapy' for Arabic POS tagging. Error: {e}")
 
         try:
             from farasa.segmenter import FarasaSegmenter
             self.segmenter = FarasaSegmenter(interactive=True)
-            print("[INFO] Farasa Segmenter loaded successfully for Arabic prefix filtering.", flush=True)
         except Exception as e:
             print(f"[WARN] Farasa Segmenter not found. Arabic distractors may contain 'waow' prefixes. Error: {e}")
 
@@ -1336,7 +1322,6 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
                 with open(cache_file, "r", encoding="utf-8") as f:
                     cached_data = json.load(f)
                     self.pos_cache.update(cached_data)
-                print(f"[CACHE] Successfully loaded {len(cached_data)} POS tags from {cache_file}!", flush=True)
         except Exception as e:
             print(f"[CACHE] Error loading AR POS cache: {e}")
 
@@ -1498,7 +1483,7 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
             except Exception as e:
                 print(f"[HYBRID] Cache save failed: {e}")
 
-    def batch_tag_words(self, words, params=None):
+    def batch_tag_words(self, words, params=None, force_refresh=False):
         """Tag Arabic words using Farasa POSTagger."""
         if getattr(self, 'nlp_sp', None) is None or not words:
             return
@@ -1506,7 +1491,7 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
 
-        unique_words = list(set(w for w in words if w not in self.pos_cache))
+        unique_words = list(set(w for w in words if force_refresh or w not in self.pos_cache))
         if not unique_words:
             return
 

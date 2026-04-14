@@ -26,7 +26,7 @@ class lang_model:
         Return its surprisal (bits), or use -1 as error/surprisal not trusted  code"""
         pass
 
-    def get_surprisal_batch_from_hidden(self, hidden, words):
+    def get_surprisal_batch_from_hidden(self, hidden, words, batch_size=None):
         """Given a hidden state and a list of words, 
         return a list of surprisals. 
         Base implementation is sequential for compatibility."""

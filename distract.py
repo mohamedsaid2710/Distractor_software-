@@ -9,8 +9,37 @@ import time
 os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
+# Silence noisy PyTorch/HuggingFace warnings (e.g. UNEXPECTED bias tables)
+import transformers
+transformers.logging.set_verbosity_error()
+
+# Silence noisy dependency loggers (e.g. Farasa, HanTa)
+import logging
+logging.getLogger("farasapy_logger").setLevel(logging.ERROR)
+logging.getLogger("farasapy_logger").propagate = False
+logging.getLogger().setLevel(logging.WARNING)
+
 from main import run_stuff
 
+def print_splash(lang, model, nlp):
+    banner = r"""
+ ____  _     _                  _                  
+|  _ \(_)___| |_ _ __ __ _  ___| |_ ___  _ __ ___  
+| | | | / __| __| '__/ _` |/ __| __/ _ \| '__/ __| 
+| |_| | \__ \ |_| | | (_| | (__| || (_) | |  \__ \ 
+|____/|_|___/\__|_|  \__,_|\___|\__\___/|_|  |___/ 
+             - S o f t w a r e -"""
+
+    splash = f"""\033[96m{banner}
+\033[0m                                                                 
+=================================================================
+ \033[93m» Target Language \033[0m: {lang}
+ \033[93m» Model chosen \033[0m: {model}
+ \033[93m» Distractor NLP  \033[0m: {nlp}
+=================================================================
+\033[92m[ System Online. Initializing pipeline... ]\033[0m
+"""
+    print(splash, flush=True)
 
 def main():
     start_time = time.time()
@@ -38,6 +67,23 @@ def main():
         parser.error("Both input and output files are required.")
 
     try:
+        from set_params import set_params
+        params = set_params(params_path)
+        lang_str = "English"
+        dict_val = params.get("dictionary_class", "wordfreq_English_zipf_dict")
+        if "German" in dict_val:
+            lang_str = "German"
+        elif "Arabic" in dict_val:
+            lang_str = "Arabic"
+            
+        model_str = params.get("model_name", "GPT-2")
+        nlp_str = params.get("spacy_model", "NLP Tool")
+        if lang_str == "German": nlp_str = "HanTa / Stanza"
+        elif lang_str == "Arabic": nlp_str = "Farasa / Stanza"
+        elif lang_str == "English": nlp_str = "SpaCy"
+        
+        print_splash(lang_str, model_str, nlp_str)
+
         run_stuff(input_path, output_path, parameters=params_path, outformat=args.format)
         
         elapsed = time.time() - start_time

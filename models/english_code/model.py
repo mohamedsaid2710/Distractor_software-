@@ -187,5 +187,94 @@ class EnglishScorer(lang_model):
             total_ln = -selected.sum().item()
             return float(total_ln / math.log(2))
 
+    def get_surprisal_batch_from_hidden(self, hidden, words, batch_size=None):
+        """Score a list of words in parallel batches using Multi-Token Summation.
+        
+        This aligns identically with get_surprisal_from_hidden by scoring and 
+        summing the joint log-probability of ALL sub-tokens for a given word.
+        """
+        if not words:
+            return []
+        
+        if batch_size is None:
+            batch_size = getattr(self, 'model_batch_size', getattr(self, 'batch_size', 500))
+            
+        ctx_ids = list(hidden) if isinstance(hidden, (list, tuple)) else list(hidden)
+        ctx_len = len(ctx_ids)
+        all_results = []
+        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+        
+        # Focused Context window
+        MAX_CONTEXT = 64
+        allowed_ctx = min(ctx_len, MAX_CONTEXT)
+        active_ctx = ctx_ids[-allowed_ctx:] if ctx_len > 0 else []
+        n_ctx = len(active_ctx)
+
+        for i in range(0, len(words), batch_size):
+            chunk = words[i:i + batch_size]
+            batch_ids = []
+            batch_masks = []
+            word_lengths = []
+            
+            for w in chunk:
+                parts = self.tokenizer.encode(w, add_special_tokens=False)
+                if not parts:
+                    parts = [pad_id]
+                word_lengths.append(len(parts))
+                full_seq = active_ctx + parts
+                batch_ids.append(full_seq)
+                batch_masks.append([1] * len(full_seq))
+            
+            max_batch_len = max(len(s) for s in batch_ids)
+            padded_ids = []
+            padded_masks = []
+            for s, m in zip(batch_ids, batch_masks):
+                diff = max_batch_len - len(s)
+                padded_ids.append(s + [pad_id] * diff)
+                padded_masks.append(m + [0] * diff)
+                
+            input_tensor = torch.tensor(padded_ids, device=self.device)
+            mask_tensor = torch.tensor(padded_masks, device=self.device)
+            
+            with torch.no_grad():
+                outputs = self.model(input_tensor, attention_mask=mask_tensor)
+                
+                # Get log probabilities over the entire vocabulary for the sequence
+                log_probs = F.log_softmax(outputs.logits, dim=-1)
+                
+                # We need the log-probs of the true target tokens (shift right)
+                # input_tensor[:, 1:] are the actual tokens observed
+                target_ids = input_tensor[:, 1:]
+                # Gather log-probs for the specific observed tokens
+                token_logps = log_probs[:, :-1, :].gather(2, target_ids.unsqueeze(-1)).squeeze(-1)
+                
+                for b_idx in range(len(chunk)):
+                    c_len = word_lengths[b_idx]
+                    
+                    start_idx = n_ctx - 1
+                    end_idx = start_idx + c_len
+                    
+                    if start_idx < 0:
+                        start_idx = 0
+                        end_idx = c_len
+                    
+                    # Prevent out-of-bounds just in case
+                    end_idx = min(end_idx, token_logps.shape[1])
+                    
+                    # Slice exact sub-tokens for the word
+                    selected = token_logps[b_idx, start_idx:end_idx]
+                    
+                    # Sum log-probabilities to compute joint probability for the target word
+                    total_ln = -selected.sum().item()
+                    all_results.append(float(total_ln / math.log(2)))
+                
+                # Cleanup
+                del outputs
+                del log_probs
+                del token_logps
+                if i % (batch_size * 2) == 0:
+                    torch.cuda.empty_cache()
+
+        return all_results
 
 __all__ = ["EnglishScorer"]
