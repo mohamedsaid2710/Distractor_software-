@@ -29,6 +29,7 @@ class ArabicScorer(lang_model):
 
         device = params.get("device", None)
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        print(f">>> [SCORER] Initializing Arabic Scorer with model: {model_name}")
         
         # Store model_batch_size from params (default 256 for backward compatibility)
         self.model_batch_size = int(params.get("model_batch_size", params.get("batch_size", 256)))

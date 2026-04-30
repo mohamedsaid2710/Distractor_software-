@@ -82,3 +82,6 @@ scripts/plot_frequency_scatter.py
 length_scatter.png
 frequency_scatter.png
 semantic_similarity_histogram.png
+frequency_scatter_mediumgpt.png
+length_scatter_mediumgpt.png
+semantic_similarity_histogram_mediumgpt.png

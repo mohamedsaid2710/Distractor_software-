@@ -504,8 +504,8 @@ class wordfreq_dict(distractor_dict):
                     safe_tag = None
                     try:
                         if _lang == 'de' and getattr(self, 'hanta', None) is not None:
-                            w_cap = w.capitalize()
-                            _, safe_tag = self.hanta.analyze(w_cap)
+                            self.batch_tag_words([w])
+                            safe_tag = self.pos_cache.get(w_lower, 'X')
                         elif _lang == 'ar' and getattr(self, 'nlp_sp', None) is not None:
                             tagged = self.nlp_sp.tag(w)
                             parts = tagged.split('+')
@@ -1023,20 +1023,18 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             
             # Additional safety: If HanTa says it's a noun, ensure the true lowercase form isn't natively a verb/adj
             if upos == 'NOUN':
-                # Use tag_word to get the confidence score. Real adverbs/verbs are > -15.
-                # Hallucinations (like 'zombie' -> ADV) are < -30.
-                low_results = self.hanta.tag_word(w.lower())
-                if low_results:
-                    tag_low_str = low_results[0][0]
-                    score_low = float(low_results[0][1])
-                    
-                    # Clean HanTa parentheses (VV(INF) -> VVINF)
+                # Leverage HanTa's morphological lemmatizer properly:
+                # If a word is natively a noun, HanTa autocorrects its lemma to be capitalized (e.g. "hosentasche" -> "Hosentasche")
+                # If it's a true verb, the lemma remains lowercase (e.g. "gegoogelt" -> "googeln")
+                try:
+                    lemma_low, tag_low_str = self.hanta.analyze(w.lower())
                     clean_tag_low = tag_low_str.replace('(', '').replace(')', '')
-                    
-                    # Only overwrite if HanTa is actually confident it's a real word (> -20)
                     upos_low = stts_map.get(clean_tag_low, 'X')
-                    if upos_low in ('VERB', 'ADJ', 'ADV', 'AUX') and score_low > -20.0:
+                    
+                    if upos_low in ('VERB', 'ADJ', 'ADV', 'AUX') and lemma_low and lemma_low[0].islower():
                         upos = upos_low
+                except Exception:
+                    pass
                     
             self._record_pos_tag(w, upos)
 

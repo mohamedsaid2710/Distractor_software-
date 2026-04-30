@@ -29,6 +29,7 @@ class GermanScorer(lang_model):
 
         device = params.get("device", None)
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        print(f">>> [SCORER] Initializing German Scorer with model: {model_name}")
         
         # Store batch_size from params (default 256 for backward compatibility)
         self.batch_size = int(params.get("batch_size", 256))
