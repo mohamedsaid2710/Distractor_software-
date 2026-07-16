@@ -47,22 +47,22 @@ Run the pipeline using the `-i` (input), `-o` (output), and `-p` (parameter conf
 
 **English (en)**:
 ```bash
-python distract.py -i English_sample.txt -o output_en.txt -p params_en.txt -f delim
+python3 distract.py -i English_sample.txt -o output_en.txt -p params_en.txt -f delim
 ```
 
 **German (de)**:
 ```bash
-python distract.py -i german_sample.txt -o output_de.txt -p params_de.txt -f delim
+python3 distract.py -i german_sample.txt -o output_de.txt -p params_de.txt -f delim
 ```
 
 **Arabic (ar)**:
 ```bash
-python distract.py -i arabic_sample.txt -o output_ar.txt -p params_ar.txt -f delim
+python3 distract.py -i arabic_sample.txt -o output_ar.txt -p params_ar.txt -f delim
 ```
 
 For quality validation of a generated file, run:
 ```bash
-python assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en.txt --min-delta 0 --strict
+python3 assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en.txt --min-delta 0 --strict
 ```
 
 ## $\color{SteelBlue}\text{Wiki Documentation}$

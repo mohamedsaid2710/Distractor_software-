@@ -26,10 +26,10 @@ test_output*.txt
 # IDE / editor
 .vscode/
 .idea/
-
+plots/
 # AI Assistant Instructions
 docs/copilot-instructions.md
-
+CLAUDE.md
 # Temporary/Working files
 requirements_working.txt
 

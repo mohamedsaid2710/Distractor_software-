@@ -1,3 +1,20 @@
+"""Dictionary layer of the Maze pipeline: candidate pools and POS knowledge.
+
+This module owns everything about WHICH words may become distractors:
+
+- `wordfreq_dict` — base class: builds length-indexed word pools from the
+  `wordfreq` library, retrieves candidates by length + Zipf frequency band
+  (with tiered widening/fallbacks in `get_potential_distractors`), and keeps
+  the per-language POS caches that guard grammar and casing.
+- `wordfreq_English_zipf_dict` / `wordfreq_German_zipf_dict` /
+  `wordfreq_Arabic_zipf_dict` — language subclasses wiring in spaCy, HanTa +
+  Stanza (hybrid verification), and Farasa respectively.
+- `get_thresholds_en/de/ar` — map target words to (length, frequency) windows.
+
+HOW a candidate is finally scored/chosen (surprisal, thresholds, fallback
+stages) lives in `sentence_set.py`, not here.
+"""
+
 import wordfreq
 import os
 import re
@@ -12,10 +29,6 @@ from utils import strip_punct
 from distractor import distractor_dict, distractor
 
 
-"""
-Filter out non-German tokens that can appear in German vocab sources.
-The helper below drops words that are much more frequent in English than German.
-"""
 def _is_english_dominant(token: str, margin: float = 0.3) -> bool:
     """
     Return True if the word's English Zipf frequency exceeds German by `margin`. Uses wordfreq; any lookup failures return False.
@@ -97,6 +110,58 @@ def _is_valid_cache_word(word: str, min_target_length: int = 3, lang: str = 'de'
             return False  # If wordfreq fails, reject the word
     
     return True
+
+
+# Verified grammatical classes that may serve as NON-NOUN distractors.
+# PROPN (proper-noun giveaway) and X (junk/unknown) are deliberately absent.
+_SAFE_NON_NOUN_TAGS = ('VERB', 'ADJ', 'ADV', 'PRON', 'NUM', 'DET', 'PART',
+                       'ADP', 'CCONJ', 'SCONJ', 'AUX', 'INTJ')
+
+# German STTS tagset (used by HanTa) -> Universal POS. Shared by candidate
+# tagging (`batch_tag_words`) and the Stanza/HanTa hybrid input verification
+# (`batch_tag_inputs`). Anything not listed maps to 'X' (reject).
+STTS_TO_UPOS = {
+    'NN': 'NOUN', 'NE': 'PROPN',  # NE explicitly mapped to PROPN so the parameter controls it
+    'ADJA': 'ADJ', 'ADJD': 'ADJ',
+    'VVFIN': 'VERB', 'VVIMP': 'VERB', 'VVINF': 'VERB', 'VVIZU': 'VERB', 'VVPP': 'VERB',
+    'VMFIN': 'VERB', 'VMINF': 'VERB', 'VMPP': 'VERB',
+    'VAFIN': 'AUX', 'VAIMP': 'AUX', 'VAINF': 'AUX', 'VAPP': 'AUX',
+    'ADV': 'ADV', 'PROAV': 'ADV', 'PTKA': 'ADV',
+    'APPR': 'ADP', 'APPRART': 'ADP', 'APPO': 'ADP', 'APZR': 'ADP',
+    'ART': 'DET', 'PDAT': 'DET', 'PIAT': 'DET', 'PIDAT': 'DET', 'PPOSAT': 'DET', 'PWAT': 'DET',
+    'PDS': 'PRON', 'PIS': 'PRON', 'PPER': 'PRON', 'PPOSS': 'PRON', 'PRELS': 'PRON', 'PRF': 'PRON', 'PWS': 'PRON',
+    'KON': 'CCONJ', 'KOUI': 'SCONJ', 'KOUS': 'SCONJ', 'KOKOM': 'SCONJ',
+    'PTKZU': 'PART', 'PTKNEG': 'PART', 'PTKVZ': 'PART', 'PTKANT': 'PART',
+    'ITJ': 'INTJ'
+}
+
+
+def _farasa_tag_to_upos(tagged):
+    """Convert a raw Farasa tag string (e.g. 'S-و/CONJ+ال/DET+قمر/NOUN') to UPOS.
+
+    Walks the '+'-separated morphemes from the END, skipping clitic classes
+    (CONJ/PREP/DET/PART/PUNC) to find the true lexical head, then standardizes
+    the Farasa tag to Universal POS. Unknown/garbage tags become 'X'.
+    """
+    parts = tagged.split('+')
+    pos = 'X'
+    for part in reversed(parts):
+        if '/' in part:
+            curr = part.split('/')[-1].strip().upper()
+            if curr not in ('CONJ', 'PREP', 'DET', 'PART', 'PUNC'):
+                pos = curr
+                break
+    if pos == 'X' and parts:
+        if '/' in parts[-1]:
+            pos = parts[-1].split('/')[-1].strip().upper()
+
+    if pos == 'V': pos = 'VERB'
+    elif pos == 'PREP': pos = 'ADP'
+    elif pos == 'CONJ': pos = 'CCONJ'
+    elif 'PRON' in pos: pos = 'PRON'
+    elif pos not in ('NOUN', 'ADJ', 'ADV', 'NUM', 'DET', 'PART', 'PROPN'):
+        pos = 'X'
+    return pos
 
 
 class wordfreq_dict(distractor_dict):
@@ -184,10 +249,12 @@ class wordfreq_dict(distractor_dict):
             # This prevents lowercased nouns from leaking into others_by_len
             if category == 'NOUN':
                 self.nouns_by_len[l].add(lw)
-            else:
+            elif category in _SAFE_NON_NOUN_TAGS:
                 # Double-check: if it has been marked as a noun elsewhere, don't put in 'others'
                 if lw not in self.nouns_by_len[l]:
                     self.others_by_len[l].add(lw)
+            # PROPN and X entries enter NEITHER pool: proper nouns are giveaways and
+            # X marks junk/unknown — both must stay out of emergency fallback pools.
 
     def get_emergency_pool(self, length, is_noun=False):
         """Returns a pre-indexed list of words for the specified length and category."""
@@ -346,7 +413,28 @@ class wordfreq_dict(distractor_dict):
         # PRE-FILTER: Remove excluded words
         if exclude_words_set:
             distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() not in exclude_words_set]
-        
+
+        # TIER 1.25: Stepwise Frequency-Band Widening (`max_freq_widen`)
+        # If the tight band starved, widen [min_freq, max_freq] symmetrically by
+        # 1 natural-log unit (~0.43 Zipf) per step, up to `max_freq_widen` steps,
+        # keeping the same length window and quality gates as TIER 1.
+        max_freq_widen = int(params.get('max_freq_widen', 9))
+        if min_freq is not None and max_freq is not None:
+            widen = 0
+            while len(distractor_opts) < target_pool_size and widen < max_freq_widen:
+                widen += 1
+                wider_pool = self.get_words(min_length, max_length,
+                                            min_freq - widen, max_freq + widen,
+                                            pos_filter=None, use_spacy=False)
+                if max_length <= 5:
+                    _sz = float(params.get('short_word_min_zipf', 3.5)) if params else 3.5
+                    _mz = float(params.get('min_zipf', 3.0)) if params else 3.0
+                    wider_pool = [w for w in wider_pool if _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length, lang=_lang, short_min_zipf=_sz, mid_min_zipf=_mz)]
+                if exclude_words_set:
+                    wider_pool = [w for w in wider_pool if strip_punct(w).lower() not in exclude_words_set]
+                if wider_pool:
+                    distractor_opts = list(set(distractor_opts) | set(wider_pool))
+
         # TIER 1.5: Adaptive Frequency Widening
         # If tight band failed, use the optimized neighborhood search (binary search)
         if len(distractor_opts) < target_pool_size and 'target_zipf' in params:
@@ -507,6 +595,10 @@ class wordfreq_dict(distractor_dict):
                             self.batch_tag_words([w])
                             safe_tag = self.pos_cache.get(w_lower, 'X')
                         elif _lang == 'ar' and getattr(self, 'nlp_sp', None) is not None:
+                            # NOTE: deliberately NOT `_farasa_tag_to_upos` — this
+                            # variant keeps unknown Farasa tags as-is instead of
+                            # collapsing them to 'X', so the safe-tag membership
+                            # check below (not the parser) makes the reject call.
                             tagged = self.nlp_sp.tag(w)
                             parts = tagged.split('+')
                             pos = 'X'
@@ -690,10 +782,14 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
 
 class wordfreq_German_zipf_dict(wordfreq_dict):
     # NACIG Protocol: Ironclad German Noun Suffixes
+    # Last-resort heuristic for words absent from pos_cache/nouns_by_len.
+    # Only suffixes that are near-perfectly nominal in the verified cache belong
+    # here. Removed after empirical audit (July 2026): "in" (in, ein, bin, darin…),
+    # "or" (vor, bevor, davor, empor…), "ist" (ist, meist, preist… — 57% noun only).
     NOUN_SUFFIXES = (
-        "ung", "heit", "keit", "schaft", "tion", "sion", 
+        "ung", "heit", "keit", "schaft", "tion", "sion",
         "tät", "ismus", "ment", "ik", "anz", "enz",
-        "eur", "ling", "ist", "or", "erich", "in", "innen"
+        "eur", "ling", "erich", "innen"
     )
 
     """Zipf-based German dictionary built from the wordfreq library."""
@@ -798,7 +894,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         for word_l, upos in self.pos_cache.items():
             l = len(word_l)
             if not (1 < l < 100): continue # Bounds check
-            
+
             # 3. ABSOLUTE TRUTH: The Cache is final.
             # We trust the UPOS in the JSON file above all else.
             if upos == 'NOUN':
@@ -808,9 +904,14 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                     self.others_by_len[l].remove(word_l)
             else:
                 self.case_map[word_l] = None
-                self.others_by_len[l].add(word_l)
                 if word_l in self.nouns_by_len[l]:
                     self.nouns_by_len[l].remove(word_l)
+                # Only verified grammatical classes may act as non-noun distractors;
+                # PROPN (giveaway) and X (junk) stay out of the emergency pools.
+                if upos in _SAFE_NON_NOUN_TAGS:
+                    self.others_by_len[l].add(word_l)
+                elif word_l in self.others_by_len[l]:
+                    self.others_by_len[l].remove(word_l)
 
 
     def _load_pos_overrides(self, path):
@@ -928,21 +1029,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         to_tag = list(set(to_tag))
         if not to_tag: return
 
-        # STTS to UPOS Map
-        stts_map = {
-            'NN': 'NOUN', 'NE': 'PROPN',
-            'ADJA': 'ADJ', 'ADJD': 'ADJ',
-            'VVFIN': 'VERB', 'VVIMP': 'VERB', 'VVINF': 'VERB', 'VVIZU': 'VERB', 'VVPP': 'VERB',
-            'VMFIN': 'VERB', 'VMINF': 'VERB', 'VMPP': 'VERB',
-            'VAFIN': 'AUX', 'VAIMP': 'AUX', 'VAINF': 'AUX', 'VAPP': 'AUX',
-            'ADV': 'ADV', 'PROAV': 'ADV', 'PTKA': 'ADV',
-            'APPR': 'ADP', 'APPRART': 'ADP', 'APPO': 'ADP', 'APZR': 'ADP',
-            'ART': 'DET', 'PDAT': 'DET', 'PIAT': 'DET', 'PIDAT': 'DET', 'PPOSAT': 'DET', 'PWAT': 'DET',
-            'PDS': 'PRON', 'PIS': 'PRON', 'PPER': 'PRON', 'PPOSS': 'PRON', 'PRELS': 'PRON', 'PRF': 'PRON', 'PWS': 'PRON',
-            'KON': 'CCONJ', 'KOUI': 'SCONJ', 'KOUS': 'SCONJ', 'KOKOM': 'SCONJ',
-            'PTKZU': 'PART', 'PTKNEG': 'PART', 'PTKVZ': 'PART', 'PTKANT': 'PART',
-            'ITJ': 'INTJ'
-        }
+        stts_map = STTS_TO_UPOS  # shared module-level STTS -> UPOS map
 
         print(f"    [Hybrid] Verifying {len(to_tag)} Stanza-tagged inputs against HanTa...", flush=True)
         
@@ -992,21 +1079,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         to_tag = list(set(to_tag))
         if not to_tag: return
 
-        # STTS to UPOS Map
-        stts_map = {
-            'NN': 'NOUN', 'NE': 'PROPN', # NE explicitly mapped to PROPN so the parameter controls it
-            'ADJA': 'ADJ', 'ADJD': 'ADJ',
-            'VVFIN': 'VERB', 'VVIMP': 'VERB', 'VVINF': 'VERB', 'VVIZU': 'VERB', 'VVPP': 'VERB',
-            'VMFIN': 'VERB', 'VMINF': 'VERB', 'VMPP': 'VERB',
-            'VAFIN': 'AUX', 'VAIMP': 'AUX', 'VAINF': 'AUX', 'VAPP': 'AUX',
-            'ADV': 'ADV', 'PROAV': 'ADV', 'PTKA': 'ADV',
-            'APPR': 'ADP', 'APPRART': 'ADP', 'APPO': 'ADP', 'APZR': 'ADP',
-            'ART': 'DET', 'PDAT': 'DET', 'PIAT': 'DET', 'PIDAT': 'DET', 'PPOSAT': 'DET', 'PWAT': 'DET',
-            'PDS': 'PRON', 'PIS': 'PRON', 'PPER': 'PRON', 'PPOSS': 'PRON', 'PRELS': 'PRON', 'PRF': 'PRON', 'PWS': 'PRON',
-            'KON': 'CCONJ', 'KOUI': 'SCONJ', 'KOUS': 'SCONJ', 'KOKOM': 'SCONJ',
-            'PTKZU': 'PART', 'PTKNEG': 'PART', 'PTKVZ': 'PART', 'PTKANT': 'PART',
-            'ITJ': 'INTJ'
-        }
+        stts_map = STTS_TO_UPOS  # shared module-level STTS -> UPOS map
 
         print(f"    [HanTa] Looking up {len(to_tag)} words in strict morphological dictionary...", flush=True)
         
@@ -1057,9 +1130,13 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
                 self.others_by_len[l].remove(word)
         else:
             # If not a noun, only add to 'others' if not already known to be a noun
+            # AND it belongs to a verified grammatical class (no PROPN/X junk).
             if word not in self.nouns_by_len[l]:
                 self.case_map[word] = None
-                self.others_by_len[l].add(word)
+                if upos in _SAFE_NON_NOUN_TAGS:
+                    self.others_by_len[l].add(word)
+                elif word in self.others_by_len[l]:
+                    self.others_by_len[l].remove(word)
 
     def save_pos_cache(self):
         """Append-only disk write. If a word is already in the cache on disk, do NOT overwrite it!"""
@@ -1430,26 +1507,7 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         added = 0
         for w in to_tag:
             try:
-                tagged = self.nlp_sp.tag(w)
-                parts = tagged.split('+')
-                pos = 'X'
-                for part in reversed(parts):
-                    if '/' in part:
-                        curr = part.split('/')[-1].strip().upper()
-                        if curr not in ('CONJ', 'PREP', 'DET', 'PART', 'PUNC'):
-                            pos = curr
-                            break
-                if pos == 'X' and parts:
-                    if '/' in parts[-1]:
-                        pos = parts[-1].split('/')[-1].strip().upper()
-                
-                # Standardize
-                if pos == 'V': pos = 'VERB'
-                elif pos == 'PREP': pos = 'ADP'
-                elif pos == 'CONJ': pos = 'CCONJ'
-                elif 'PRON' in pos: pos = 'PRON'
-                elif pos not in ('NOUN', 'ADJ', 'ADV', 'NUM', 'DET', 'PART', 'PROPN'):
-                    pos = 'X'
+                pos = _farasa_tag_to_upos(self.nlp_sp.tag(w))
 
                 # Hybrid Agreement Check!
                 stanza_tags = clean_stanza_tags[w]
@@ -1498,35 +1556,8 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         # Interactive mode avoids re-loading the jar for each call so it's quite fast.
         for w in unique_words:
             try:
-                # e.g., "S-و/CONJ+ال/DET+قمر/NOUN"
-                tagged = self.nlp_sp.tag(w)  # this sometimes has whitespace/newlines
-                parts = tagged.split('+')
-                pos = 'X'
-                # Find the first true lexical tag from the end
-                for part in reversed(parts):
-                    if '/' in part:
-                        curr = part.split('/')[-1].strip().upper()
-                        # Filter out common prefix clitic classifications
-                        if curr not in ('CONJ', 'PREP', 'DET', 'PART', 'PUNC'):
-                            pos = curr
-                            break
-                if pos == 'X' and parts:
-                    if '/' in parts[-1]:
-                        pos = parts[-1].split('/')[-1].strip().upper()
-                
-                # Standardize Farasa outputs to Universal POS (UPOS) tags
-                # so it maps correctly with the rest of the software's filters
-                if pos == 'V': pos = 'VERB'
-                elif pos == 'PREP': pos = 'ADP'
-                elif pos == 'CONJ': pos = 'CCONJ'
-                elif 'PRON' in pos: pos = 'PRON'
-                elif pos not in ('NOUN', 'ADJ', 'ADV', 'NUM', 'DET', 'PART', 'PROPN'):
-                    if pos == 'X':
-                        pass # keep as X
-                    else:
-                        pos = 'X' # fallback
-                
-                self.pos_cache[w] = pos
+                # Raw Farasa output looks like "S-و/CONJ+ال/DET+قمر/NOUN"
+                self.pos_cache[w] = _farasa_tag_to_upos(self.nlp_sp.tag(w))
             except Exception:
                 self.pos_cache[w] = 'X'
 

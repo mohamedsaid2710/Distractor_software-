@@ -1,3 +1,31 @@
+"""Selection layer of the Maze pipeline: from candidate pools to final distractors.
+
+Data model (built by `input.py`):
+- `Sentence`      — one condition row: words, labels, per-position surprisals and
+                    LM contexts ("hiddens" = token-ID prefixes).
+- `Label`         — all positions across a `Sentence_Set` that share one label ID;
+                    ONE distractor is chosen per label and reused across condition
+                    rows (preserves Latin-square comparisons).
+- `Sentence_Set`  — all condition rows of one item ID.
+
+The heart is `Label.choose_distractor`, which runs in stages:
+ 1. thresholds     — per-context surprisal targets (min_abs / min_delta,
+                     early-position and short-word boosts);
+ 2. POS decision   — is the target a noun? build `pos_filter` (noun wall);
+ 3. pool           — `dictionary.get_potential_distractors` (tiered retrieval);
+ 4. cheap filters  — length, banned/avoid lists, PROPN, containment;
+ 5. semantic gate  — optional fastText dissimilarity filter;
+ 6. batch scoring  — GPU surprisal of every candidate in every context;
+ 7. selection      — Mode A (first passing) / Mode B (highest passing) /
+                     match-surprisal (closest to target, returns early);
+ 8. fallbacks      — six staged relaxations that guarantee a real word
+                     (placeholder "wort"/"word" is mathematically last).
+
+Casing is normalized at the very end by `_normalize_distractor_token`
+(German: POS-driven Titlecase via the dictionary's pos_cache; English:
+target-mirroring + acronym whitelist; Arabic: no casing).
+"""
+
 import logging
 from utils import copy_punct, strip_punct
 from limit_repeats import Repeatcounter
@@ -358,9 +386,20 @@ class Label:
         self.pos.append(None)
 
     def choose_distractor(self, model, dictionary, threshold_func, params, banned, local_banned=None):
-        """Given a parameters specified in params and stuff
-        Find a distractor not on banned (banned=already used in same sentence set)
-        That hopefully meets threshold"""
+        """Pick ONE distractor for this label (see module docstring for the stage map).
+
+        Args:
+            model:          language-model scorer (surprisal provider).
+            dictionary:     candidate-pool provider + POS cache authority.
+            threshold_func: maps target words -> (length, frequency) windows.
+            params:         full parameter dict from the params file.
+            banned:         globally over-used words (Repeatcounter) plus words
+                            already chosen for OTHER labels in this set.
+            local_banned:   words chosen within the current sentence set only.
+
+        Returns the chosen distractor (already casing-normalized); also stored
+        on `self.distractor`.
+        """
         if local_banned is None:
             local_banned = []
         lang = _detect_language(params)
@@ -846,14 +885,15 @@ class Label:
                             
                     return best_cand
 
-                best_candidate = None
                 best_candidate = _find_best_match(distractor_opts)
 
                 if best_candidate:
-                        # Apply grammatical casing based on the distractor's class
-                        self.distractor = _normalize_distractor_token(best_candidate, dictionary, lang=lang,
-                                                                      target_token=self.words[0] if self.words else "",
-                                                                      match_casing_only=match_casing_only)
+                    # Apply grammatical casing based on the distractor's class and
+                    # return immediately (documented Mode A match-surprisal behavior).
+                    self.distractor = _normalize_distractor_token(best_candidate, dictionary, lang=lang,
+                                                                  target_token=self.words[0] if self.words else "",
+                                                                  match_casing_only=match_casing_only)
+                    return self.distractor
 
         # 1. Pre-filter candidates (cheap checks: length, banned, POS, repeat)
         qualified_candidates = []
@@ -1347,6 +1387,10 @@ class Sentence_Set:
                 sentence.pos_tags = None
 
         # --- DYNAMIC LENGTH ALIGNMENT FIX (ORDERED) ---
+        # One distractor is reused for every position sharing a label, so all those
+        # positions must have the SAME target length for length matching to hold.
+        # If condition rows put different-length words on one label, we split the
+        # label by length ("3" -> "3_L5", "3_L7"), each getting its own distractor.
         new_label_ids = []
         seen_labs = set()
         for sentence in self.sentences:
@@ -1401,7 +1445,17 @@ class Sentence_Set:
                     pass
 
     def do_distractors(self, model, d, threshold_func, params, repeats):
-        """Get distractors using specified stuff"""
+        """Choose one distractor per label, then assemble per-sentence rows.
+
+        Order of operations:
+        1. (de/ar) hybrid batch-tag the input words to grow the POS cache;
+        2. `choose_distractor` per label — each pick is immediately added to the
+           banned lists so later labels in this set cannot repeat it;
+        3. per sentence: position 0 gets an x-x-x placeholder (or a real word if
+           `first_token_placeholder` is False), later positions copy their
+           label's distractor with the target's punctuation; German rows then
+           get a final POS-driven casing pass (`apply_postcase`).
+        """
         lang = _detect_language(params)
         
         # --- HYBRID APPROACH: INPUT-LEVEL BATCH TAGGING ---
