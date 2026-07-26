@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+title: "Distractor_software: Automated maze-task distractor generation for English, German, and Arabic"
+abstract: >-
+  Distractor_software generates maze-task distractor stimuli for psycholinguistic
+  experiments in English, German, and Arabic. Built on Transformer-based language
+  models (GPT-2), the pipeline selects real-word distractors that are contextually
+  implausible while matching the target word in length and frequency range.
+authors:
+  - family-names: Said
+    given-names: Mohammed
+    affiliation: University of Stuttgart
+    orcid: "https://orcid.org/0009-0005-0169-2656"
+version: 1.0.0
+date-released: "2026-07-25"
+doi: 10.5281/zenodo.21570030
+license: MIT
+repository-code: "https://github.com/mohamedsaid2710/Distractor_software-"
+keywords:
+  - psycholinguistics
+  - maze task
+  - sentence processing
+  - distractor generation
+  - stimulus generation
+  - natural language processing
+  - language models

@@ -93,21 +93,25 @@ python3 assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en
 If you use this software in your research, please cite it as follows:
 
 **APA (7th ed.):**
-> Said, M. (2026). *mohamedsaid2710/Distractor_software-: v1.0.0* (Version v1.0.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21570031
+> Said, M. (2026). *Distractor_software: Automated maze-task distractor generation for English, German, and Arabic* (Version 1.0.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21570030
 
 **BibTeX:**
 ```bibtex
-@software{mohammed_said_2026_21570031,
-  author       = {Mohammed Said},
-  title        = {mohamedsaid2710/Distractor\_software-: v1.0.0},
+@software{said_2026_distractor,
+  author       = {Said, Mohammed},
+  title        = {Distractor\_software: Automated maze-task distractor generation
+                  for English, German, and Arabic},
+  year         = {2026},
   month        = jul,
-  year         = 2026,
   publisher    = {Zenodo},
-  version      = {v1.0.0},
-  doi          = {10.5281/zenodo.21570031},
-  url          = {https://doi.org/10.5281/zenodo.21570031}
+  version      = {1.0.0},
+  doi          = {10.5281/zenodo.21570030},
+  url          = {https://doi.org/10.5281/zenodo.21570030}
 }
 ```
+
+> The DOI above is the *concept* DOI, which always resolves to the most recent
+> release. To cite this specific version, use `10.5281/zenodo.21570031`.
 
 
 ## $\color{DarkSlateGray}\text{License}$

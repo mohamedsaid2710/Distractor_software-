@@ -1,0 +1,34 @@
+{
+  "title": "Distractor_software: Automated maze-task distractor generation for English, German, and Arabic",
+  "upload_type": "software",
+  "description": "<p>Distractor_software generates maze-task distractor stimuli for psycholinguistic experiments in English, German, and Arabic. Built on Transformer-based language models (GPT-2), the pipeline selects real-word distractors that are contextually implausible while matching the target word in length and frequency range.</p><p>The tool was developed to produce the stimuli for the Master's thesis <em>Dissecting the Maze Task with Eye-Tracking</em> (University of Stuttgart) and subsequently generalized and released as open-source software. It adapts the original <a href=\"https://github.com/vboyce/Maze\">Maze repository</a> by Victoria Boyce, adding distinct Transformer models, language-specific NLP tooling, GPU batch processing, semantic embedding filters, and an interactive configuration workflow.</p>",
+  "creators": [
+    {
+      "name": "Said, Mohammed",
+      "affiliation": "University of Stuttgart",
+      "orcid": "0009-0005-0169-2656"
+    }
+  ],
+  "license": "mit",
+  "access_right": "open",
+  "language": "eng",
+  "keywords": [
+    "psycholinguistics",
+    "maze task",
+    "sentence processing",
+    "distractor generation",
+    "stimulus generation",
+    "natural language processing",
+    "language models",
+    "English",
+    "German",
+    "Arabic"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/mohamedsaid2710/Distractor_software-",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}
