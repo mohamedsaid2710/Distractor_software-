@@ -102,7 +102,7 @@ If you use this software in your research, please cite it as follows:
   title        = {Distractor\_software: Automated maze-task distractor generation
                   for English, German, and Arabic},
   year         = {2026},
-  month        = jul,
+  month        = mar,
   publisher    = {Zenodo},
   version      = {1.0.0},
   doi          = {10.5281/zenodo.21570030},
