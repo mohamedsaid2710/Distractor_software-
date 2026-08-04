@@ -1,6 +1,6 @@
 [project]
 name = "maze-automate"
-version = "0.1.0"
+version = "1.0.1"
 description = "Maze-style distractor stimulus generator for psycholinguistic experiments in English, German, and Arabic"
 readme = "README.md"
 license = {text = "MIT"}
