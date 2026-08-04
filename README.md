@@ -36,8 +36,13 @@ cd Distractor_software-
 
 # Install dependencies using uv (Fast & Reliable)
 uv sync
-source .venv/bin/activate  # (Optional) Activate for cleaner commands
+source .venv/bin/activate  # (Optional) Activate to drop the `uv run` prefix below
 ```
+
+> **Note:** `uv sync` installs PyTorch from the CUDA 11.8 index pinned in `pyproject.toml`. That build also runs on CPU, so it works on a machine without an NVIDIA GPU — it is just a large download. For a CPU-only host you can install the smaller CPU build instead:
+> ```bash
+> uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+> ```
 
 > **Note:** NLP/fastText models are huge. They will automatically download on the very first run. If you are preparing a remote execution, see the [Offline Model Loading guide](https://github.com/mohamedsaid2710/Distractor_software-/wiki) on the Wiki.
 
@@ -47,22 +52,22 @@ Run the pipeline using the `-i` (input), `-o` (output), and `-p` (parameter conf
 
 **English (en)**:
 ```bash
-python3 distract.py -i English_sample.txt -o output_en.txt -p params_en.txt -f delim
+uv run python distract.py -i English_sample.txt -o output_en.txt -p params_en.txt -f delim
 ```
 
 **German (de)**:
 ```bash
-python3 distract.py -i german_sample.txt -o output_de.txt -p params_de.txt -f delim
+uv run python distract.py -i german_sample.txt -o output_de.txt -p params_de.txt -f delim
 ```
 
 **Arabic (ar)**:
 ```bash
-python3 distract.py -i arabic_sample.txt -o output_ar.txt -p params_ar.txt -f delim
+uv run python distract.py -i arabic_sample.txt -o output_ar.txt -p params_ar.txt -f delim
 ```
 
 For quality validation of a generated file, run:
 ```bash
-python3 assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en.txt --min-delta 0 --strict
+uv run python assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en.txt --min-delta 0 --strict
 ```
 
 ## $\color{SteelBlue}\text{Wiki Documentation}$
