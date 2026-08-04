@@ -8,7 +8,10 @@ __pycache__/
 venv/
 env/
 .env
-uv.lock
+# NOTE: uv.lock is deliberately committed. This tool generates experimental
+# stimuli, and unpinned transformers/torch versions can shift tokenization and
+# therefore surprisal values between runs. The lockfile is what makes a rerun
+# reproducible; pyproject.toml only carries lower bounds.
 
 # Generated Output Files
 test_output.csv
@@ -74,7 +77,10 @@ cc.ar.300.bin.gz.part
 scripts/plot_semantic_histogram.py
 DISTRACTOR_QUALITY_CHECKLIST.md
 software logic.md
-models/german_code/german_pos_cache_v2.json
+# NOTE: german_pos_cache_v2.json is deliberately NOT ignored. It is the live
+# German POS cache (the "absolute truth" for tagged words) and must be tracked
+# alongside the English and Arabic caches, or a clone silently falls back to
+# the stale .pre-audit-backup copy.
 progress_summary.md
 FUTURE_REFACTOR_PLAN.md
 scripts/plot_length_scatter.py
