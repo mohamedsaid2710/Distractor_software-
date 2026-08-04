@@ -14,8 +14,8 @@ Built on Transformer-based language models (GPT-2), the pipeline selects real-wo
 
 - **Supported Languages:** 
   - English (`gpt2-medium` via spaCy `en_core_web_lg`)
-  - German (`benjamin/gerpt2` via `Stanza` neural tagging & spaCy `de_core_news_lg`)
-  - Arabic (`aubmindlab/aragpt2-medium` via Farasa `farasapy`)
+  - German (`benjamin/gerpt2` via HanTa morphological tagging & `Stanza` context tagging)
+  - Arabic (`aubmindlab/aragpt2-medium` via Farasa `farasapy` & `Stanza`)
 - **Generation Modes:** Choose between threshold-first (Mode A) or maximum-implausibility scoring (Mode B).
 - **Linguistic Precision:**
   - Length and Zipf frequency matching.
@@ -67,8 +67,12 @@ uv run python distract.py -i arabic_sample.txt -o output_ar.txt -p params_ar.txt
 
 For quality validation of a generated file, run:
 ```bash
-uv run python assess_output.py -i output_en.txt -o output_en_assessed.txt -p params_en.txt --min-delta 0 --strict
+uv run python assess_output.py -i English_sample.txt -o output_en.txt -p params_en.txt --min-delta 0 --strict
 ```
+
+> **Note:** `assess_output.py` reads both files and writes neither — `-i` is the original
+> input sentences and `-o` is the already-generated output file to check. The report is
+> printed to the terminal.
 
 ## $\color{SteelBlue}\text{Wiki Documentation}$
 
