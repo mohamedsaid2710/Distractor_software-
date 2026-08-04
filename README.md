@@ -98,7 +98,7 @@ uv run python assess_output.py -i output_en.txt -o output_en_assessed.txt -p par
 If you use this software in your research, please cite it as follows:
 
 **APA (7th ed.):**
-> Said, M. (2026). *Distractor_software: Automated maze-task distractor generation for English, German, and Arabic* (Version 1.0.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21570030
+> Said, M. (2026). *Distractor_software: Automated maze-task distractor generation for English, German, and Arabic* (Version 1.0.1) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21570030
 
 **BibTeX:**
 ```bibtex
@@ -107,16 +107,18 @@ If you use this software in your research, please cite it as follows:
   title        = {Distractor\_software: Automated maze-task distractor generation
                   for English, German, and Arabic},
   year         = {2026},
-  month        = mar,
+  month        = aug,
   publisher    = {Zenodo},
-  version      = {1.0.0},
+  version      = {1.0.1},
   doi          = {10.5281/zenodo.21570030},
   url          = {https://doi.org/10.5281/zenodo.21570030}
 }
 ```
 
 > The DOI above is the *concept* DOI, which always resolves to the most recent
-> release. To cite this specific version, use `10.5281/zenodo.21570031`.
+> release and never changes. To cite one specific version instead, use that
+> version's own DOI — `10.5281/zenodo.21570031` for v1.0.0, or the version DOI
+> shown on the Zenodo record for any later release.
 
 
 ## $\color{DarkSlateGray}\text{License}$
