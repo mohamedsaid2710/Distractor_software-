@@ -49,8 +49,7 @@ class HFCausalScorer(lang_model):
         else:
             model_name = model_name_param
 
-        device = params.get("device", None)
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = self._resolve_device(params.get("device", None))
         print(f">>> [SCORER] Initializing {self.LANG_NAME} Scorer with model: {model_name}")
 
         self._set_batch_size(params)
@@ -78,6 +77,36 @@ class HFCausalScorer(lang_model):
                 self.model.resize_token_embeddings(tok_len)
         except Exception as e:
             logging.debug("Embedding resize skipped or failed: %s", e)
+
+    @staticmethod
+    def _resolve_device(device):
+        """Pick a torch device, falling back to CPU when the requested one is unusable.
+
+        An explicit `device` in a params file used to be taken at face value, so a
+        config written on a CUDA machine crashed on CPU-only hosts (VMs, laptops
+        without an NVIDIA driver). Now an unavailable device only costs a warning.
+        """
+        requested = str(device or "").lower()
+
+        if not requested:
+            return "cuda" if torch.cuda.is_available() else "cpu"
+
+        if requested.startswith("cuda") and not torch.cuda.is_available():
+            logging.warning("CUDA requested but unavailable on this machine; falling back to CPU.")
+            return "cpu"
+
+        try:
+            # Cheap probe: allocating one element surfaces missing drivers/backends here
+            # rather than midway through `.to(...)` on the full model.
+            torch.zeros(1, device=requested)
+        except Exception as e:
+            # Torch backend errors can run to hundreds of lines (the full dispatch
+            # table); the first line carries the actual reason.
+            reason = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+            logging.warning("Device %r unusable (%s); falling back to CPU.", requested, reason[:200])
+            return "cpu"
+
+        return requested
 
     def _set_batch_size(self, params):
         """Store the GPU scoring batch size (subclasses may use a legacy key)."""

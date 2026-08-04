@@ -32,10 +32,19 @@ semantic_threshold: 0.35
 
 # --- Model & Hardware Settings ---
 hf_model_name: "benjamin/gerpt2"
-device: "cuda"
+device: "cuda"          # "cuda" / "cpu"; omit the line entirely to auto-detect.
+                        # An unavailable device warns and falls back to CPU rather than crashing.
 model_batch_size: 1024
 nlp_batch_size: 2000
 chunk_size: 1024
+
+# CPU profile (VMs / machines without an NVIDIA GPU): comment out the three
+# batch lines above and uncomment these. Note German also uses num_to_test: 2000,
+# so a full CPU run is slow — lower num_to_test if you only need a smoke run.
+# device: "cpu"
+# model_batch_size: 32
+# nlp_batch_size: 200
+# chunk_size: 512
 
 # --- File Paths & Resources ---
 exclude_words: "exclude_de.txt"
