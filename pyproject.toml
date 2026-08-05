@@ -1,6 +1,6 @@
 [project]
 name = "maze-automate"
-version = "1.0.1"
+version = "1.0.2"
 description = "Maze-style distractor stimulus generator for psycholinguistic experiments in English, German, and Arabic"
 readme = "README.md"
 license = {text = "MIT"}
@@ -24,5 +24,14 @@ where = ["."]
 include = []
 exclude = ["wiki*", "models*"]
 
+# The PyTorch CUDA 11.8 mirror also serves its own (frozen, years-old) copies of
+# common packages such as certifi, requests and urllib3. Without `explicit = true`
+# uv prefers the first index that serves a name, so those stale copies were being
+# resolved for the whole dependency tree. Keep it reachable for torch only.
 [[tool.uv.index]]
+name = "pytorch-cu118"
 url = "https://download.pytorch.org/whl/cu118"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu118" }

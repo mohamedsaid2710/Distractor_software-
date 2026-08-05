@@ -39,10 +39,12 @@ uv sync
 source .venv/bin/activate  # (Optional) Activate to drop the `uv run` prefix below
 ```
 
-> **Note:** `uv sync` installs PyTorch from the CUDA 11.8 index pinned in `pyproject.toml`. That build also runs on CPU, so it works on a machine without an NVIDIA GPU — it is just a large download. For a CPU-only host you can install the smaller CPU build instead:
+> **Note:** `uv sync` installs PyTorch from the CUDA 11.8 index pinned in `pyproject.toml`. Those wheels are built for **x86-64 Linux and Windows only** — on Apple Silicon or other ARM hosts there is no matching wheel and `uv sync` fails; install PyTorch for your platform from PyPI first. On x86-64 the CUDA build also runs fine without an NVIDIA GPU, it is just a large download. To use the smaller CPU build instead:
 > ```bash
 > uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+> source .venv/bin/activate    # then run the commands below as `python distract.py ...`
 > ```
+> Do **not** keep using the `uv run` prefix afterwards: it re-syncs the environment against `uv.lock` before each command and would silently reinstall the CUDA build. Use the activated venv, or `uv run --no-sync`.
 
 > **Note:** NLP/fastText models are huge. They will automatically download on the very first run. If you are preparing a remote execution, see the [Offline Model Loading guide](https://github.com/mohamedsaid2710/Distractor_software-/wiki) on the Wiki.
 
@@ -102,7 +104,7 @@ uv run python assess_output.py -i English_sample.txt -o output_en.txt -p params_
 If you use this software in your research, please cite it as follows:
 
 **APA (7th ed.):**
-> Said, M. (2026). *Distractor_software: Automated maze-task distractor generation for English, German, and Arabic* (Version 1.0.1) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21570030
+> Said, M. (2026). *Distractor_software: Automated maze-task distractor generation for English, German, and Arabic* (Version 1.0.2) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21570030
 
 **BibTeX:**
 ```bibtex
@@ -113,7 +115,7 @@ If you use this software in your research, please cite it as follows:
   year         = {2026},
   month        = aug,
   publisher    = {Zenodo},
-  version      = {1.0.1},
+  version      = {1.0.2},
   doi          = {10.5281/zenodo.21570030},
   url          = {https://doi.org/10.5281/zenodo.21570030}
 }

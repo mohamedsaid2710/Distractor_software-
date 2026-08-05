@@ -79,8 +79,10 @@ DISTRACTOR_QUALITY_CHECKLIST.md
 software logic.md
 # NOTE: german_pos_cache_v2.json is deliberately NOT ignored. It is the live
 # German POS cache (the "absolute truth" for tagged words) and must be tracked
-# alongside the English and Arabic caches, or a clone silently falls back to
-# the stale .pre-audit-backup copy.
+# alongside the English and Arabic caches. Nothing in the code reads the
+# .pre-audit-backup copy: without the tracked file, wordfreq_distractor.py's
+# `os.path.exists` check simply fails and German runs with an EMPTY pos_cache,
+# silently degrading noun capitalization and POS matching with no fallback.
 progress_summary.md
 FUTURE_REFACTOR_PLAN.md
 scripts/plot_length_scatter.py

@@ -37,6 +37,13 @@ class HFCausalScorer(lang_model):
     DEFAULT_MODEL = "openai-community/gpt2-medium"
     USE_HF_TOKEN = False
 
+    # Largest scoring batch allowed on CPU. The shipped params files are tuned for
+    # GPUs (`model_batch_size: 1024`), which on CPU means a [1024, ctx, vocab]
+    # float32 logits tensor plus an equally large log_softmax copy -- tens of GB.
+    # Batch size affects only memory and speed, never the resulting surprisals,
+    # so capping it is safe. Matches the CPU profile commented in params_*.txt.
+    CPU_MAX_BATCH_SIZE = 32
+
     def __init__(self, params=None):
         params = params or {}
         model_name_param = params.get("hf_model_name", self.DEFAULT_MODEL)
@@ -86,7 +93,14 @@ class HFCausalScorer(lang_model):
         config written on a CUDA machine crashed on CPU-only hosts (VMs, laptops
         without an NVIDIA driver). Now an unavailable device only costs a warning.
         """
-        requested = str(device or "").lower()
+        # Only an absent/blank setting means "auto-detect". Testing truthiness here
+        # would swallow `device: 0`, which torch reads as a valid CUDA index.
+        if device is None:
+            requested = ""
+        elif isinstance(device, int) and not isinstance(device, bool):
+            requested = f"cuda:{device}"
+        else:
+            requested = str(device).strip().lower()
 
         if not requested:
             return "cuda" if torch.cuda.is_available() else "cpu"
@@ -111,6 +125,30 @@ class HFCausalScorer(lang_model):
     def _set_batch_size(self, params):
         """Store the GPU scoring batch size (subclasses may use a legacy key)."""
         self.model_batch_size = int(params.get("model_batch_size", params.get("batch_size", 256)))
+
+    def _cap_batch_size(self, batch_size):
+        """Clamp a requested scoring batch to what the resolved device can hold.
+
+        Applied inside `get_surprisal_batch_from_hidden` rather than at config
+        time on purpose: `sentence_set.py` passes `model_batch_size` from the
+        params file explicitly on the hot path, so a cap stored on the instance
+        would be bypassed there (and by German, which stores `batch_size`).
+        """
+        batch_size = max(1, int(batch_size))
+        device = str(getattr(self, "device", ""))
+        if not device.startswith("cpu") or batch_size <= self.CPU_MAX_BATCH_SIZE:
+            return batch_size
+
+        if not getattr(self, "_cpu_batch_capped", False):
+            logging.warning(
+                "Running on CPU: capping scoring batch size %d -> %d to avoid "
+                "exhausting RAM. Generation will be slow; this does not change "
+                "the resulting surprisals.",
+                batch_size,
+                self.CPU_MAX_BATCH_SIZE,
+            )
+            self._cpu_batch_capped = True
+        return self.CPU_MAX_BATCH_SIZE
 
     def _hf_token(self):
         """Auth token for gated Hugging Face repos (only when USE_HF_TOKEN is set)."""
@@ -278,6 +316,7 @@ class HFCausalScorer(lang_model):
 
         if batch_size is None:
             batch_size = getattr(self, 'model_batch_size', getattr(self, 'batch_size', 500))
+        batch_size = self._cap_batch_size(batch_size)
 
         ctx_ids = list(hidden) if isinstance(hidden, (list, tuple)) else list(hidden)
         ctx_len = len(ctx_ids)

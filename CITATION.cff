@@ -12,8 +12,8 @@ authors:
     given-names: Mohammed
     affiliation: University of Stuttgart
     orcid: "https://orcid.org/0009-0005-0169-2656"
-version: 1.0.1
-date-released: "2026-08-04"
+version: 1.0.2
+date-released: "2026-08-05"
 doi: 10.5281/zenodo.21570030
 license: MIT
 repository-code: "https://github.com/mohamedsaid2710/Distractor_software-"
