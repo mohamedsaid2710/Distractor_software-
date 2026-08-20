@@ -205,18 +205,15 @@ def main():
         sentence_obj = next((s for s in sentence_set.sentences if s.tag == tag), sentence_set.sentences[0])
 
         dtoks = distractor_sentence.split()
-        expected_first_len = len(strip_punct(sentence_obj.words[0]))
         if first_token_placeholder:
+            # The placeholder is a fixed x-x-x, deliberately NOT length-matched:
+            # position 0 has no prior context and therefore no real competition,
+            # and a constant string is the standard Maze convention. This check
+            # used to demand a length match, which the generator no longer makes.
             if not dtoks or (not is_x_placeholder(dtoks[0])):
                 placeholder_errors += 1
                 if len(examples) < args.max_examples:
                     examples.append((item_id, 0, "first-token-not-placeholder", dtoks[0] if dtoks else ""))
-            else:
-                got_len = x_placeholder_len(dtoks[0])
-                if got_len != expected_first_len:
-                    placeholder_errors += 1
-                    if len(examples) < args.max_examples:
-                        examples.append((item_id, 0, f"first-placeholder-len-mismatch:{got_len}!={expected_first_len}", dtoks[0]))
         else:
             if not dtoks:
                 placeholder_errors += 1
