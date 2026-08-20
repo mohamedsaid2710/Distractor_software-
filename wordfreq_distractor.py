@@ -24,7 +24,10 @@ import logging
 import json
 import bisect
 from collections import defaultdict
-from HanTa import HanoverTagger as ht
+# NOTE: HanTa, stanza, farasapy, fasttext and matplotlib are OPTIONAL -- they are
+# per-language extras, so importing any of them at module level makes a
+# core/English-only install unimportable. HanTa is imported inside
+# wordfreq_German_zipf_dict.__init__, which is the only place it is used.
 from utils import strip_punct, ordered_unique, resolve_repo_path
 from distractor import distractor_dict, distractor
 
@@ -985,13 +988,12 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         # HanTa Morphological Dictionary Bouncer
         self.hanta = None
         try:
-            import HanTa.HanoverTagger as ht
+            from HanTa import HanoverTagger as ht
             self.hanta = ht.HanoverTagger('morphmodel_ger.pgz')
             print("    [HanTa] Hannover Tagger loaded for strict dictionary lookups.", flush=True)
         except ImportError:
-            print("    [HanTa] WARNING: HanTa not installed. Run: pip install HanTa", flush=True)
-        except NameError:
-            print("    [HanTa] WARNING: HanoverTagger (ht) not imported globally.", flush=True)
+            print("    [HanTa] WARNING: HanTa not installed. "
+                  "Install the German extra: pip install '.[de]'", flush=True)
         except Exception as e:
             print(f"    [HanTa] WARNING: HanTa model not loaded ({e}).", flush=True)
 
