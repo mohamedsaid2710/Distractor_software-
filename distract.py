@@ -84,10 +84,17 @@ def main():
         
         print_splash(lang_str, model_str, nlp_str)
 
-        run_stuff(input_path, output_path, parameters=params_path, outformat=args.format)
-        
+        failed_ids = run_stuff(input_path, output_path,
+                               parameters=params_path, outformat=args.format)
+
         elapsed = time.time() - start_time
         print(f"\n>>> [Done] Total run time: {elapsed / 60:.2f} minutes.")
+        if failed_ids:
+            # A partially-generated stimulus set must not look like a clean run
+            # to a shell script or a CI job.
+            print(f"ERROR: {len(failed_ids)} item(s) failed: {failed_ids}",
+                  file=sys.stderr)
+            sys.exit(5)
     except ValueError as e:
         import traceback
         traceback.print_exc()

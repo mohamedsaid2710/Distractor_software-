@@ -6,14 +6,27 @@
 min_delta: 10
 min_abs: 25
 num_to_test: 200
+max_freq_widen: 9       # Max widening steps if the tight frequency band starves.
+freq_widen_step: 0.1    # Zipf units added to each side of the band per step, so the
+                        # worst case above is +/- 0.9 Zipf beyond freq_tolerance.
+pool_size_factor: 2.0   # Candidates gathered = num_to_test x this. Keep it modest: a
+                        # large pool can only be filled by widening the frequency
+                        # band, and selection ranks within the pool either way.
 force_max_surprisal: True
 absolute_threshold_only: False
+
+# --- Reproducibility ---
+# Pins every RNG used during selection, so the same input + the same seed
+# gives byte-identical output. Set to `null` for the old random behaviour.
+seed: 12345
 
 # --- Linguistic & Selection Settings ---
 language: "en"
 len_tolerance: 0
 min_zipf: 3.0
-min_word_len: 3
+freq_tolerance: 1.0     # Zipf half-width of the distractor frequency band
+                        # (target +/- this). `null` = old wide band.
+min_word_len: 2
 exclude_propn_candidates: True
 enforce_length_match: True
 lowercase_only: True
@@ -27,6 +40,9 @@ semantic_filter: True
 semantic_threshold: 0.35
 
 # --- Model & Hardware Settings ---
+context_window: null    # Left-context tokens used when scoring, for BOTH targets
+                        # and candidates. null = the model's full window.
+                        # Lower it (e.g. 64) only to speed up very long items.
 hf_model_name: "openai-community/gpt2-medium"
 device: "cuda"          # "cuda" / "cpu"; omit the line entirely to auto-detect.
                         # An unavailable device warns and falls back to CPU rather than crashing.
@@ -47,10 +63,19 @@ include_words: None
 exclude_words: "exclude_en.txt"
 
 # --- Position & Repeat Settings ---
-early_position_boost: 5
+# NOTE (2026-08-20): this boost never actually applied until now -- the code
+# parsed the label ID with int(), and make_labels rewrites every label to
+# "1_L5" form before the test runs, so the ValueError was swallowed. The value
+# below was therefore never validated against real surprisals. It is set to 0
+# until measured numbers show what is reachable; the previous value was 5.
+# With min_abs 25 it would raise the absolute floor to 30 bits.
+early_position_boost: 0
 early_position_count: 2
 first_token_placeholder: True
 max_repeat: 1
+repeat_exempt_max_len: 4  # Words this long or shorter are exempt from max_repeat.
+                          # Set to 0 to enforce max_repeat at every length; short
+                          # targets may then run out of admissible candidates.
 allow_banned_fallback: False
 match_surprisal: False
 

@@ -38,7 +38,7 @@ class GermanScorer(HFCausalScorer):
             # No context - use the batch scorer's internal handling
             return self.get_surprisal_batch_from_hidden([], [word], batch_size=1)[0]
 
-        allowed_ctx = max(0, self.max_len - 1)
+        allowed_ctx = self.context_limit(1)
         ctx = ctx_ids[-allowed_ctx:] if len(ctx_ids) > allowed_ctx else ctx_ids
 
         input_ids = torch.tensor([ctx], device=self.device)
@@ -49,7 +49,7 @@ class GermanScorer(HFCausalScorer):
             probs = F.softmax(last_logits, dim=-1).clamp(min=1e-12)
             surprisals = -torch.log2(probs)
 
-        parts = self.tokenizer.encode(word, add_special_tokens=False)
+        parts = self.encode_word(word)
         if len(parts) == 0:
             return 0.0
         token = parts[0]

@@ -2,6 +2,38 @@ import csv
 import logging
 import ast
 
+
+def _parse_value(raw):
+    """Parse one params value.
+
+    ast.literal_eval is tried first because Python's own tokenizer strips a
+    trailing `# comment` for us, which is how `device: "cuda"  # ...` has
+    always worked.  The true/false/null spellings are NOT Python literals, so
+    they used to be compared against the whole raw string and an inline comment
+    silently turned them into the string "null    # ...".  Every other value
+    type accepted comments; these three did not.
+    """
+    try:
+        return ast.literal_eval(raw)
+    except Exception:
+        pass
+
+    # Not a Python literal: strip an inline comment and try the JSON-ish
+    # spellings, then a plain string.
+    stripped = raw.split('#', 1)[0].strip()
+    low = stripped.lower()
+    if low == 'true':
+        return True
+    if low == 'false':
+        return False
+    if low in ('null', 'none'):
+        return None
+    try:
+        return ast.literal_eval(stripped)
+    except Exception:
+        return stripped.strip('"')
+
+
 def set_params(file):
     """Takes a colon delimited file specifying various parameters,
     returns dictionary format of those parameters"""
@@ -22,20 +54,7 @@ def set_params(file):
 
             # Keep content after first ":" so values can contain colons.
             raw = ":".join(row[1:]).strip()
-            low = raw.lower()
-            # Accept common non-Python literals (true/false/null) used in params files
-            if low == 'true':
-                params[key] = True
-            elif low == 'false':
-                params[key] = False
-            elif low in ('null', 'none'):
-                params[key] = None
-            else:
-                try:
-                    params[key] = ast.literal_eval(raw)
-                except Exception:
-                    # Fallback: keep as raw string (no surrounding quotes expected)
-                    params[key] = raw.strip('"')
+            params[key] = _parse_value(raw)
     # Check required parameters
     if params.get('min_delta', None) is None:
         logging.error("Min delta must be provided")

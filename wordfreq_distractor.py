@@ -25,7 +25,7 @@ import json
 import bisect
 from collections import defaultdict
 from HanTa import HanoverTagger as ht
-from utils import strip_punct
+from utils import strip_punct, ordered_unique, resolve_repo_path
 from distractor import distractor_dict, distractor
 
 
@@ -96,10 +96,14 @@ def _is_valid_cache_word(word: str, min_target_length: int = 3, lang: str = 'de'
             return False
     
     # Gate 5: CRITICAL ZIPF VALIDATION
-    # For German, enforce strict minimum Zipf configured by params
-    if lang == 'de' and word_len < 9:
+    # This used to run only when lang == 'de', so `short_min_zipf` (3.5 in
+    # params_en.txt) and `min_zipf` were never enforced for English or Arabic
+    # candidates -- which is how 'ocd', 'fyi', 'mla', 'yall', 'ive' and 'thy'
+    # reached the output.  The thresholds stay length-conditional; only the
+    # language restriction is gone.
+    if word_len < 9:
         try:
-            z = wordfreq.zipf_frequency(word_lower, 'de')
+            z = wordfreq.zipf_frequency(word_lower, lang)
             if word_len <= 5:
                 if z < short_min_zipf:  # STRICT for short words
                     return False
@@ -183,10 +187,18 @@ class wordfreq_dict(distractor_dict):
         # Return just the text for compatibility with old Stage 2 logic if still used
         return [w.text for w in pool]
 
-    def get_best_frequency_pool(self, desired_len, target_freq, n=400):
+    def get_best_frequency_pool(self, desired_len, target_zipf, n=400):
         """
-        Retrieves a 'neighborhood' of words with frequencies closest to target_freq.
+        Retrieves a 'neighborhood' of words with frequencies closest to the target.
         Uses binary search for O(log N) neighborhood identification.
+
+        *target_zipf* is a **Zipf** value (wordfreq's 1-7 scale), not the
+        natural-log frequency stored on each ``distractor``.  The unit is in
+        the parameter name deliberately: the two are a factor of ln(10) apart,
+        and passing natlog here used to push the bisection key off the end of
+        the array on every call, so the "neighborhood" returned was always the
+        tail of the list — i.e. the rarest words of that length, identically
+        for every target.
         """
         full_pool = self.words_by_len.get(desired_len, [])
         if not full_pool:
@@ -194,15 +206,14 @@ class wordfreq_dict(distractor_dict):
             
         if len(full_pool) <= n:
             return [w.text for w in full_pool]
-            
-        # Since full_pool is sorted by frequency DESCENDING, we use a custom key
-        # frequencies are [7.0, 6.9, ..., 1.0]
-        # To find 'target_freq' in a descending list, we can search in the negative list
-        # or just use bisect with a custom order.
-        
-        # Extract Zipf frequencies for binary search
-        # NOTE: Using negative frequencies so bisection on descending order works
-        freqs_neg = [-w.freq for w in full_pool] # [-7.0, -6.9, ..., -1.0] (ascending)
+
+        # `w.freq` is natural-log frequency (zipf * ln(10)); convert the key to
+        # match rather than the whole array.
+        target_freq = target_zipf * math.log(10)
+
+        # Since full_pool is sorted by frequency DESCENDING, we bisect over the
+        # negated frequencies, which are ascending.
+        freqs_neg = [-w.freq for w in full_pool] # [-16.1, -15.9, ..., -2.3] (ascending)
         
         idx = bisect.bisect_left(freqs_neg, -target_freq)
         
@@ -326,7 +337,7 @@ class wordfreq_dict(distractor_dict):
 
         # ABSOLUTE TRUTH GUARD: Only tag words that are NOT already in our verified cache.
         # If force_refresh=True, ignore cache and tag all words.
-        unique_words = list(set(w.lower() for w in words if force_refresh or w.lower() not in self.pos_cache))
+        unique_words = ordered_unique(w.lower() for w in words if force_refresh or w.lower() not in self.pos_cache)
         
         if not unique_words:
             # print(f"    [NLP] Skipping Stanza: All {len(words)} candidates are already verified in Cache.", flush=True)
@@ -371,22 +382,28 @@ class wordfreq_dict(distractor_dict):
     def get_potential_distractors(self, min_length, max_length, min_freq, max_freq, params, pos_filter=None):
         """Returns list of candidates, using heuristic first, then widening, then batch SpaCy validation."""
         _lang = getattr(self, 'lang', 'de')
-        n = params.get('num_to_test', 200)
-        # Fetch MORE so that after POS filtering we still have 'n' candidates.
-        # If we have a POS filter, we need a significantly larger pool to find survivors.
-        target_pool_size = max(n * 2, 500)
-        if pos_filter:
-            target_pool_size = max(n * 5, 2000)
+        n = int(params.get('num_to_test', 200))
+        # How many candidates to aim for before the tiers give up widening.
+        #
+        # This used to be `max(n * 5, 2000)` under a pos_filter -- i.e. 2000 for
+        # every English and German target.  A frequency band of +/- 1 Zipf at a
+        # single exact length holds nothing like 2000 words, so the widening
+        # loop below ran to its limit on EVERY target and turned the declared
+        # band into +/- 4.9 Zipf.  Mode B then picks the maximum-surprisal
+        # candidate, which sits at the rare edge, so every distractor landed far
+        # below its target's frequency.  A smaller in-band pool beats a large
+        # out-of-band one, because selection ranks within the pool either way.
+        pool_factor = float(params.get('pool_size_factor', 2.0 if pos_filter else 1.0))
+        target_pool_size = max(int(n * pool_factor), 50)
         
         # Get exclude list from params for pre-filtering
         exclude_words_set = set()
         exclude_path = params.get('exclude_words', None)
         if exclude_path:
             import os
-            # Resolve relative paths
-            if not os.path.isabs(exclude_path) and not os.path.exists(exclude_path):
-                base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                exclude_path = os.path.join(base, exclude_path)
+            # NB: one `dirname` too many here used to resolve to the repo's
+            # parent directory, silently dropping the exclude list.
+            exclude_path = resolve_repo_path(exclude_path)
             if os.path.exists(exclude_path):
                 try:
                     with open(exclude_path, 'r', encoding='utf-8') as f:
@@ -400,40 +417,54 @@ class wordfreq_dict(distractor_dict):
         # TIER 1: Frequency-Matched Fetch (Status Quo)
         distractor_opts = self.get_words(min_length, max_length, min_freq, max_freq, pos_filter=None, use_spacy=False)
         
-        # SHORT-WORD PROTECTION: For ≤5 char words, apply QUALITY GATE
-        # (Protects against web-scraping junk like 'fug', 'xte', 'uru' that enter via wordfreq)
-        # NOTE: AIR-GAP OPTIMIZATION - Do NOT require words to be in JSON cache.
-        # Instead, rely on _is_valid_cache_word() quality gates (Zipf, vowels, etc.)
-        # Pre-batch-tagging happens later in the pipeline if needed.
-        if max_length <= 5:
-            _sz = float(params.get('short_word_min_zipf', 3.5)) if params else 3.5
-            _mz = float(params.get('min_zipf', 3.0)) if params else 3.0
-            distractor_opts = [w for w in distractor_opts if _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length, lang=_lang, short_min_zipf=_sz, mid_min_zipf=_mz)]
+        # QUALITY GATE: reject web-scraping junk like 'fug', 'xte', 'uru' that
+        # passes a frequency check.  This used to be wrapped in
+        # `if max_length <= 5:`, so any target of 6+ characters got no
+        # structural filtering at all -- the gate's own thresholds are already
+        # length-conditional, so the outer guard only disabled it.
+        _sz = float(params.get('short_word_min_zipf', 3.5)) if params else 3.5
+        _mz = float(params.get('min_zipf', 3.0)) if params else 3.0
+
+        def _quality_ok(w):
+            return _is_valid_cache_word(strip_punct(w).lower(),
+                                        min_target_length=min_length, lang=_lang,
+                                        short_min_zipf=_sz, mid_min_zipf=_mz)
+
+        distractor_opts = [w for w in distractor_opts if _quality_ok(w)]
         
         # PRE-FILTER: Remove excluded words
         if exclude_words_set:
             distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() not in exclude_words_set]
 
         # TIER 1.25: Stepwise Frequency-Band Widening (`max_freq_widen`)
-        # If the tight band starved, widen [min_freq, max_freq] symmetrically by
-        # 1 natural-log unit (~0.43 Zipf) per step, up to `max_freq_widen` steps,
-        # keeping the same length window and quality gates as TIER 1.
+        # If the tight band starved, widen [min_freq, max_freq] symmetrically in
+        # steps of `freq_widen_step` ZIPF units, up to `max_freq_widen` steps.
+        # The step used to be 1 natural-log unit (0.43 Zipf) with 9 steps
+        # allowed, so a fully-widened band was +/- 4.9 Zipf wider than declared
+        # -- effectively unbounded.  Widening is now both smaller-grained and
+        # reported, so a run says how far it had to go.
         max_freq_widen = int(params.get('max_freq_widen', 9))
+        widen_step = float(params.get('freq_widen_step', 0.1)) * math.log(10)
+        widen = 0
         if min_freq is not None and max_freq is not None:
-            widen = 0
             while len(distractor_opts) < target_pool_size and widen < max_freq_widen:
                 widen += 1
                 wider_pool = self.get_words(min_length, max_length,
-                                            min_freq - widen, max_freq + widen,
+                                            min_freq - widen * widen_step,
+                                            max_freq + widen * widen_step,
                                             pos_filter=None, use_spacy=False)
-                if max_length <= 5:
-                    _sz = float(params.get('short_word_min_zipf', 3.5)) if params else 3.5
-                    _mz = float(params.get('min_zipf', 3.0)) if params else 3.0
-                    wider_pool = [w for w in wider_pool if _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length, lang=_lang, short_min_zipf=_sz, mid_min_zipf=_mz)]
+                wider_pool = [w for w in wider_pool if _quality_ok(w)]
                 if exclude_words_set:
                     wider_pool = [w for w in wider_pool if strip_punct(w).lower() not in exclude_words_set]
                 if wider_pool:
-                    distractor_opts = list(set(distractor_opts) | set(wider_pool))
+                    distractor_opts = ordered_unique(list(distractor_opts) + list(wider_pool))
+            if widen:
+                logging.info(
+                    "Frequency band widened by %.2f Zipf (%d step(s)) to reach %d "
+                    "candidates of length %d-%d.",
+                    widen * float(params.get('freq_widen_step', 0.1)), widen,
+                    len(distractor_opts), min_length, max_length)
+        self.last_freq_widen_steps = widen
 
         # TIER 1.5: Adaptive Frequency Widening
         # If tight band failed, use the optimized neighborhood search (binary search)
@@ -441,32 +472,35 @@ class wordfreq_dict(distractor_dict):
             target_zipf = params['target_zipf']
             logging.info(f"Tight band search starved. Using neighborhood search around Zipf {target_zipf:.2f}")
             
-            # Use binary-search-based neighborhood identifier
-            # Start with a generous neighborhood (n=1000) for fast retrieval
+            # Neighborhood size must stay a *neighborhood*: n=1000 against a
+            # length bucket of ~3-4k words is a third of the lexicon, which
+            # throws away the frequency match this tier exists to preserve.
             target_exact_len = params.get('target_exact_length') or ((min_length + max_length) // 2)
-            # Try exact length neighborhood first
-            neighbor_pool = self.get_best_frequency_pool(target_exact_len, target_zipf, n=1000)
+            neighbor_pool = self.get_best_frequency_pool(target_exact_len, target_zipf,
+                                                         n=target_pool_size)
             
             # Filter and add to candidates
             if exclude_words_set:
                 neighbor_pool = [w for w in neighbor_pool if w not in exclude_words_set]
             
             distractor_opts.extend(neighbor_pool)
-            distractor_opts = list(set(distractor_opts))
+            distractor_opts = ordered_unique(distractor_opts)
 
         # TIER 2: Quality Gate Fallback
         # If still starving, we can pull from other nearby lengths using the same frequency search
         if len(distractor_opts) < target_pool_size:
             target_exact_len = params.get('target_exact_length') or ((min_length + max_length) // 2)
             target_zipf = params.get('target_zipf', 5.0)
+            _len_floor = int(params.get('min_word_len', DEFAULT_MIN_WORD_LEN))
             for length_diff in [1, -1]: # Try nearby length neighborhoods
                 adj_len = target_exact_len + length_diff
-                if adj_len >= 3:
-                    adj_pool = self.get_best_frequency_pool(adj_len, target_zipf, n=500)
+                if adj_len >= _len_floor:
+                    adj_pool = self.get_best_frequency_pool(adj_len, target_zipf,
+                                                            n=target_pool_size)
                     if exclude_words_set:
                         adj_pool = [w for w in adj_pool if w not in exclude_words_set]
                     distractor_opts.extend(adj_pool)
-                    distractor_opts = list(set(distractor_opts))
+                    distractor_opts = ordered_unique(distractor_opts)
                 if len(distractor_opts) >= target_pool_size:
                     break
 
@@ -483,8 +517,9 @@ class wordfreq_dict(distractor_dict):
             for scale in expansion_scales:
                 for diff in range(1, scale + 1):
                     lengths_to_try = [target_exact_len + diff, target_exact_len - diff]
+                    _len_floor = int(params.get('min_word_len', DEFAULT_MIN_WORD_LEN))
                     for l in lengths_to_try:
-                        if l < 2: continue # Never go below 2
+                        if l < _len_floor: continue
                         # Use target_is_noun from params for faster pre-filtered expansion
                         target_is_noun_p = params.get('target_is_noun', False)
                         
@@ -496,7 +531,7 @@ class wordfreq_dict(distractor_dict):
                             pool = self.get_emergency_pool(l, is_noun=True) + self.get_emergency_pool(l, is_noun=False)
                         
                         distractor_opts.extend(pool)
-                        distractor_opts = list(set(distractor_opts))
+                        distractor_opts = ordered_unique(distractor_opts)
                     
                     if len(distractor_opts) >= target_pool_size:
                         break
@@ -712,10 +747,7 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
         exclusions_lower = set()
         if exclude is not None:
             import os
-            if not os.path.isabs(exclude) and not os.path.exists(exclude):
-                fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), exclude)
-                if os.path.exists(fallback):
-                    exclude = fallback
+            exclude = resolve_repo_path(exclude)
             try:
                 with open(exclude, "r", encoding="utf-8") as f:
                     exclusions_lower = set(line.strip().lower() for line in f if line.strip())
@@ -806,10 +838,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
         exclusions_lower = set()
         if exclude is not None:
-            if not os.path.isabs(exclude) and not os.path.exists(exclude):
-                fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), exclude)
-                if os.path.exists(fallback):
-                    exclude = fallback
+            exclude = resolve_repo_path(exclude)
             try:
                 with open(exclude, "r", encoding="utf-8") as f:
                     for line in f:
@@ -1026,7 +1055,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             if w_clean not in self.pos_cache:
                 to_tag.append(w_clean)
         
-        to_tag = list(set(to_tag))
+        to_tag = ordered_unique(to_tag)
         if not to_tag: return
 
         stts_map = STTS_TO_UPOS  # shared module-level STTS -> UPOS map
@@ -1076,7 +1105,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             if force_refresh or w_clean not in self.pos_cache:
                 to_tag.append(w_clean)
         
-        to_tag = list(set(to_tag))
+        to_tag = ordered_unique(to_tag)
         if not to_tag: return
 
         stts_map = STTS_TO_UPOS  # shared module-level STTS -> UPOS map
@@ -1258,6 +1287,81 @@ def get_frequency_en(word):
 
 
 
+# Length bounds the candidate lexicons can actually serve.  `min_word_len` also
+# governs which words are loaded into the lexicon at all, so a target shorter
+# than it has an empty bucket and cannot be length-matched.
+DEFAULT_MIN_WORD_LEN = 3
+MAX_TARGET_LENGTH = 15
+
+
+def effective_target_length(length, params, max_len=MAX_TARGET_LENGTH):
+    """Clamp a target's true length into the range the lexicon can serve.
+
+    The threshold functions clamped the length they searched with while
+    `candidate_length_ok` in sentence_set.py compared against the *true*
+    length, so with `len_tolerance: 0` a 1- or 2-letter English target rejected
+    every candidate the pool could offer and fell through the whole cascade to
+    the desperation fallback.  17% of non-initial tokens in English_sample.txt
+    are 1-2 characters.  Both sides now clamp identically, via this function.
+
+    Pass `max_len=None` to skip the upper clamp (German does not cap length).
+    """
+    floor = DEFAULT_MIN_WORD_LEN
+    if params is not None:
+        try:
+            floor = int(params.get('min_word_len', DEFAULT_MIN_WORD_LEN))
+        except (TypeError, ValueError):
+            pass
+    out = max(floor, int(length))
+    if max_len is not None:
+        out = min(out, int(max_len))
+    return out
+
+
+# Default frequency-band half-width, in Zipf units.  A distractor is drawn from
+# targetZipf +/- this value.  1.0 is the value params_de.txt has always carried;
+# it is now the default for every language because the alternative branch was
+# degenerate (see _freq_band).
+DEFAULT_FREQ_TOLERANCE = 1.0
+
+# Bounds of the untightened band, in natural-log frequency units
+# (Zipf 1.30 .. 4.78).  Only used when freq_tolerance is explicitly null.
+_WIDE_BAND_LOW = 3.0
+_WIDE_BAND_HIGH = 11.0
+
+
+def _freq_band(freqs, params):
+    """Return (min_freq, max_freq) in natural-log units for a set of targets.
+
+    With a ``freq_tolerance`` (Zipf units, default 1.0) the band is centred on
+    the mean target frequency.  ``freq_tolerance: null`` restores the old wide
+    band.
+
+    The old wide branch read::
+
+        min_freq = min(min(freqs), 11)
+        max_freq = max(max(freqs), 3)
+
+    with the two bounds the wrong way round, so for any target between 3 and 11
+    natlog -- i.e. Zipf <= 4.78, which is most content words -- it collapsed to
+    min_freq == max_freq == the target's own frequency, a band of width zero.
+    That starved the tight-band search on every English and Arabic run (only
+    params_de.txt set freq_tolerance) and pushed selection into the fallback
+    tiers, which is the origin of the frequency-mismatched output.
+    """
+    tol = DEFAULT_FREQ_TOLERANCE
+    if params is not None and 'freq_tolerance' in params:
+        tol = params['freq_tolerance']
+
+    if tol is None:
+        return (min(min(freqs), _WIDE_BAND_LOW),
+                max(max(freqs), _WIDE_BAND_HIGH))
+
+    tol_natlog = float(tol) * math.log(10)
+    mean_freq = sum(freqs) / len(freqs)
+    return mean_freq - tol_natlog, mean_freq + tol_natlog
+
+
 def get_thresholds_de(words, params=None):
     """German thresholds based on German frequency.
 
@@ -1269,23 +1373,12 @@ def get_thresholds_de(words, params=None):
     freqs = []
     for word in words:
         stripped = strip_punct(word)
-        # Allow unlimited word lengths (no clamping)
-        lengths.append(max(3, len(stripped)))
+        lengths.append(effective_target_length(len(stripped), params, max_len=None))
         freqs.append(get_frequency_de(stripped))
     min_length = min(lengths)
     max_length = max(lengths)
 
-    # --- Tight frequency band matching ---
-    if params and 'freq_tolerance' in params:
-        tol_zipf = float(params['freq_tolerance'])
-        tol_natlog = tol_zipf * math.log(10)
-        mean_freq = sum(freqs) / len(freqs)
-        min_freq = mean_freq - tol_natlog
-        max_freq = mean_freq + tol_natlog
-    else:
-        # Legacy wide-range behavior
-        min_freq = min(min(freqs), 11)
-        max_freq = max(max(freqs), 3)
+    min_freq, max_freq = _freq_band(freqs, params)
 
     return min_length, max_length, min_freq, max_freq
 
@@ -1299,21 +1392,12 @@ def get_thresholds_en(words, params=None):
     freqs = []
     for word in words:
         stripped = strip_punct(word)
-        # Clamp word lengths to Boyce-style bins [3, 15] before range creation.
-        lengths.append(max(3, min(len(stripped), 15)))
+        lengths.append(effective_target_length(len(stripped), params))
         freqs.append(get_frequency_en(stripped))
     min_length = min(lengths)
     max_length = max(lengths)
 
-    if params and 'freq_tolerance' in params:
-        tol_zipf = float(params['freq_tolerance'])
-        tol_natlog = tol_zipf * math.log(10)
-        mean_freq = sum(freqs) / len(freqs)
-        min_freq = mean_freq - tol_natlog
-        max_freq = mean_freq + tol_natlog
-    else:
-        min_freq = min(min(freqs), 11)
-        max_freq = max(max(freqs), 3)
+    min_freq, max_freq = _freq_band(freqs, params)
 
     return min_length, max_length, min_freq, max_freq
 
@@ -1374,10 +1458,7 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         exclusions_lower = set()
         if exclude is not None:
             import os
-            if not os.path.isabs(exclude) and not os.path.exists(exclude):
-                fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), exclude)
-                if os.path.exists(fallback):
-                    exclude = fallback
+            exclude = resolve_repo_path(exclude)
             try:
                 with open(exclude, "r", encoding="utf-8") as f:
                     exclusions_lower = set(
@@ -1499,7 +1580,7 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
             if w_clean not in self.pos_cache:
                 to_tag.append(w_clean)
         
-        to_tag = list(set(to_tag))
+        to_tag = ordered_unique(to_tag)
         if not to_tag: return
 
         print(f"[HYBRID Cache] Validating {len(to_tag)} Arabic inputs via Stanza-Farasa consensus...", flush=True)
@@ -1547,7 +1628,7 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
 
-        unique_words = list(set(w for w in words if force_refresh or w not in self.pos_cache))
+        unique_words = ordered_unique(w for w in words if force_refresh or w not in self.pos_cache)
         if not unique_words:
             return
 
@@ -1585,21 +1666,12 @@ def get_thresholds_ar(words, params=None):
     freqs = []
     for word in words:
         stripped = strip_punct(word)
-        # Arabic words can be shorter; clamp to [2, 15].
-        lengths.append(max(2, min(len(stripped), 15)))
+        lengths.append(effective_target_length(len(stripped), params))
         freqs.append(get_frequency_ar(stripped))
     min_length = min(lengths)
     max_length = max(lengths)
 
-    if params and 'freq_tolerance' in params:
-        tol_zipf = float(params['freq_tolerance'])
-        tol_natlog = tol_zipf * math.log(10)
-        mean_freq = sum(freqs) / len(freqs)
-        min_freq = mean_freq - tol_natlog
-        max_freq = mean_freq + tol_natlog
-    else:
-        min_freq = min(min(freqs), 11)
-        max_freq = max(max(freqs), 3)
+    min_freq, max_freq = _freq_band(freqs, params)
 
     return min_length, max_length, min_freq, max_freq
 
