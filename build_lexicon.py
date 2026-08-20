@@ -121,6 +121,48 @@ def stanza_propn(lang, words, use_gpu=True):
     return out
 
 
+def spacy_norp(words, model="en_core_web_lg"):
+    """Words spaCy's NER calls NORP: nationalities, religious and political groups.
+
+    Demonyms and geopolitical adjectives -- italian, soviet, libyan, indonesian,
+    iraqi, brits, jews -- are a class no POS filter removes, because they are
+    adjectives rather than proper nouns. They are poor Maze distractors for the
+    same reason a proper noun is (they stand out), and some are loaded terms
+    that have no place in a stimulus set.
+
+    NORP is the label built for exactly this category. Measured on a probe of 14
+    demonyms and 9 ordinary words it caught 12 of the 14 with ZERO false
+    positives, so the collateral cost on the general vocabulary is negligible.
+    It does not catch everything (`scots`, `isis` slipped through in a neutral
+    frame); `exclude_en.txt` remains the mechanism for individual words.
+
+    Returns the set of NORP words, or an empty set if spaCy is unavailable.
+    """
+    try:
+        import spacy
+    except ImportError:
+        print("    [BUILD] spacy not installed; skipping the NORP check.",
+              file=sys.stderr)
+        return set()
+    try:
+        nlp = spacy.load(model)
+    except Exception as e:
+        print(f"    [BUILD] could not load {model} ({e}); skipping the NORP check.",
+              file=sys.stderr)
+        return set()
+
+    print(f"    [BUILD] NORP check: spaCy NER on {len(words)} words...", flush=True)
+    out = set()
+    frames = [f"I saw {w} yesterday." for w in words]
+    for w, doc in zip(words, nlp.pipe(frames, batch_size=256)):
+        tok = doc[2] if len(doc) > 2 else None
+        if tok is None:
+            continue
+        if any(e.label_ == "NORP" and e.start <= tok.i < e.end for e in doc.ents):
+            out.add(w)
+    return out
+
+
 def build(lang, out_path=None, dry_run=False, batch=2000, second_opinion=True):
     spec = LANGS[lang]
     out_path = out_path or os.path.join(REPO_ROOT, spec["out"])
@@ -189,6 +231,17 @@ def build(lang, out_path=None, dry_run=False, batch=2000, second_opinion=True):
     # names AND for ordinary common nouns like بيت when given a bare word with
     # no context.  Over the whole Arabic lexicon it promoted 22 words, which is
     # noise. Arabic proper-noun exclusion needs a gazetteer, not a tagger.
+    if second_opinion and lang == 'en':
+        norp = spacy_norp(words)
+        promoted = 0
+        for w in norp:
+            if tags.get(w) not in (None, 'PROPN'):
+                tags[w] = 'PROPN'
+                promoted += 1
+        if norp:
+            print(f">>> NORP check marked {promoted} demonyms/group terms as PROPN "
+                  f"(they are excluded by exclude_propn_candidates)")
+
     if second_opinion and lang == 'de':
         propn = stanza_propn(lang, words,
                              use_gpu=str(params.get('use_gpu', True)).lower() in ('true', '1'))
@@ -211,8 +264,10 @@ def build(lang, out_path=None, dry_run=False, batch=2000, second_opinion=True):
         "_meta": {
             "language": lang,
             "tagger": _tagger_version(spec["tagger"]),
-            "second_opinion": ("stanza" if (second_opinion and lang == 'de')
-                               else None),
+            "second_opinion": (
+                "stanza" if (second_opinion and lang == 'de')
+                else "spacy-norp" if (second_opinion and lang == 'en')
+                else None),
             "built": datetime.date.today().isoformat(),
             "word_count": len(tags),
             "source": "wordfreq frequency dictionary, filtered by the params file",

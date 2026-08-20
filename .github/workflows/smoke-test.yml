@@ -11,6 +11,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The wiki is a separate repository behind a submodule. Without this
+          # it was never checked out in CI, which is the structural reason the
+          # documentation drifted from the code unnoticed.
+          submodules: recursive
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -22,3 +27,24 @@ jobs:
 
       - name: Run repository smoke test
         run: uv run bash ./scripts/smoke_test.sh
+
+      # The unit tests need no model weights and no network, so they belong in
+      # CI. They are what catches a regression in the frequency band, the
+      # input delimiter, German casing, the Farasa tag parser or the report.
+      - name: Run unit tests
+        run: uv run python -m pytest -q
+
+      # A wheel that contains no importable code is exactly the bug that made
+      # `pip install .` useless, and it is invisible unless something looks.
+      - name: Verify the built wheel actually contains the code
+        run: |
+          uv build --wheel -o dist
+          uv run python - <<'PY'
+          import glob, zipfile, sys
+          wheel = glob.glob("dist/*.whl")[0]
+          names = [n for n in zipfile.ZipFile(wheel).namelist() if n.endswith(".py")]
+          packages = [n for n in names if n.startswith("models/")]
+          print(f"{len(names)} .py files, {len(packages)} under models/")
+          if len(names) < 15 or len(packages) < 4:
+              sys.exit("wheel is missing code -- check [tool.setuptools] in pyproject.toml")
+          PY

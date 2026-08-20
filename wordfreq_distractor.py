@@ -275,7 +275,8 @@ def _farasa_tag_to_upos(tagged):
 class wordfreq_dict(distractor_dict):
     """General class of dictionaries"""
 
-    def __init__(self, params={}):
+    def __init__(self, params=None):
+        params = {} if params is None else params
         self.params = params
         self.words = []
         self.words_by_len = {}
@@ -841,7 +842,8 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
     - exclude_words (path, optional)
     """
 
-    def __init__(self, params={}):
+    def __init__(self, params=None):
+        params = {} if params is None else params
         super().__init__(params)
         self.lang = "en"
         self.nlp_sp = None
@@ -941,7 +943,8 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
     """Zipf-based German dictionary built from the wordfreq library."""
 
-    def __init__(self, params={}):
+    def __init__(self, params=None):
+        params = {} if params is None else params
         super().__init__(params)
         self.lang = "de"
         self.nlp_sp = None
@@ -1545,7 +1548,8 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
     Diacritics (tashkeel) are stripped for consistent matching.
     """
 
-    def __init__(self, params={}):
+    def __init__(self, params=None):
+        params = {} if params is None else params
         super().__init__(params)
         self.lang = "ar"
         self.nlp_sp = None
