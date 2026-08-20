@@ -12,16 +12,36 @@ dependencies = [
     "spacy>=3.5.0",
     "numpy>=2.0.0",
     "wordfreq>=3.0.0",
-    "fasttext>=0.9.2",
-    # 1.10 is the floor: earlier releases call torch.load() without
-    # weights_only=False, and PyTorch >= 2.6 defaults that to True, so loading
-    # any Stanza pretrain raises UnpicklingError. That made German and Arabic
-    # fail on every item while the run still exited 0.
-    "stanza>=1.10.0",
-    "farasapy>=0.0.14",
-    "HanTa>=0.2.0",
+    # Language-specific taggers and the semantic filter are extras; see
+    # [project.optional-dependencies]. `pip install .[all]` restores the old
+    # everything-installed behaviour.
+    #
+    # Note on stanza (in the [de] and [ar] extras): 1.10 is the floor because
+    # earlier releases call torch.load() without weights_only=False, and
+    # PyTorch >= 2.6 defaults that to True, so loading any Stanza pretrain
+    # raises UnpicklingError -- which made German and Arabic fail on every item
+    # while the run still exited 0.
     "en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
 ]
+
+[project.optional-dependencies]
+# English needs only the core dependencies plus its spaCy model, which is in
+# `dependencies` above. These extras let a single-language user skip the rest:
+# `pip install .[de]` is ~600 MB of taggers less than installing everything.
+de = ["stanza>=1.10.0", "HanTa>=0.2.0"]
+# Farasa additionally requires a JAVA RUNTIME on the machine (`java -version`),
+# and downloads a ~241 MB model on first use.
+ar = ["stanza>=1.10.0", "farasapy>=0.0.14"]
+# fastText semantic dissimilarity filter. The vectors are ~7 GB PER LANGUAGE and
+# are downloaded on first use; see download_model.py --fasttext.
+semantic = ["fasttext>=0.9.2"]
+# scripts/plot_*.py
+plots = ["matplotlib>=3.7"]
+# assess_output.py checks German POS with these; it degrades silently without them.
+assess = [
+    "de_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.8.0/de_core_news_sm-3.8.0-py3-none-any.whl",
+]
+all = ["maze-automate[de,ar,semantic,plots,assess]"]
 
 [dependency-groups]
 dev = [
@@ -33,10 +53,50 @@ testpaths = ["tests"]
 # The repo is flat: modules import each other assuming the root is importable.
 pythonpath = ["."]
 
+[project.scripts]
+distract = "distract:main"
+maze-build-lexicon = "build_lexicon:main"
+maze-ibexify = "ibexify:main"
+maze-download-model = "download_model:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# The repo is flat: the pipeline is top-level modules, not a package, and the
+# per-language adapters live under models/ and are imported by name from the
+# params files (`model_loc: models.german_code.model`).
+#
+# This block used to be `[tool.setuptools.packages.find]` with `include = []`
+# and `exclude = ["wiki*", "models*"]`. `include = []` matches nothing and the
+# exclude removed the only real packages, so `find_packages()` returned [] and
+# `pip install .` installed the metadata, all the dependencies, and zero
+# importable code -- while README and CLAUDE.md told pip users to do exactly
+# that.
+[tool.setuptools]
+py-modules = [
+    "assess_output",
+    "build_lexicon",
+    "distract",
+    "distractor",
+    "download_model",
+    "ibexify",
+    "input",
+    "lang_model",
+    "limit_repeats",
+    "main",
+    "output",
+    "semantic_filter",
+    "sentence_set",
+    "set_params",
+    "utils",
+    "wordfreq_distractor",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
-include = []
-exclude = ["wiki*", "models*"]
+include = ["models", "models.*"]
+exclude = ["wiki*", "tests*", "scripts*"]
 
 # The PyTorch CUDA 11.8 mirror also serves its own (frozen, years-old) copies of
 # common packages such as certifi, requests and urllib3. Without `explicit = true`

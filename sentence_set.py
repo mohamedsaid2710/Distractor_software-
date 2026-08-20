@@ -881,7 +881,16 @@ class Label:
                     if can_batch:
                         try:
                             target_tok = self.words[0] if self.words else ""
-                            norm_pool = [_normalize_distractor_token(dist, dictionary, lang=lang, target_token=target_tok, match_casing_only=match_casing_only) for dist in valid_pool]
+                            # surface_form, not _normalize_distractor_token: the string
+                            # that is scored has to be the string that is
+                            # emitted. The latter lowercases for English while
+                            # emission mirrors the target's case, so a titlecase
+                            # target ranked "kitchen" and delivered "Kitchen" --
+                            # different BPE sequences, different surprisals.
+                            norm_pool = [surface_form(dist, dictionary, lang,
+                                                      target_token=target_tok,
+                                                      match_casing_only=match_casing_only)
+                                         for dist in valid_pool]
                             batch_surps = model.get_surprisal_batch_from_hidden(self.hiddens[i], norm_pool)
                             for idx, dist in enumerate(valid_pool):
                                 surp_matrix[dist].append(batch_surps[idx])
@@ -953,7 +962,10 @@ class Label:
                         if can_batch:
                             try:
                                 target_tok = self.words[0] if self.words else ""
-                                norm_pool = [_normalize_distractor_token(dist, dictionary, lang=lang, target_token=target_tok, match_casing_only=match_casing_only) for dist in valid_pool]
+                                norm_pool = [surface_form(dist, dictionary, lang,
+                                                          target_token=target_tok,
+                                                          match_casing_only=match_casing_only)
+                                             for dist in valid_pool]
                                 batch_surps = model.get_surprisal_batch_from_hidden(self.hiddens[i], norm_pool)
                                 for idx, dist in enumerate(valid_pool):
                                     surp_matrix[dist].append(batch_surps[idx])
@@ -986,7 +998,7 @@ class Label:
                 if best_candidate:
                     # Apply grammatical casing based on the distractor's class and
                     # return immediately (documented Mode A match-surprisal behavior).
-                    self.distractor = _normalize_distractor_token(best_candidate, dictionary, lang=lang,
+                    self.distractor = surface_form(best_candidate, dictionary, lang,
                                                                   target_token=self.words[0] if self.words else "",
                                                                   match_casing_only=match_casing_only)
                     return self.distractor

@@ -10,10 +10,18 @@ min_abs_short: 15       # Absolute surprisal floor for targets <= short_word_max
                         # value German has used successfully (0 threshold misses).
 num_to_test: 200
 max_freq_widen: 9       # Max widening steps if the tight frequency band starves.
-min_pool_size: 60       # Widen the frequency band only while the pool is smaller
-                        # than this. Widening is for making a choice possible, not
-                        # for reaching num_to_test -- a bigger pool can only be had
-                        # by leaving the band.
+min_pool_size: 60       # THE DIFFICULTY DIAL. Retrieval stops relaxing once the pool
+                        # reaches this size, so it trades frequency matching against
+                        # implausibility: a bigger pool can only be filled by leaving
+                        # the frequency band, which buys higher-surprisal candidates.
+                        # Measured on the shipped samples (in-band / met-threshold):
+                        #    30 -> EN 34/47, 38/47   DE 41/45, 31/45
+                        #    60 -> EN 32/47, 40/47   DE 31/45, 38/45
+                        #   120 -> EN 31/47, 40/47   DE 30/45, 40/45
+                        #   250 -> EN 30/47, 39/47   DE 28/45, 42/45
+                        # Lower it when frequency matching matters most; raise it when
+                        # maximal implausibility does. English is flat between 60 and
+                        # 120; German is steep throughout.
 freq_widen_step: 0.1    # Zipf units added to each side of the band per step, so the
                         # worst case above is +/- 0.9 Zipf beyond freq_tolerance.
 pool_size_factor: 2.0   # Candidates gathered = num_to_test x this. Keep it modest: a
