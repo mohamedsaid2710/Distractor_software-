@@ -150,6 +150,39 @@ def build(lang, out_path=None, dry_run=False, batch=2000, second_opinion=True):
 
     tags = {w: d.pos_cache[w] for w in words if w in d.pos_cache}
 
+    # Fail loudly rather than writing a useless artifact.  Every batch_tag_words
+    # implementation returns silently when its tagger is missing -- Arabic needs
+    # Farasa (a 241 MB model plus a JVM), German needs HanTa, English needs the
+    # spaCy model -- so without this check an unavailable tagger produces a
+    # lexicon with zero tags, which generation would then load in place of the
+    # legacy cache and run with no POS information at all.
+    if not tags:
+        print(f"ERROR: tagged 0 of {len(words)} words. The {lang} tagger "
+              f"({spec['tagger']}) is not available, so there is nothing to "
+              f"write. Install it and re-run; the existing lexicon is unchanged.",
+              file=sys.stderr)
+        return 1
+    coverage = len(tags) / len(words)
+    if coverage < 0.5:
+        print(f"ERROR: only {len(tags)}/{len(words)} words ({coverage:.0%}) were "
+              f"tagged. That is too sparse to replace the current lexicon -- "
+              f"check that {spec['tagger']} is working. Nothing written.",
+              file=sys.stderr)
+        return 1
+
+    # A full artifact can still be a useless one: when a tagger loads but fails
+    # on every word, batch_tag_words records 'X' rather than raising, so the
+    # lexicon comes out complete and entirely unusable ('X' enters no candidate
+    # pool). An Arabic dry-run without a working Farasa produced 43,545 X and 22
+    # real tags, which the emptiness check above happily passed.
+    x_share = sum(1 for t in tags.values() if t == 'X') / len(tags)
+    if x_share > 0.2:
+        print(f"ERROR: {x_share:.0%} of tags are 'X' (unknown). {spec['tagger']} "
+              f"is loading but not tagging -- an 'X' entry enters no candidate "
+              f"pool, so this lexicon would be worse than none. Nothing written.",
+              file=sys.stderr)
+        return 1
+
     if second_opinion and lang in ('de', 'ar'):
         propn = stanza_propn(lang, words,
                              use_gpu=str(params.get('use_gpu', True)).lower() in ('true', '1'))

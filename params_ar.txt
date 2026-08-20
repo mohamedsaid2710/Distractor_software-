@@ -5,6 +5,9 @@
 # --- Core Scorer & Generation Settings ---
 min_delta: 10
 min_abs: 24
+min_abs_short: 15       # Absolute surprisal floor for targets <= short_word_max_len.
+                        # A flat min_abs is unreachable for function words; 15 is the
+                        # value German has used successfully (0 threshold misses).
 num_to_test: 200
 max_freq_widen: 9       # Max widening steps if the tight frequency band starves.
 freq_widen_step: 0.1    # Zipf units added to each side of the band per step, so the

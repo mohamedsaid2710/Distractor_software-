@@ -166,10 +166,22 @@ def _is_x_placeholder_token(token):
     return bool(_X_PLACEHOLDER_RE.fullmatch(body))
 
 
+# The standard Maze sentence-initial placeholder.  Position 0 has no prior
+# context to score against, so there is no real competition there and nothing to
+# length-match against; a constant string is also what published Maze materials
+# use, which keeps items comparable across studies.
+FIRST_WORD_PLACEHOLDER = "x-x-x"
+
+
 def _placeholder_for_length(length):
-    """Build a first-position placeholder exactly matching the target word's length."""
-    n = max(1, int(length))
-    return "-".join(["x"] * n)
+    """The first-position placeholder.
+
+    `length` is accepted and ignored.  This used to build one "x" per character
+    joined by hyphens, which renders at 2n-1 characters rather than n: a
+    10-letter target got "x-x-x-x-x-x-x-x-x-x", 19 characters against a target
+    of 10, despite the docstring claiming it matched the target's length.
+    """
+    return FIRST_WORD_PLACEHOLDER
 
 
 def _copy_edge_punct_no_case(source_token, token):
@@ -488,11 +500,24 @@ class Label:
         # first call's targets in front, so `surprisal_targets[j]` read a stale
         # threshold for every position.
         self.surprisal_targets = []
+        # A flat absolute floor is unreachable for short function-word targets.
+        # English `min_abs: 25` asks for p <= 3e-8, which no plausible-slot
+        # function word achieves: 14 of 47 positions in a sample run missed the
+        # threshold and fell into the fallback cascade, where the frequency band
+        # and the guards are weaker -- that is where the junk came from.
+        # For these targets implausibility comes from syntactic category (the
+        # candidate pool is already split NOUN / !NOUN) rather than from extreme
+        # surprisal, so they get their own floor. Defaults to `min_abs`, i.e. no
+        # change, when `min_abs_short` is absent.
+        min_abs = params["min_abs"]
+        if is_short_word and params.get("min_abs_short") is not None:
+            min_abs = float(params["min_abs_short"])
+
         for surprisal in self.surprisals:  # calculate desired surprisal thresholds
             if absolute_threshold_only:
-                base = params["min_abs"]
+                base = min_abs
             else:
-                base = max(params["min_abs"], surprisal + params["min_delta"])
+                base = max(min_abs, surprisal + params["min_delta"])
             if is_early:
                 base += early_boost
             if is_short_word:

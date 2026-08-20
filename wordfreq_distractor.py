@@ -194,32 +194,67 @@ STTS_TO_UPOS = {
 }
 
 
-def _farasa_tag_to_upos(tagged):
-    """Convert a raw Farasa tag string (e.g. 'S-و/CONJ+ال/DET+قمر/NOUN') to UPOS.
+# Farasa morpheme classes that attach to a lexical head rather than being one.
+# PRON belongs here: Arabic writes possessive and object pronouns as suffixes
+# ("كتابه" = his book), so taking the last morpheme's tag labelled every such
+# noun or verb a pronoun.  The shipped Arabic lexicon holds 7,166 PRON entries
+# for that reason.
+_FARASA_CLITICS = frozenset({
+    'CONJ', 'PREP', 'DET', 'PART', 'PUNC', 'NSUFF', 'CASE', 'PRON', 'S', 'E',
+})
 
-    Walks the '+'-separated morphemes from the END, skipping clitic classes
-    (CONJ/PREP/DET/PART/PUNC) to find the true lexical head, then standardizes
-    the Farasa tag to Universal POS. Unknown/garbage tags become 'X'.
+# Farasa tag -> UPOS.  Anything not listed becomes 'X'.
+_FARASA_TO_UPOS = {
+    'NOUN': 'NOUN', 'V': 'VERB', 'ADJ': 'ADJ', 'ADV': 'ADV', 'NUM': 'NUM',
+    'PREP': 'ADP', 'CONJ': 'CCONJ', 'DET': 'DET', 'PART': 'PART',
+    'PRON': 'PRON', 'INTERJ': 'INTJ', 'ABBREV': 'X', 'FOREIGN': 'X',
+}
+
+
+def _farasa_morphemes(tagged):
+    """Yield the (form, TAG) morphemes of a raw Farasa POS string, head-last.
+
+    Current farasapy wraps its output in sentinels and separates tokens with
+    spaces, so a one-word tagging looks like::
+
+        'S/S كتاب/NOUN-MS E/E'
+        'S/S مدرس +ة/NOUN+NSUFF-FS E/E'
+
+    The previous parser split on '+' alone.  The whole string was therefore one
+    "part", its tag read as the trailing 'E', and every Arabic word in the
+    lexicon came back 'X' -- 'X' enters no candidate pool, so Arabic ran with no
+    POS information at all and `exclude_propn_candidates` did nothing.
+    Feature suffixes ('NOUN-MS', 'NSUFF-FS') are also stripped here; they made
+    even a correctly-located tag fail the lookup.
     """
-    parts = tagged.split('+')
-    pos = 'X'
-    for part in reversed(parts):
-        if '/' in part:
-            curr = part.split('/')[-1].strip().upper()
-            if curr not in ('CONJ', 'PREP', 'DET', 'PART', 'PUNC'):
-                pos = curr
-                break
-    if pos == 'X' and parts:
-        if '/' in parts[-1]:
-            pos = parts[-1].split('/')[-1].strip().upper()
+    for token in tagged.split():
+        for morpheme in token.split('+'):
+            morpheme = morpheme.strip()
+            if '/' not in morpheme:
+                continue
+            form, _, tag = morpheme.rpartition('/')
+            # 'NOUN-MS' -> 'NOUN'; the part after '-' is gender/number features.
+            yield form, tag.strip().upper().split('-')[0]
 
-    if pos == 'V': pos = 'VERB'
-    elif pos == 'PREP': pos = 'ADP'
-    elif pos == 'CONJ': pos = 'CCONJ'
-    elif 'PRON' in pos: pos = 'PRON'
-    elif pos not in ('NOUN', 'ADJ', 'ADV', 'NUM', 'DET', 'PART', 'PROPN'):
-        pos = 'X'
-    return pos
+
+def _farasa_tag_to_upos(tagged):
+    """Convert a raw Farasa tag string to UPOS.
+
+    Walks the morphemes from the END, skipping clitics to find the true lexical
+    head.  If every morpheme is a clitic -- which is what a standalone pronoun
+    or preposition looks like -- the last one is the head after all.
+    """
+    morphemes = [tag for _form, tag in _farasa_morphemes(tagged)
+                 if tag not in ('S', 'E')]
+    if not morphemes:
+        return 'X'
+
+    for tag in reversed(morphemes):
+        if tag not in _FARASA_CLITICS:
+            return _FARASA_TO_UPOS.get(tag, 'X')
+
+    # All clitics: the word IS a function word, so take the last tag.
+    return _FARASA_TO_UPOS.get(morphemes[-1], 'X')
 
 
 class wordfreq_dict(distractor_dict):
