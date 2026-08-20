@@ -10,6 +10,10 @@ min_abs_short: 15       # Absolute surprisal floor for targets <= short_word_max
                         # value German has used successfully (0 threshold misses).
 num_to_test: 2000
 max_freq_widen: 9       # Max widening steps if the tight frequency band starves.
+min_pool_size: 60       # Widen the frequency band only while the pool is smaller
+                        # than this. Widening is for making a choice possible, not
+                        # for reaching num_to_test -- a bigger pool can only be had
+                        # by leaving the band.
 freq_widen_step: 0.1    # Zipf units added to each side of the band per step, so the
                         # worst case above is +/- 0.9 Zipf beyond freq_tolerance.
 pool_size_factor: 2.0   # Candidates gathered = num_to_test x this. Keep it modest: a
@@ -23,6 +27,10 @@ absolute_threshold_only: False
 # Pins every RNG used during selection, so the same input + the same seed
 # gives byte-identical output. Set to `null` for the old random behaviour.
 seed: 12345
+write_report: True      # Also write <output>.report.csv: per position, the achieved
+                        # surprisal, its threshold, the frequency band, the pool size
+                        # and which relaxation (if any) was used. The delim/ibex files
+                        # are unchanged.
 
 # --- Linguistic & POS Matching ---
 language: "de"

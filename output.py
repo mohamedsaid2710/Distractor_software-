@@ -72,3 +72,148 @@ def append_results(outfile, sentence_set, outformat):
                 f.write(ibex_line(sentence.tag, sentence.id,
                                   sentence.word_sentence, sentence.distractor_sentence))
             f.flush()
+
+REPORT_COLUMNS = [
+    "item_id", "label", "position", "target", "distractor",
+    "target_len", "distractor_len", "len_delta", "len_ok",
+    "target_zipf", "distractor_zipf", "zipf_delta",
+    "band_min_zipf", "band_max_zipf", "in_band",
+    "target_surprisal", "achieved_surprisal", "threshold", "meets_threshold",
+    "pool_size", "freq_widen_steps", "pos_filter", "used_fallback",
+    "relaxation", "is_placeholder",
+]
+
+
+def report_path(outfile):
+    """Sidecar path for *outfile*: 'out.txt' -> 'out.report.csv'."""
+    base, _sep, _ext = outfile.rpartition(".")
+    return (base or outfile) + ".report.csv"
+
+
+def init_report(outfile):
+    """Create the sidecar with its header row, replacing any previous one."""
+    with open(report_path(outfile), "w", encoding="utf-8", newline="") as f:
+        csv.writer(f).writerow(REPORT_COLUMNS)
+
+
+def append_report(outfile, sentence_set, lang, len_tolerance=0):
+    """Append one row per distractor position for this item.
+
+    The delim and ibex files carry only the chosen word, so a distractor that
+    came out of the desperation fallback looks exactly like one that met every
+    criterion.  This sidecar is what lets a paper state how many items actually
+    met them, and lets a borderline item be found and replaced.
+    """
+    try:
+        import wordfreq as _wf
+    except ImportError:
+        _wf = None
+
+    def zipf(word):
+        if not _wf or not word:
+            return None
+        form = word.lower()
+        if lang == 'ar':
+            from wordfreq_distractor import strip_arabic_diacritics
+            form = strip_arabic_diacritics(form)
+        return round(_wf.zipf_frequency(form, lang), 3)
+
+    from utils import strip_punct
+
+    rows = []
+    seen = set()
+    for sentence in sentence_set.sentences:
+        for i, lab in enumerate(sentence.labels):
+            if i == 0 or lab not in sentence_set.labels:
+                continue
+            if lab in seen:      # one distractor per label; report it once
+                continue
+            seen.add(lab)
+            label = sentence_set.labels[lab]
+            rep = getattr(label, "report", {}) or {}
+            target = strip_punct(sentence.words[i])
+            dist = strip_punct(label.distractor or "")
+            tz, dz = zipf(target), zipf(dist)
+            lo, hi = rep.get("band_min_zipf"), rep.get("band_max_zipf")
+            achieved, thresh = rep.get("achieved_surprisal"), rep.get("threshold")
+            rows.append([
+                sentence_set.id, lab, i, target, dist,
+                len(target), len(dist), len(dist) - len(target),
+                abs(len(dist) - len(target)) <= len_tolerance,
+                tz, dz, (None if tz is None or dz is None else round(dz - tz, 3)),
+                lo, hi,
+                (None if dz is None or lo is None else lo <= dz <= hi),
+                rep.get("target_surprisal"), achieved, thresh,
+                (None if achieved is None or thresh is None else achieved >= thresh),
+                rep.get("pool_size"), rep.get("freq_widen_steps"),
+                rep.get("pos_filter"), rep.get("used_fallback"),
+                rep.get("relaxation"), rep.get("is_placeholder"),
+            ])
+
+    if rows:
+        with open(report_path(outfile), "a", encoding="utf-8", newline="") as f:
+            csv.writer(f).writerows(rows)
+            f.flush()
+
+
+def summarize_report(outfile):
+    """Print a compliance summary of the sidecar, and return it as a dict.
+
+    These are the numbers a methods section needs: how many positions actually
+    met the length, frequency and surprisal criteria, and how many were
+    resolved by a relaxation.  Split by target frequency because the two groups
+    fail in opposite directions -- content words are frequency-matched but can
+    miss the surprisal floor, while high-frequency function words clear the
+    floor easily and cannot be frequency-matched, there being too few short
+    words at that frequency.
+    """
+    path = report_path(outfile)
+    try:
+        with open(path, encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+    except OSError:
+        return {}
+    if not rows:
+        return {}
+
+    def truthy(rows_, field):
+        return sum(1 for r in rows_ if r.get(field) == "True")
+
+    def block(label, rows_):
+        if not rows_:
+            return
+        n = len(rows_)
+        print(f"    {label:<22} n={n:<4} "
+              f"length {truthy(rows_, 'len_ok')}/{n}  "
+              f"frequency {truthy(rows_, 'in_band')}/{n}  "
+              f"surprisal {truthy(rows_, 'meets_threshold')}/{n}  "
+              f"relaxed {truthy(rows_, 'used_fallback')}/{n}")
+
+    def target_zipf(r):
+        try:
+            return float(r["target_zipf"])
+        except (TypeError, ValueError):
+            return 0.0
+
+    print("\n>>> QUALITY REPORT  (" + path + ")")
+    block("all positions", rows)
+    block("content (Zipf<=6)", [r for r in rows if target_zipf(r) <= 6])
+    block("function (Zipf>6)", [r for r in rows if target_zipf(r) > 6])
+
+    placeholders = truthy(rows, "is_placeholder")
+    if placeholders:
+        print(f"    WARNING: {placeholders} position(s) emitted a placeholder "
+              f"rather than a real word.")
+    widened = sum(1 for r in rows if r.get("freq_widen_steps") not in ("0", "", None))
+    if widened:
+        print(f"    {widened}/{len(rows)} position(s) needed the frequency band "
+              f"widened to fill the pool.")
+    return {
+        "n": len(rows),
+        "exact_length": sum(1 for r in rows if r["len_delta"] == "0"),
+        "len_ok": truthy(rows, "len_ok"),
+        "in_band": truthy(rows, "in_band"),
+        "met_threshold": truthy(rows, "meets_threshold"),
+        "used_fallback": truthy(rows, "used_fallback"),
+        "placeholders": placeholders,
+    }

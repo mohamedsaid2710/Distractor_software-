@@ -9,7 +9,8 @@ candidate pool, so Arabic ran with no POS information and
 import pytest
 
 from utils import strip_punct, copy_punct
-from wordfreq_distractor import _farasa_tag_to_upos, strip_arabic_diacritics
+from wordfreq_distractor import (_farasa_tag_to_upos, _farasa_morpheme_tags,
+                                 strip_arabic_diacritics)
 
 
 # --- Farasa parsing ------------------------------------------------------
@@ -20,9 +21,32 @@ from wordfreq_distractor import _farasa_tag_to_upos, strip_arabic_diacritics
     ("S/S يكتب/V E/E", "VERB"),
     ("S/S مدرس +ة/NOUN+NSUFF-FS E/E", "NOUN"),  # NSUFF is a clitic
     ("S-و/CONJ+ال/DET+قمر/NOUN", "NOUN"),        # the older sentinel-less format
+    ("S/S التي/PART E/E", "PART"),
 ])
 def test_lexical_head_is_found(raw, expected):
     assert _farasa_tag_to_upos(raw) == expected
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("S/S ال+ كتاب/DET+NOUN-MS E/E", ["DET", "NOUN"]),
+    ("S/S ال+ مدرس +ة/DET+NOUN+NSUFF-FS E/E", ["DET", "NOUN", "NSUFF"]),
+    ("S/S كتاب/NOUN-MS E/E", ["NOUN"]),
+])
+def test_forms_and_tags_are_on_opposite_sides_of_one_slash(raw, expected):
+    """Farasa writes form1+form2/tag1+tag2, not form1/tag1+form2/tag2.
+
+    Pairing each form with its neighbour's tag labelled every definite noun
+    'DET' -- 12,289 of 43,567 words in the Arabic lexicon.
+    """
+    assert _farasa_morpheme_tags(raw) == expected
+
+
+@pytest.mark.parametrize("raw", [
+    "S/S ال+ كتاب/DET+NOUN-MS E/E",
+    "S/S ال+ مدرس +ة/DET+NOUN+NSUFF-FS E/E",
+])
+def test_definite_article_does_not_hide_the_noun(raw):
+    assert _farasa_tag_to_upos(raw) == "NOUN"
 
 
 def test_possessive_suffix_does_not_make_a_noun_a_pronoun():

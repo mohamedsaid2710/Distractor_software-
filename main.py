@@ -5,7 +5,8 @@ import random
 from set_params import set_params
 from limit_repeats import Repeatcounter
 from input import read_input
-from output import append_results
+from output import (append_results, init_report, append_report, report_path,
+                    summarize_report)
 import re
 
 
@@ -81,6 +82,11 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
     with open(outfile, 'w', encoding='utf-8'):
         pass
 
+    write_report = bool(params.get("write_report", True))
+    report_lang = params.get("language", "en")
+    if write_report:
+        init_report(outfile)
+
     total = len(sents)
     executed_ids = []
     failed_ids = []
@@ -97,6 +103,9 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
             
             # INCREMENTAL SAVE: Save this sentence set immediately
             append_results(outfile, ss, outformat)
+            if write_report:
+                append_report(outfile, ss, report_lang,
+                              len_tolerance=int(params.get('len_tolerance', 0)))
             executed_ids.append(ss_id)
             print(f"    ✅ Success: Item {ss_id} saved to {outfile}")
             
@@ -111,6 +120,8 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
             # exactly when memory pressure was already the likely cause.
             ss.clean_up()
     
+    if write_report:
+        summarize_report(outfile)
     print(f"\n>>> GENERATION COMPLETE. Processed {len(executed_ids)}/{total} items.")
     print(f">>> Successfully saved IDs: {executed_ids}")
     if failed_ids:

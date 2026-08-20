@@ -19,7 +19,8 @@ The heart is `Label.choose_distractor`, which runs in stages:
  7. selection      — Mode A (first passing) / Mode B (highest passing) /
                      match-surprisal (closest to target, returns early);
  8. fallbacks      — six staged relaxations that guarantee a real word
-                     (placeholder "wort"/"word" is mathematically last).
+                     (an unfillable position emits the x-x-x placeholder
+                     and is flagged in the report sidecar).
 
 Casing is normalized at the very end by `_normalize_distractor_token`
 (German: POS-driven Titlecase via the dictionary's pos_cache; English:
@@ -32,6 +33,7 @@ from limit_repeats import Repeatcounter
 import re
 import random
 import os
+import math as _math
 try:
     import wordfreq as _wordfreq_mod
 except ImportError:
@@ -425,6 +427,11 @@ class Label:
         # because a label ID is not a position: `make_labels` rewrites IDs to
         # "1_L5" form, and user-supplied labels are arbitrary strings anyway.
         self.positions = []
+        # How this label's distractor was arrived at, for the report sidecar.
+        # Without it a desperation-fallback word is indistinguishable from a
+        # clean one in the output file, so there is no way to state how many
+        # items actually met the criteria.
+        self.report = {}
 
     def add_sentence(self, word, probs, surprisal, hidden=None, position=None):
         """Given a position that belongs in the label, add it's attributes to our lists"""
@@ -648,6 +655,12 @@ class Label:
         params['target_is_noun'] = target_is_noun
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
+        self.report['pool_size'] = len(distractor_opts) if distractor_opts else 0
+        self.report['freq_widen_steps'] = getattr(dictionary, 'last_freq_widen_steps', 0)
+        self.report['target_zipf'] = round(target_zipf, 3)
+        self.report['band_min_zipf'] = round(min_freq / _math.log(10), 3)
+        self.report['band_max_zipf'] = round(max_freq / _math.log(10), 3)
+        self.report['pos_filter'] = pos_filter or ''
         
         # --- SHUFFLE SHORT WORDS ---
         # The user requested 3 and 4-letter words be completely randomized from their candidate pool
@@ -774,6 +787,67 @@ class Label:
                 if dist_surp < min_surp_val:
                     min_surp_val = dist_surp
             return min_surp_val
+
+        # ------------------------------------------------------------------
+        # ONE admissibility test, applied everywhere.
+        #
+        # These guards used to be re-implemented inline at four sites -- the
+        # main pool, the match-surprisal path, the pre-scoring filter and the
+        # fallback cascade -- and no two agreed.  The pre-scoring filter
+        # applied no German guards at all; the fallback applied no length or
+        # avoid check; only the main pool checked the script.  That is the
+        # structural reason a word the happy path would reject can still
+        # arrive through a fallback, which is where lowercased nouns and
+        # proper nouns came from.
+        #
+        # Returns None when the candidate may be used, else a short reason.
+        # The reason is what the report sidecar records as the relaxation.
+        # ------------------------------------------------------------------
+        _script_re = re.compile(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$")
+
+        def admissibility(candidate, allow_banned=False, relax_length_mult=1.0,
+                          enforce_pos=True, require_script=True):
+            base = strip_punct(candidate)
+            cand_l = base.lower()
+            if not cand_l:
+                return 'empty'
+            if require_script and not _script_re.match(base):
+                return 'script'
+            if not candidate_length_ok(candidate, relax_mult=relax_length_mult):
+                return 'length'
+            if cand_l in avoid:
+                return 'is-target-or-local-repeat'
+            if cand_l in global_exclude:
+                return 'excluded'
+            if (not allow_banned) and cand_l in banned_l:
+                return 'banned'
+            if exclude_propn_candidates and is_propn_candidate(candidate):
+                return 'propn'
+            # Containment either way is a giveaway ("cat" vs "cats").
+            for _t in self.words:
+                _t = strip_punct(_t).lower()
+                if _t and (_t in cand_l or cand_l in _t):
+                    return 'contains-target'
+
+            if lang == 'de':
+                _pc = getattr(dictionary, 'pos_cache', {})
+                _tag = _pc.get(cand_l, None)
+                if _tag in ('X', 'PROPN'):
+                    return 'pos-' + _tag.lower()
+                if _is_lexically_garbage(cand_l, lang='de'):
+                    return 'garbage'
+                if enforce_pos:
+                    # The noun wall. With no tag, fall back to orthography --
+                    # a capitalised German word is a noun.
+                    _is_noun = (_tag in ('NOUN', 'PROPN')) if _tag is not None \
+                        else base[0].isupper()
+                    if bool(params.get('target_is_noun', False)) != _is_noun:
+                        return 'noun-wall'
+            return None
+
+        def is_admissible(candidate, **kw):
+            return admissibility(candidate, **kw) is None
+
         def pick_best_from_pool(pool, allow_banned=False, relax_length_mult=1.0, enforce_pos=None):
             """Pick the most implausible candidate from a pool, respecting filters.
             
@@ -784,43 +858,12 @@ class Label:
                 local_best = None
                 local_best_surp = float('-inf')
                 
-                valid_pool = []
-                for dist in sub_pool:
-                    dist_l = strip_punct(dist).lower()
-                    if not dist_l:
-                        continue
-                    if not candidate_length_ok(dist, relax_mult=relax_length_mult):
-                        continue
-                    if dist_l in avoid or dist_l in global_exclude:
-                        continue
-                    if exclude_propn_candidates and is_propn_candidate(dist):
-                        continue
-                    if (not allow_banned) and (dist_l in banned_l):
-                        continue
-                    if not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", strip_punct(dist)):
-                        continue
-
-                    # QUALITY GATE + GRAMMAR GUARD
-                    if lang == 'de':
-                        _pc = getattr(dictionary, 'pos_cache', {})
-                        _cand_tag = _pc.get(dist_l, None)
-                        
-                        if _is_lexically_garbage(dist_l, lang='de') or _cand_tag == 'X':
-                            continue
-
-                        if _cand_tag is not None:
-                            _is_noun_d = (_cand_tag in ('NOUN', 'PROPN'))
-                        else:
-                            _is_noun_d = strip_punct(dist)[0].isupper()
-                        
-                        target_is_noun_val = params.get('target_is_noun', False)
-                        if target_is_noun_val != _is_noun_d:
-                            continue
-
-                        if _cand_tag == 'PROPN' or is_propn_candidate(dist):
-                            continue
-
-                    valid_pool.append(dist)
+                valid_pool = [
+                    dist for dist in sub_pool
+                    if is_admissible(dist, allow_banned=allow_banned,
+                                     relax_length_mult=relax_length_mult,
+                                     enforce_pos=(enforce_pos is not False))
+                ]
                 
                 if not valid_pool:
                     if allow_banned:
@@ -898,48 +941,7 @@ class Label:
                     best_diff = float('inf')
                     best_cand = None
                     
-                    valid_pool = []
-                    for dist in sub_pool:
-                        dist_l = strip_punct(dist).lower()
-                        if dist_l in banned_l or dist_l in avoid or dist_l in global_exclude:
-                            continue
-                        if not candidate_length_ok(dist):
-                            continue
-                        
-                        # German Inviolable Guards: Noun-match, No X, No PROPN
-                        if lang == 'de':
-                            _pc = getattr(dictionary, 'pos_cache', {})
-                            _cand_tag = _pc.get(dist_l, None)
-                            
-                            # Reject X and PROPN
-                            if _cand_tag in ('X', 'PROPN') or is_propn_candidate(dist):
-                                continue
-                                
-                            # Reject Lexical Garbage
-                            if _is_lexically_garbage(dist_l, lang='de'):
-                                continue
-
-                            # Enforce Noun Wall using cache, fallback to casing for new words
-                            if _cand_tag is not None:
-                                _is_noun_d = (_cand_tag in ('NOUN', 'PROPN'))
-                            else:
-                                _is_noun_d = strip_punct(dist)[0].isupper()
-                            
-                            t_is_noun_val = params.get('target_is_noun', False)
-                            if t_is_noun_val != _is_noun_d:
-                                continue
-
-                        # light continuation filter: skip if candidate literally contains the target
-                        skip = False
-                        for target in self.words:
-                            t = strip_punct(target).lower()
-                            if t and (t in dist_l or dist_l in t):
-                                skip = True
-                                break
-                        if skip:
-                            continue
-
-                        valid_pool.append(dist)
+                    valid_pool = [dist for dist in sub_pool if is_admissible(dist)]
                         
                     if not valid_pool:
                         return None
@@ -990,25 +992,10 @@ class Label:
                     return self.distractor
 
         # 1. Pre-filter candidates (cheap checks: length, banned, POS, repeat)
-        qualified_candidates = []
-        for dist in distractor_opts:
-            dist_l = strip_punct(dist).lower()
-            if dist_l in banned_l or dist_l in avoid or dist_l in global_exclude:
-                continue
-            if not candidate_length_ok(dist):
-                continue
-            if is_propn_candidate(dist) and params.get("exclude_propn_candidates", False):
-                continue
-            # light continuation filter
-            skip = False
-            for target in self.words:
-                t = strip_punct(target).lower()
-                if t and (t in dist_l or dist_l in t):
-                    skip = True
-                    break
-            if skip:
-                continue
-            qualified_candidates.append(dist)
+        # This filter used to apply no German guards at all -- no noun wall, no
+        # X/PROPN rejection, no garbage check -- so the pool that reached
+        # scoring was broader than the pool the selector would accept.
+        qualified_candidates = [dist for dist in distractor_opts if is_admissible(dist)]
         
         # Apply semantic dissimilarity filter if enabled
         if params.get('semantic_filter', False) and qualified_candidates:
@@ -1111,6 +1098,7 @@ class Label:
         # Hard guarantee: never return x-x-x for non-initial positions.
         # If no candidate survived strict filters, relax constraints in stages.
         used_fallback = best_word is None
+        fallback_relaxation = ''
         _fallback_pool_n = int(params.get('num_to_test', 200))
         if best_word is None:
             allow_banned_fallback = bool(params.get("allow_banned_fallback", False))
@@ -1279,65 +1267,29 @@ class Label:
 
                     if final_pool:
                         random.shuffle(final_pool)
-                        for cand in final_pool:
-                            cand_l = cand.lower()
-                            if cand_l in banned_l or cand_l in avoid:
-                                continue
-                            # Apply the same guards as _find_best so the ultimate
-                            # desperation path cannot produce garbage or casing leaks.
-                            if lang == 'de':
-                                if len(cand_l) < 8:
-                                    if not re.search(r'[aeiouyäöü]', cand_l):
-                                        continue
-                                    if _wordfreq_mod is not None:
-                                        # Extremely tolerant frequency check for maximum candidates
-                                        if _wordfreq_mod.zipf_frequency(cand_l, 'de') < float(params.get('json_min_zipf', 0.5)):
-                                            continue
-                                if is_propn_candidate(cand):
-                                    continue
-                                
-                                # TIGHTENED END-GAMES: 
-                                # Even in desperation fallback, we never cross the Noun/non-Noun wall.
-                                _pc2 = getattr(dictionary, 'pos_cache', {})
-                                _is_noun_d2 = False
-                                if cand_l in _pc2:
-                                    _is_noun_d2 = _pc2[cand_l] in ('NOUN', 'PROPN')
-                                elif hasattr(dictionary, 'nouns_by_len'):
-                                    l_len2 = len(cand_l)
-                                    if l_len2 in dictionary.nouns_by_len and cand_l in dictionary.nouns_by_len[l_len2]:
-                                        _is_noun_d2 = True
-                                
-                                target_is_noun_val = params.get('target_is_noun', False)
-                                if target_is_noun_val != _is_noun_d2:
-                                    continue
-                            best_word = cand
-                            break
-                        if best_word is None:
-                            # Total desperation: ignore banned list, take first clean word
-                            random.shuffle(final_pool) # Shuffle to get variety in desperation
+                        # Same predicate as every other path, relaxed in named
+                        # steps rather than by omitting guards. This block used
+                        # to apply no length check and no `avoid` check at all
+                        # on its second pass, and a different, laxer German
+                        # guard than _find_best on both -- so the desperation
+                        # path could emit exactly what the main path rejected.
+                        for _relax in (
+                            dict(relax_length_mult=3.0),
+                            dict(relax_length_mult=3.0, allow_banned=True),
+                            dict(relax_length_mult=6.0, allow_banned=True),
+                            # Last resort: drop the noun wall but never the
+                            # PROPN, garbage or exclude-list guards.
+                            dict(relax_length_mult=6.0, allow_banned=True,
+                                 enforce_pos=False),
+                        ):
                             for cand in final_pool:
-                                cand_l = cand.lower()
-                                if lang == 'de':
-                                    if len(cand_l) < 8:
-                                        if not re.search(r'[aeiouyäöü]', cand_l):
-                                            continue
-                                    _pc2 = getattr(dictionary, 'pos_cache', {})
-                                    _is_noun_d2 = False
-                                    if cand_l in _pc2:
-                                        _is_noun_d2 = _pc2[cand_l] in ('NOUN', 'PROPN')
-                                    elif hasattr(dictionary, 'nouns_by_len'):
-                                        l_len2 = len(cand_l)
-                                        if l_len2 in dictionary.nouns_by_len and cand_l in dictionary.nouns_by_len[l_len2]:
-                                            _is_noun_d2 = True
-                                    target_is_noun_val = params.get('target_is_noun', False)
-                                    if target_is_noun_val != _is_noun_d2:
-                                        continue
-                                if is_propn_candidate(cand):
-                                    continue
-                                best_word = cand
+                                if is_admissible(cand, **_relax):
+                                    best_word = cand
+                                    fallback_relaxation = ",".join(
+                                        f"{k}={v}" for k, v in sorted(_relax.items()))
+                                    break
+                            if best_word is not None:
                                 break
-                        if best_word is None:
-                            best_word = final_pool[0]  # absolute last resort
                 else:
                     # Legacy fallback for English/etc.
                     emergency_pool = [w.text for w in getattr(dictionary, 'words', []) 
@@ -1349,13 +1301,34 @@ class Label:
                 logging.error(f"Ultimate fallback failed: {e}")
                 
             if best_word is None:
-                best_word = "wort" # Mathematically impossible with 634k words, but safe.
+                # No real word survived even the loosest admissibility.  The old
+                # code emitted a literal "wort"/"word" here, which is a German
+                # or English noun that reads as a real distractor -- silently
+                # corrupting the item rather than reporting a failure.
+                best_word = _placeholder_for_length(0)
+                fallback_relaxation = 'none-admissible'
+                logging.error(
+                    "Item %s label %s: no admissible candidate at any relaxation; "
+                    "emitting the placeholder. This position needs manual "
+                    "attention (see the report sidecar).", self.id, self.lab)
             best_min_surp = float('-inf')
 
         # Final casing pass based on DISTRACTOR category
         self.distractor = surface_form(best_word, dictionary, lang,
                                        target_token=self.words[0] if self.words else "",
                                        match_casing_only=match_casing_only)
+
+        self.report['used_fallback'] = used_fallback
+        self.report['relaxation'] = fallback_relaxation
+        self.report['achieved_surprisal'] = (
+            None if best_min_surp in (float('-inf'), float('inf'))
+            else round(best_min_surp, 3))
+        self.report['threshold'] = (round(max(self.surprisal_targets), 3)
+                                    if self.surprisal_targets else None)
+        self.report['target_surprisal'] = (round(max(self.surprisals), 3)
+                                           if self.surprisals else None)
+        self.report['is_placeholder'] = _is_x_placeholder_token(best_word) or \
+            best_word in ('wort', 'word')
 
         # This used to fire on every Mode A call, successes included, so the
         # log gave no signal about which items actually missed their threshold.
@@ -1693,7 +1666,15 @@ class Sentence_Set:
                             break
             if best is None and pool:
                 best = pool[0] # Desperation mode, ignore filters
-            return best if best is not None else "wort"
+            # Never a literal "wort": that is a real German noun and reads as a
+            # genuine distractor, so it corrupts the item silently instead of
+            # reporting a failure.
+            if best is None:
+                logging.error(
+                    "Item %s: no admissible first-word distractor; emitting the "
+                    "placeholder.", self.id)
+                return _placeholder_for_length(0)
+            return best
 
         use_first_placeholder = bool(params.get("first_token_placeholder", True))
         for sentence in self.sentences: #give the sentences the distractors

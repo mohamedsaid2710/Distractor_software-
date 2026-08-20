@@ -211,30 +211,45 @@ _FARASA_TO_UPOS = {
 }
 
 
-def _farasa_morphemes(tagged):
-    """Yield the (form, TAG) morphemes of a raw Farasa POS string, head-last.
+def _farasa_morpheme_tags(tagged):
+    """Return the morpheme tags of a raw Farasa POS string for ONE word.
 
-    Current farasapy wraps its output in sentinels and separates tokens with
-    spaces, so a one-word tagging looks like::
+    Farasa puts every segment's form on the left of a single '/' and every
+    segment's tag on the right, each side '+'-separated -- not as form/tag
+    pairs.  Current farasapy also wraps the result in sentinels::
 
-        'S/S كتاب/NOUN-MS E/E'
-        'S/S مدرس +ة/NOUN+NSUFF-FS E/E'
+        'S/S كتاب/NOUN-MS E/E'                  -> ['NOUN']
+        'S/S ال+ كتاب/DET+NOUN-MS E/E'          -> ['DET', 'NOUN']
+        'S/S ال+ مدرس +ة/DET+NOUN+NSUFF-FS E/E' -> ['DET', 'NOUN', 'NSUFF']
 
-    The previous parser split on '+' alone.  The whole string was therefore one
-    "part", its tag read as the trailing 'E', and every Arabic word in the
-    lexicon came back 'X' -- 'X' enters no candidate pool, so Arabic ran with no
-    POS information at all and `exclude_propn_candidates` did nothing.
-    Feature suffixes ('NOUN-MS', 'NSUFF-FS') are also stripped here; they made
-    even a correctly-located tag fail the lookup.
+    The original parser split on '+' alone and read the trailing 'E' as the
+    tag, so every Arabic word came back 'X' -- and 'X' enters no candidate
+    pool, meaning Arabic generation ran with no POS information whatsoever.
+    Splitting on whitespace instead paired each form with its NEIGHBOUR's tag,
+    which labelled every definite noun 'DET' (12,289 of 43,567 words).
+
+    Feature suffixes ('NOUN-MS', 'NSUFF-FS') are stripped: they are gender and
+    number, and they made even a correctly located tag fail the lookup.
+
+    Only single-word input is supported, which is all the pipeline tags.
     """
-    for token in tagged.split():
-        for morpheme in token.split('+'):
-            morpheme = morpheme.strip()
-            if '/' not in morpheme:
-                continue
-            form, _, tag = morpheme.rpartition('/')
-            # 'NOUN-MS' -> 'NOUN'; the part after '-' is gender/number features.
-            yield form, tag.strip().upper().split('-')[0]
+    body = tagged.strip()
+    # Drop the sentinels; they are not morphemes of the word.
+    if body.startswith('S/S'):
+        body = body[3:]
+    if body.endswith('E/E'):
+        body = body[:-3]
+    body = body.strip()
+    if '/' not in body:
+        return []
+
+    _forms, _, tag_block = body.rpartition('/')
+    tags = []
+    for tag in tag_block.split('+'):
+        tag = tag.strip().upper().split('-')[0]   # 'NOUN-MS' -> 'NOUN'
+        if tag:
+            tags.append(tag)
+    return tags
 
 
 def _farasa_tag_to_upos(tagged):
@@ -244,7 +259,7 @@ def _farasa_tag_to_upos(tagged):
     head.  If every morpheme is a clitic -- which is what a standalone pronoun
     or preposition looks like -- the last one is the head after all.
     """
-    morphemes = [tag for _form, tag in _farasa_morphemes(tagged)
+    morphemes = [tag for tag in _farasa_morpheme_tags(tagged)
                  if tag not in ('S', 'E')]
     if not morphemes:
         return 'X'
@@ -484,6 +499,17 @@ class wordfreq_dict(distractor_dict):
         # out-of-band one, because selection ranks within the pool either way.
         pool_factor = float(params.get('pool_size_factor', 2.0 if pos_filter else 1.0))
         target_pool_size = max(int(n * pool_factor), 50)
+
+        # The size at which the retrieval tiers stop trying.  Every tier below
+        # TIER 1 relaxes the frequency band, the length window, or both, so
+        # they must fire only when the pool is genuinely too small to choose
+        # from -- not to reach `target_pool_size`, which for German
+        # (num_to_test 2000, factor 2) is 4,000 candidates that no +/-1 Zipf
+        # band at one length can supply.  Chasing it meant TIER 1.5/2/3 ran on
+        # essentially every target and refilled the pool with out-of-band
+        # words: 20 of 45 German positions came out below their band with a
+        # pool of 900-2000 in-band candidates already available.
+        min_pool_size = int(params.get('min_pool_size', 60))
         
         # Get exclude list from params for pre-filtering
         exclude_words_set = set()
@@ -534,9 +560,16 @@ class wordfreq_dict(distractor_dict):
         # reported, so a run says how far it had to go.
         max_freq_widen = int(params.get('max_freq_widen', 9))
         widen_step = float(params.get('freq_widen_step', 0.1)) * math.log(10)
+        # Widen only when the pool is too small to choose from -- NOT to reach
+        # `target_pool_size`.  Those are different questions: a bigger pool
+        # cannot be had without leaving the frequency band, and selection ranks
+        # within the pool either way, so chasing the larger number simply trades
+        # the frequency match away.  German asks for num_to_test 2000, which no
+        # +/-1 Zipf band at one length can supply, so it widened on 43 of 45
+        # positions and only 10 landed inside the declared band.
         widen = 0
         if min_freq is not None and max_freq is not None:
-            while len(distractor_opts) < target_pool_size and widen < max_freq_widen:
+            while len(distractor_opts) < min_pool_size and widen < max_freq_widen:
                 widen += 1
                 wider_pool = self.get_words(min_length, max_length,
                                             min_freq - widen * widen_step,
@@ -557,7 +590,7 @@ class wordfreq_dict(distractor_dict):
 
         # TIER 1.5: Adaptive Frequency Widening
         # If tight band failed, use the optimized neighborhood search (binary search)
-        if len(distractor_opts) < target_pool_size and 'target_zipf' in params:
+        if len(distractor_opts) < min_pool_size and 'target_zipf' in params:
             target_zipf = params['target_zipf']
             logging.info(f"Tight band search starved. Using neighborhood search around Zipf {target_zipf:.2f}")
             
@@ -577,7 +610,7 @@ class wordfreq_dict(distractor_dict):
 
         # TIER 2: Quality Gate Fallback
         # If still starving, we can pull from other nearby lengths using the same frequency search
-        if len(distractor_opts) < target_pool_size:
+        if len(distractor_opts) < min_pool_size:
             target_exact_len = params.get('target_exact_length') or ((min_length + max_length) // 2)
             target_zipf = params.get('target_zipf', 5.0)
             _len_floor = int(params.get('min_word_len', DEFAULT_MIN_WORD_LEN))
@@ -590,12 +623,12 @@ class wordfreq_dict(distractor_dict):
                         adj_pool = [w for w in adj_pool if w not in exclude_words_set]
                     distractor_opts.extend(adj_pool)
                     distractor_opts = ordered_unique(distractor_opts)
-                if len(distractor_opts) >= target_pool_size:
+                if len(distractor_opts) >= min_pool_size:
                     break
 
         # TIER 3: GRADUAL EMERGENCY EXPANSION (Ultimate Quality fallback)
         # If thresholds are NOT met, gradually expand length tolerance.
-        if len(distractor_opts) < target_pool_size and hasattr(self, 'get_emergency_pool'):
+        if len(distractor_opts) < min_pool_size and hasattr(self, 'get_emergency_pool'):
             target_exact_len = params.get('target_exact_length') or ((min_length + max_length) // 2)
             
             # Expansion Tiers: +/- 1, then +/- 2 (if word is long enough)
@@ -622,9 +655,9 @@ class wordfreq_dict(distractor_dict):
                         distractor_opts.extend(pool)
                         distractor_opts = ordered_unique(distractor_opts)
                     
-                    if len(distractor_opts) >= target_pool_size:
+                    if len(distractor_opts) >= min_pool_size:
                         break
-                if len(distractor_opts) >= target_pool_size:
+                if len(distractor_opts) >= min_pool_size:
                     break
 
         # 3. --- HYPER-SPEED OPTIMIZATION: BATCH TAGGING ---

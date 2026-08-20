@@ -183,7 +183,13 @@ def build(lang, out_path=None, dry_run=False, batch=2000, second_opinion=True):
               file=sys.stderr)
         return 1
 
-    if second_opinion and lang in ('de', 'ar'):
+    # German only.  Arabic gets no second opinion because neither tagger can
+    # identify an Arabic proper noun in isolation: Farasa's tagset has no PROPN
+    # at all (محمد and مصر both come back NOUN), and Stanza returns 'X' for
+    # names AND for ordinary common nouns like بيت when given a bare word with
+    # no context.  Over the whole Arabic lexicon it promoted 22 words, which is
+    # noise. Arabic proper-noun exclusion needs a gazetteer, not a tagger.
+    if second_opinion and lang == 'de':
         propn = stanza_propn(lang, words,
                              use_gpu=str(params.get('use_gpu', True)).lower() in ('true', '1'))
         promoted = 0
@@ -205,7 +211,7 @@ def build(lang, out_path=None, dry_run=False, batch=2000, second_opinion=True):
         "_meta": {
             "language": lang,
             "tagger": _tagger_version(spec["tagger"]),
-            "second_opinion": ("stanza" if (second_opinion and lang in ('de', 'ar'))
+            "second_opinion": ("stanza" if (second_opinion and lang == 'de')
                                else None),
             "built": datetime.date.today().isoformat(),
             "word_count": len(tags),
