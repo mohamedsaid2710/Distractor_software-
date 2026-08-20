@@ -13,7 +13,11 @@ dependencies = [
     "numpy>=2.0.0",
     "wordfreq>=3.0.0",
     "fasttext>=0.9.2",
-    "stanza>=1.8.0",
+    # 1.10 is the floor: earlier releases call torch.load() without
+    # weights_only=False, and PyTorch >= 2.6 defaults that to True, so loading
+    # any Stanza pretrain raises UnpicklingError. That made German and Arabic
+    # fail on every item while the run still exited 0.
+    "stanza>=1.10.0",
     "farasapy>=0.0.14",
     "HanTa>=0.2.0",
     "en_core_web_lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",

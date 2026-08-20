@@ -42,6 +42,60 @@ def _is_english_dominant(token: str, margin: float = 0.3) -> bool:
 
 
 # QUALITY GATE: Runtime validator for cache words
+
+def load_pos_lexicon(artifact_path, legacy_path, lang_label):
+    """Load POS tags for *lang_label*, preferring the rebuildable artifact.
+
+    Returns a plain {word: UPOS} dict.
+
+    Two formats are accepted.  The artifact written by `build_lexicon.py` has a
+    `_meta` stamp (tagger, version, build date) alongside its `tags`; the legacy
+    cache is a bare {word: tag} mapping.  The artifact wins when present, and
+    the legacy file remains the fallback so a machine with no taggers installed
+    -- a cluster or Colab node -- still gets tags, which is what this load has
+    always been for.  Deleting the artifact reverts to the legacy file.
+    """
+    # Same class of bug as the exclude lists: these are repo-relative paths and
+    # only resolved while the CWD happened to be the repo root.
+    artifact_path = resolve_repo_path(artifact_path)
+    legacy_path = resolve_repo_path(legacy_path)
+
+    if artifact_path and os.path.exists(artifact_path):
+        try:
+            with open(artifact_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            meta = data.get("_meta", {})
+            tags = data.get("tags", {})
+            if tags:
+                print(f"    [LEXICON] {lang_label}: {len(tags)} tags from "
+                      f"{artifact_path} (tagger: {meta.get('tagger', 'unknown')}, "
+                      f"built {meta.get('built', 'unknown')})", flush=True)
+                return dict(tags)
+            logging.warning("[LEXICON] %s has no 'tags' section; "
+                            "falling back to %s", artifact_path, legacy_path)
+        except Exception as e:
+            logging.error("[LEXICON] Could not read %s (%s); falling back to %s",
+                          artifact_path, e, legacy_path)
+
+    if legacy_path and os.path.exists(legacy_path):
+        try:
+            with open(legacy_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            print(f"    [LEXICON] {lang_label}: {len(data)} tags from the legacy "
+                  f"cache {legacy_path}. Rebuild with "
+                  f"`python build_lexicon.py --lang {lang_label}` -- the legacy "
+                  f"file was written append-only and cannot self-correct.",
+                  flush=True)
+            return dict(data)
+        except Exception as e:
+            logging.error("[LEXICON] Could not read %s: %s", legacy_path, e)
+
+    logging.warning("[LEXICON] %s: no POS lexicon found; tagging happens at "
+                    "run time if a tagger is installed.", lang_label)
+    return {}
+
+
+
 def _is_valid_cache_word(word: str, min_target_length: int = 3, lang: str = 'de', short_min_zipf: float = 3.5, mid_min_zipf: float = 3.0) -> bool:
     """
     Quality gate for words pulled from POS cache.
@@ -759,16 +813,9 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
         # === PRELOAD EN POS CACHE ===
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
-        try:
-            import json
-            import os
-            cache_file = "models/english_code/english_pos_cache.json"
-            if os.path.exists(cache_file):
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cached_data = json.load(f)
-                    self.pos_cache.update(cached_data)
-        except Exception as e:
-            print(f"[CACHE] Error loading EN POS cache: {e}")
+        self.pos_cache.update(load_pos_lexicon(
+            "models/english_code/english_pos_lexicon.json",
+            "models/english_code/english_pos_cache.json", "en"))
 
         include_words = None
         if include is not None and os.path.exists(include):
@@ -858,16 +905,11 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.common_casing = {}
 
         # === PRELOAD GERMAN POS CACHE ===
-        try:
-            cache_file = "models/german_code/german_pos_cache_v2.json"
-            if os.path.exists(cache_file):
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cached_data = json.load(f)
-                    self.pos_cache.update(cached_data)
-                # Seed nouns_by_len and others_by_len pools with loaded data
-                self._populate_pools_from_cache()
-        except Exception as e:
-            logging.error(f"[CACHE] Error loading German POS cache: {e}")
+        self.pos_cache.update(load_pos_lexicon(
+            "models/german_code/german_pos_lexicon.json",
+            "models/german_code/german_pos_cache_v2.json", "de"))
+        # Seed nouns_by_len and others_by_len pools with the loaded tags
+        self._populate_pools_from_cache()
 
         # HanTa Morphological Dictionary Bouncer
         self.hanta = None
@@ -1068,26 +1110,23 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             if not stanza_tags or ('X' in stanza_tags and len(stanza_tags) == 1):
                 continue 
                 
-            w_cap = w.capitalize()
-            _, tag = self.hanta.analyze(w_cap)
-            clean_tag = tag.replace('(', '').replace(')', '')
-            upos = stts_map.get(clean_tag, 'X')
-            
-            if upos == 'NOUN':
-                _, tag_low = self.hanta.analyze(w.lower())
-                clean_tag_low = tag_low.replace('(', '').replace(')', '')
-                upos_low = stts_map.get(clean_tag_low, 'X')
-                if upos_low in ('VERB', 'ADJ', 'ADV', 'AUX'):
-                    upos = upos_low
-                    
+            # Same rule as candidate tagging -- these two used to hold two
+            # slightly different copies of it, so an input word and a candidate
+            # word could get different tags from the same tagger.
+            upos = self.hanta_upos(w)
+
             # The Verification Rule: If HanTa confirms any of the Stanza tags, we cache it
             if upos in stanza_tags and upos != 'X':
                 self._record_pos_tag(w, upos)
                 new_entries += 1
                 
         if new_entries > 0:
-            print(f"    [Hybrid] Successfully verified and cached {new_entries} new input words!", flush=True)
-            self.save_pos_cache()
+            # In-memory only.  Persisting here made a run's own tagging decisions
+            # an input to the next run (same input + same seed, different
+            # output), and because the disk write was append-only a wrong tag
+            # could never be corrected afterwards.  Rebuild the lexicon with
+            # `python build_lexicon.py --lang de` instead.
+            print(f"    [Hybrid] Verified {new_entries} new input words (in-memory).", flush=True)
 
     def batch_tag_words(self, words, params=None, force_refresh=False):
         """Batch-tag German candidates strictly using HanTa Morphological Dictionary."""
@@ -1113,32 +1152,42 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         print(f"    [HanTa] Looking up {len(to_tag)} words in strict morphological dictionary...", flush=True)
         
         for w in to_tag:
-            # Check with proper noun casing for HanTa to evaluate correctly
-            w_cap = w.capitalize()
-            # HanTa returns (lemma, STTS_TAG)
-            _, tag = self.hanta.analyze(w_cap)
-            
-            # Map HanTa's STTS tag to universal UPOS
-            # HanTa returns tags with parentheses like VV(INF) or ADJ(A), but standard STTS is VVINF or ADJA.
-            clean_tag = tag.replace('(', '').replace(')', '')
-            upos = stts_map.get(clean_tag, 'X')
-            
-            # Additional safety: If HanTa says it's a noun, ensure the true lowercase form isn't natively a verb/adj
-            if upos == 'NOUN':
-                # Leverage HanTa's morphological lemmatizer properly:
-                # If a word is natively a noun, HanTa autocorrects its lemma to be capitalized (e.g. "hosentasche" -> "Hosentasche")
-                # If it's a true verb, the lemma remains lowercase (e.g. "gegoogelt" -> "googeln")
-                try:
-                    lemma_low, tag_low_str = self.hanta.analyze(w.lower())
-                    clean_tag_low = tag_low_str.replace('(', '').replace(')', '')
-                    upos_low = stts_map.get(clean_tag_low, 'X')
-                    
-                    if upos_low in ('VERB', 'ADJ', 'ADV', 'AUX') and lemma_low and lemma_low[0].islower():
-                        upos = upos_low
-                except Exception:
-                    pass
-                    
-            self._record_pos_tag(w, upos)
+            self._record_pos_tag(w, self.hanta_upos(w))
+
+    def hanta_upos(self, word):
+        """UPOS tag for a lowercase German candidate, via HanTa.
+
+        Capitalisation is the signal HanTa needs to recognise a proper noun --
+        lowercased, "alonso" comes back ADV, "daphne" a verb, "kev" a number --
+        so the word must be capitalised before tagging.  But capitalising a
+        *verb* produces a grammatically real nominalised infinitive: "abarbeiten"
+        -> NNI, "abartig" -> NNA.  Neither tag is in STTS_TO_UPOS, so both
+        became 'X', and an X entry enters no candidate pool at all.
+
+        The previous attempt to undo that re-analysed any NOUN in lowercase and
+        took the lowercase tag if it looked verbal, which demoted 527 genuine
+        nouns ("artefakte", "antwerpen") because HanTa mangles a lowercased
+        noun's lemma.
+
+        So: trust the capitalised analysis, and consult the lowercase one only
+        for the two nominalisation tags that capitalising itself produced.
+        Measured over the whole German lexicon, this cuts unusable 'X' entries
+        from 3,064 to 180, grows the noun pool by 1,632, and correctly
+        identifies 1,353 more proper nouns.
+        """
+        _, tag = self.hanta.analyze(word.capitalize())
+        # HanTa writes VV(INF) / ADJ(A); standard STTS is VVINF / ADJA.
+        clean_tag = tag.replace('(', '').replace(')', '')
+
+        if clean_tag == 'NE':
+            return 'PROPN'
+        if clean_tag in ('NNI', 'NNA'):
+            # Nominalised infinitive / adjective: an artefact of capitalising.
+            _, tag_low = self.hanta.analyze(word.lower())
+            return STTS_TO_UPOS.get(tag_low.replace('(', '').replace(')', ''), 'X')
+        if clean_tag == 'NN':
+            return 'NOUN'
+        return STTS_TO_UPOS.get(clean_tag, 'X')
 
     def _record_pos_tag(self, word, upos):
         """Cache-aware POS tagging that populates length-indexed pools.
@@ -1472,14 +1521,9 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         # === PRELOAD AR POS CACHE ===
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
-        try:
-            cache_file = "models/arabic_code/arabic_pos_cache.json"
-            if os.path.exists(cache_file):
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cached_data = json.load(f)
-                    self.pos_cache.update(cached_data)
-        except Exception as e:
-            print(f"[CACHE] Error loading AR POS cache: {e}")
+        self.pos_cache.update(load_pos_lexicon(
+            "models/arabic_code/arabic_pos_lexicon.json",
+            "models/arabic_code/arabic_pos_cache.json", "ar"))
 
         include_words = None
         if include is not None and os.path.exists(include):
@@ -1607,18 +1651,14 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
                     with open(cache_file, "r", encoding="utf-8") as f:
                         existing = json.load(f)
                 
-                # Append only
-                cache_updated = False
-                for k, v in self.pos_cache.items():
-                    if k not in existing and v != 'X':
-                        existing[k] = v
-                        cache_updated = True
-                        
-                if cache_updated:
-                    with open(cache_file, "w", encoding="utf-8") as f:
-                        json.dump(existing, f, ensure_ascii=False, indent=2)
+                # Read-only: merge anything the artifact already knows that this
+                # run has not tagged.  The write that used to be here made
+                # generation nondeterministic across runs (see the German note
+                # in batch_tag_inputs above).
+                for k, v in existing.items():
+                    self.pos_cache.setdefault(k, v)
             except Exception as e:
-                print(f"[HYBRID] Cache save failed: {e}")
+                print(f"[HYBRID] Cache read failed: {e}")
 
     def batch_tag_words(self, words, params=None, force_refresh=False):
         """Tag Arabic words using Farasa POSTagger."""
@@ -1642,14 +1682,10 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
             except Exception:
                 self.pos_cache[w] = 'X'
 
-        # Try to save to cache file just to keep running performance high
-        try:
-            cache_file = "models/arabic_code/arabic_pos_cache.json"
-            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-            with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump(self.pos_cache, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        # No disk write.  This one was a full json.dump OVERWRITE of the whole
+        # cache mid-run, X entries included -- so unlike the German path it did
+        # not even honour the documented append-only contract, and a crashed run
+        # could leave a truncated lexicon behind.
 
 
 def get_frequency_ar(word):

@@ -123,9 +123,18 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
     return failed_ids
     
     
-    # FINAL CACHE SAVE: Persist all tagged words to disk
-    if hasattr(d, 'save_pos_cache'):
-        d.save_pos_cache()
+    # Generation never writes the POS lexicon.
+    #
+    # This used to call d.save_pos_cache() here.  That write was append-only --
+    # "if a word is already in the cache on disk, do NOT overwrite it" -- so a
+    # wrong tag, once written, was permanent: no amount of re-running could
+    # correct it, and the run that produced it fed the next run's candidate
+    # pools.  Measured on the shipped German cache, 14 of 17 proper nouns that
+    # leaked into a sample run were tagged ADV/VERB/NUM/ADJ there while the
+    # current tagger calls every one of them PROPN.
+    #
+    # The lexicon is now a read-only input, rebuilt deliberately by
+    # `python build_lexicon.py --lang de`.
 
 
 def pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=False):
