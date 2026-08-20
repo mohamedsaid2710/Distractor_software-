@@ -22,7 +22,8 @@ Built on Transformer-based language models (GPT-2), the pipeline selects real-wo
   - Optional **fastText Semantic Filtering** to reject words from similar domains (e.g., avoiding "Apple" -> "Orange").
   - **Part-Of-Speech Matching** to ensure natural grammar structure (Verbs match Verbs, Nouns match Nouns).
 - **Fast GPU Processing:** Batch-optimized surprisal scoring scales automatically to available hardware.
-- **First-Word Placeholder:** Because the first word of a sentence has no prior context, generating a meaningful linguistic distractor is impossible. The software automatically uses a length-matched placeholder (e.g., `x-x-x`) for the first token to ensure a neutral start for participants.
+- **First-Word Placeholder:** Because the first word of a sentence has no prior context, generating a meaningful linguistic distractor is impossible. The software uses a fixed `x-x-x` placeholder for the first token, the standard Maze convention, to ensure a neutral start for participants.
+- **Quality Report:** Every run writes `<output>.report.csv` alongside the stimuli — per position, the length and frequency match, the achieved versus required surprisal, and whether any constraint had to be relaxed — plus a summary at the end of the run. This is what lets a methods section state how many items met the criteria.
 - **Output Formats:** Standard delimited tables or ready-to-deploy PCIbex lines (`ibexify`).
 
 ## $\color{SteelBlue}\text{Quick Start}$
@@ -35,9 +36,22 @@ git clone https://github.com/mohamedsaid2710/Distractor_software-.git
 cd Distractor_software-
 
 # Install dependencies using uv (Fast & Reliable)
-uv sync
+uv sync                    # core + English
+uv sync --all-extras       # adds German, Arabic, the semantic filter and the plot scripts
 source .venv/bin/activate  # (Optional) Activate to drop the `uv run` prefix below
 ```
+
+Language support is optional so an English-only user does not install every tagger:
+
+| Extra | Adds | Notes |
+|---|---|---|
+| `[de]` | HanTa, Stanza | |
+| `[ar]` | Farasa, Stanza | **also needs a Java runtime** on the machine |
+| `[semantic]` | fastText | vectors are ~7 GB **per language** |
+| `[plots]` | matplotlib | for `scripts/plot_*.py` |
+| `[assess]` | German spaCy model | for `assess_output.py`'s German POS checks |
+
+pip users: `pip install .` for the core, `pip install '.[all]'` for everything.
 
 > **Note:** `uv sync` installs PyTorch from the CUDA 11.8 index pinned in `pyproject.toml`. Those wheels are built for **x86-64 Linux and Windows only** — on Apple Silicon or other ARM hosts there is no matching wheel and `uv sync` fails; install PyTorch for your platform from PyPI first. On x86-64 the CUDA build also runs fine without an NVIDIA GPU, it is just a large download. To use the smaller CPU build instead:
 > ```bash
@@ -46,7 +60,13 @@ source .venv/bin/activate  # (Optional) Activate to drop the `uv run` prefix bel
 > ```
 > Do **not** keep using the `uv run` prefix afterwards: it re-syncs the environment against `uv.lock` before each command and would silently reinstall the CUDA build. Use the activated venv, or `uv run --no-sync`.
 
-> **Note:** NLP/fastText models are huge. They will automatically download on the very first run. If you are preparing a remote execution, see the [Offline Model Loading guide](https://github.com/mohamedsaid2710/Distractor_software-/wiki) on the Wiki.
+> **Note:** the models are large and download automatically on the first run. To see the total first, and to fetch them deliberately (which is what you want before a cluster or Colab job):
+> ```bash
+> uv run python download_model.py --footprint     # ~27 GB for all three languages
+> uv run python download_model.py --all           # the GPT-2 family models
+> uv run python download_model.py --fasttext en   # ~7 GB, only if semantic_filter: True
+> ```
+> Set `semantic_filter: False` in the params file to skip the fastText vectors entirely.
 
 ### Basic Invocations
 
