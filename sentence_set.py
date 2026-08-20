@@ -19,7 +19,8 @@ The heart is `Label.choose_distractor`, which runs in stages:
  7. selection      — Mode A (first passing) / Mode B (highest passing) /
                      match-surprisal (closest to target, returns early);
  8. fallbacks      — six staged relaxations that guarantee a real word
-                     (placeholder "wort"/"word" is mathematically last).
+                     (an unfillable position emits the x-x-x placeholder
+                     and is flagged in the report sidecar).
 
 Casing is normalized at the very end by `_normalize_distractor_token`
 (German: POS-driven Titlecase via the dictionary's pos_cache; English:
@@ -27,11 +28,12 @@ target-mirroring + acronym whitelist; Arabic: no casing).
 """
 
 import logging
-from utils import copy_punct, strip_punct
+from utils import copy_punct, strip_punct, ordered_unique, resolve_repo_path
 from limit_repeats import Repeatcounter
 import re
 import random
 import os
+import math as _math
 try:
     import wordfreq as _wordfreq_mod
 except ImportError:
@@ -41,7 +43,8 @@ print("\n" + "="*60)
 print("DISTRACTOR MODULE LOADED")
 print("="*60 + "\n")
 
-from wordfreq_distractor import _is_lexically_garbage
+from wordfreq_distractor import (_is_lexically_garbage, strip_arabic_diacritics,
+                                 effective_target_length, MAX_TARGET_LENGTH)
 
 
 # Lazy import for semantic filtering
@@ -165,10 +168,22 @@ def _is_x_placeholder_token(token):
     return bool(_X_PLACEHOLDER_RE.fullmatch(body))
 
 
+# The standard Maze sentence-initial placeholder.  Position 0 has no prior
+# context to score against, so there is no real competition there and nothing to
+# length-match against; a constant string is also what published Maze materials
+# use, which keeps items comparable across studies.
+FIRST_WORD_PLACEHOLDER = "x-x-x"
+
+
 def _placeholder_for_length(length):
-    """Build a first-position placeholder exactly matching the target word's length."""
-    n = max(1, int(length))
-    return "-".join(["x"] * n)
+    """The first-position placeholder.
+
+    `length` is accepted and ignored.  This used to build one "x" per character
+    joined by hyphens, which renders at 2n-1 characters rather than n: a
+    10-letter target got "x-x-x-x-x-x-x-x-x-x", 19 characters against a target
+    of 10, despite the docstring claiming it matched the target's length.
+    """
+    return FIRST_WORD_PLACEHOLDER
 
 
 def _copy_edge_punct_no_case(source_token, token):
@@ -197,6 +212,12 @@ def _normalize_english_distractor_case(distractor_token, is_first_word=False, ta
     if not d_body:
         return distractor_token
 
+    # Acronyms first.  This check used to sit *below* the target-mirroring
+    # branch, which returns for any titlecase target -- so the whitelist was
+    # unreachable in the common case and "NASA" was emitted as "Nasa".
+    if d_body.lower() in _EN_ACRONYM_WHITELIST:
+        return d_prefix + d_body.upper() + d_suffix
+
     # Interactive Casing: explicitly copy uppercase or titlecase from the target word if available
     if target_token:
         _, t_body, _ = _split_punct(target_token)
@@ -206,15 +227,30 @@ def _normalize_english_distractor_case(distractor_token, is_first_word=False, ta
             elif t_body.istitle() or (len(t_body) == 1 and t_body.isupper()):
                 return d_prefix + d_body.capitalize() + d_suffix
 
-    # Capitalize known acronym distractors.
-    if d_body.lower() in _EN_ACRONYM_WHITELIST:
-        return d_prefix + d_body.upper() + d_suffix
-
     # Sentence-initial capitalization
     if is_first_word and d_body:
         return d_prefix + d_body[:1].upper() + d_body[1:].lower() + d_suffix
 
     return distractor_token
+
+
+def surface_form(token, dict_obj, lang, target_token="", is_first_word=False,
+                 match_casing_only=False):
+    """The exact string a participant will see -- and therefore the string to score.
+
+    Scoring and emission used to disagree in English: candidates were
+    normalized to lowercase before being scored, then mirrored onto the
+    target's case at emission.  For a titlecase target, "kitchen" was ranked
+    and "Kitchen" delivered -- different BPE token sequences, different
+    surprisals -- so the number that drove selection was not the surprisal of
+    the string that ends up in the experiment.
+    """
+    if lang == 'en':
+        return _normalize_english_distractor_case(
+            token, is_first_word=is_first_word, target_token=target_token)
+    return _normalize_distractor_token(
+        token, dict_obj, lang=lang, is_first_word=is_first_word,
+        target_token=target_token, match_casing_only=match_casing_only)
 
 
 def _detect_language(params):
@@ -267,27 +303,39 @@ def _get_german_grammatical_case(token, dict_obj, is_first_word=False, target_to
     # is active.  Here we simply apply the correct TitleCase / lowercase to whatever
     # distractor was selected, using pos_cache as the authoritative source.
 
-    # When match_casing_only=True: mirror the target token's casing (already guarded by grammar)
-    # When False: apply grammatical rules (nouns titlecase, others lowercase)
     target_is_cap = target_token[0].isupper() if target_token else False
-    
-    # Standard German grammar: determine if *distractor* is a noun and apply rules strictly
-    distractor_is_noun = False
-    t_lower = body.lower()
-    
-    if hasattr(dict_obj, 'pos_cache') and t_lower in dict_obj.pos_cache:
-        distractor_is_noun = dict_obj.pos_cache[t_lower] in ('NOUN', 'PROPN')
-    elif hasattr(dict_obj, 'get_titlecase_variant'):
-        try:
-            tv = dict_obj.get_titlecase_variant(body)
-            distractor_is_noun = isinstance(tv, str)
-        except Exception:
-            pass
 
-    if distractor_is_noun:
-        new_body = body[0].upper() + body[1:].lower()
+    if match_casing_only:
+        # Mirror the target token's capitalisation.  `target_is_cap` used to be
+        # computed here and then never read: control fell through to the
+        # pos_cache branch below whatever the parameter said, so the documented
+        # casing-only mode did not exist even though params_de.txt enables it.
+        #
+        # Mirroring is grammatical because the candidate pool for this slot was
+        # already split NOUN / !NOUN, and -- unlike the pos_cache route -- it
+        # cannot fail open on a cache miss.  That failure is the direct source
+        # of lowercased German nouns in the output: 34.7% of the German lexicon
+        # has no cache entry, and an unknown word defaults to "not a noun",
+        # i.e. lowercase, even in a noun slot.
+        new_body = (body[0].upper() + body[1:].lower()) if target_is_cap else body.lower()
     else:
-        new_body = body.lower()
+        # Standard German grammar: determine if *distractor* is a noun and apply rules strictly
+        distractor_is_noun = False
+        t_lower = body.lower()
+
+        if hasattr(dict_obj, 'pos_cache') and t_lower in dict_obj.pos_cache:
+            distractor_is_noun = dict_obj.pos_cache[t_lower] in ('NOUN', 'PROPN')
+        elif hasattr(dict_obj, 'get_titlecase_variant'):
+            try:
+                tv = dict_obj.get_titlecase_variant(body)
+                distractor_is_noun = isinstance(tv, str)
+            except Exception:
+                pass
+
+        if distractor_is_noun:
+            new_body = body[0].upper() + body[1:].lower()
+        else:
+            new_body = body.lower()
 
     if is_first_word and new_body:
         new_body = new_body[0].upper() + new_body[1:]
@@ -375,13 +423,23 @@ class Label:
         self.hiddens = []
         self.pos = []
         self.surprisal_targets = []
+        # Word indices (within their sentence) that this label covers.  Needed
+        # because a label ID is not a position: `make_labels` rewrites IDs to
+        # "1_L5" form, and user-supplied labels are arbitrary strings anyway.
+        self.positions = []
+        # How this label's distractor was arrived at, for the report sidecar.
+        # Without it a desperation-fallback word is indistinguishable from a
+        # clean one in the output file, so there is no way to state how many
+        # items actually met the criteria.
+        self.report = {}
 
-    def add_sentence(self, word, probs, surprisal, hidden=None):
+    def add_sentence(self, word, probs, surprisal, hidden=None, position=None):
         """Given a position that belongs in the label, add it's attributes to our lists"""
         self.words.append(word)
         self.probs.append(probs)
         self.surprisals.append(surprisal)
         self.hiddens.append(hidden)
+        self.positions.append(position)
         # pos will be filled by make_labels if available; placeholder None
         self.pos.append(None)
 
@@ -402,6 +460,13 @@ class Label:
         """
         if local_banned is None:
             local_banned = []
+        # Work on a private copy.  The per-target keys written below
+        # (target_is_noun, target_zipf, target_exact_length,
+        # target_is_capitalized) used to go into the caller's dict and stay
+        # there, so any early return left the NEXT label filtering against the
+        # previous label's values -- and target_is_noun is an inviolable
+        # noun/non-noun filter in German.
+        params = dict(params)
         lang = _detect_language(params)
         # Identify if we should strictly match noun POS (default False, except if enabled in params)
         match_casing_only = bool(params.get('match_casing_only', False))
@@ -414,15 +479,15 @@ class Label:
         # at those positions.
         early_boost = float(params.get('early_position_boost', 0))
         early_count = int(params.get('early_position_count', 2))
-        is_early = False
-        try:
-            label_idx = int(self.lab)
-            # label 0 is the placeholder (first_token_placeholder), so
-            # early positions are labels 1 through early_count.
-            if 1 <= label_idx <= early_count:
-                is_early = True
-        except (ValueError, TypeError):
-            pass
+        # Position 0 is the placeholder (first_token_placeholder), so early
+        # positions are 1 .. early_count.  This used to read `int(self.lab)`,
+        # but by the time choose_distractor runs, make_labels has rewritten
+        # every label to "1_L5" form -- so int() raised ValueError, the except
+        # swallowed it, and the boost never once applied in any language.
+        # `self.positions` is the actual word index, which is also correct for
+        # user-supplied (non-numeric) labels.
+        is_early = any(p is not None and 1 <= p <= early_count
+                       for p in self.positions)
 
         # --- Short word boost ---
         # For very short words (≤3 chars), require higher surprisal since
@@ -438,11 +503,28 @@ class Label:
                     is_short_word = True
                     break
         
+        # Reset, don't append: a second call on the same Label used to leave the
+        # first call's targets in front, so `surprisal_targets[j]` read a stale
+        # threshold for every position.
+        self.surprisal_targets = []
+        # A flat absolute floor is unreachable for short function-word targets.
+        # English `min_abs: 25` asks for p <= 3e-8, which no plausible-slot
+        # function word achieves: 14 of 47 positions in a sample run missed the
+        # threshold and fell into the fallback cascade, where the frequency band
+        # and the guards are weaker -- that is where the junk came from.
+        # For these targets implausibility comes from syntactic category (the
+        # candidate pool is already split NOUN / !NOUN) rather than from extreme
+        # surprisal, so they get their own floor. Defaults to `min_abs`, i.e. no
+        # change, when `min_abs_short` is absent.
+        min_abs = params["min_abs"]
+        if is_short_word and params.get("min_abs_short") is not None:
+            min_abs = float(params["min_abs_short"])
+
         for surprisal in self.surprisals:  # calculate desired surprisal thresholds
             if absolute_threshold_only:
-                base = params["min_abs"]
+                base = min_abs
             else:
-                base = max(params["min_abs"], surprisal + params["min_delta"])
+                base = max(min_abs, surprisal + params["min_delta"])
             if is_early:
                 base += early_boost
             if is_short_word:
@@ -552,10 +634,17 @@ class Label:
         target_is_cap = target_stripped[0].isupper() if target_stripped else False
         params['target_is_capitalized'] = target_is_cap
         params['target_exact_length'] = len(target_stripped) if target_stripped else None
-        # Calculate target Zipf for frequency-matched fallback lookups
+        # Calculate target Zipf for frequency-matched fallback lookups.
+        # This used to hardcode 'de', so English and Arabic targets were looked
+        # up in the German frequency table (English "sentence" scored 2.38
+        # instead of 4.58) and every frequency-matched fallback aimed at the
+        # wrong band.
         target_zipf = 5.0 # default
         if _wordfreq_mod:
-            target_zipf = _wordfreq_mod.zipf_frequency(target_stripped.lower(), 'de')
+            lookup_form = target_stripped.lower()
+            if lang == 'ar':
+                lookup_form = strip_arabic_diacritics(lookup_form)
+            target_zipf = _wordfreq_mod.zipf_frequency(lookup_form, lang)
         params['target_zipf'] = target_zipf
 
         # NOTE: PRE-TAGGING now handled at SentenceSet-level for optimal batch performance
@@ -566,6 +655,12 @@ class Label:
         params['target_is_noun'] = target_is_noun
         min_length, max_length, min_freq, max_freq = threshold_func(self.words, params)
         distractor_opts = dictionary.get_potential_distractors(min_length, max_length, min_freq, max_freq, params, pos_filter=pos_filter)
+        self.report['pool_size'] = len(distractor_opts) if distractor_opts else 0
+        self.report['freq_widen_steps'] = getattr(dictionary, 'last_freq_widen_steps', 0)
+        self.report['target_zipf'] = round(target_zipf, 3)
+        self.report['band_min_zipf'] = round(min_freq / _math.log(10), 3)
+        self.report['band_max_zipf'] = round(max_freq / _math.log(10), 3)
+        self.report['pos_filter'] = pos_filter or ''
         
         # --- SHUFFLE SHORT WORDS ---
         # The user requested 3 and 4-letter words be completely randomized from their candidate pool
@@ -590,12 +685,28 @@ class Label:
                 target_lengths.append(len(sw))
         target_exact_len = None
         target_preferred_len = None
+        # Clamp to the same range the threshold functions search with, or this
+        # test rejects every candidate the pool is able to offer: a 1-2 letter
+        # English target got a pool of `min_word_len`-length words and then
+        # compared them against its own true length with len_tolerance 0.
+        # German does not cap target length (get_thresholds_de passes
+        # max_len=None), so capping here would reject every candidate offered
+        # for a long compound -- the same failure as short English, mirrored.
+        _len_cap = None if lang == 'de' else MAX_TARGET_LENGTH
         if target_lengths:
             unique_lens = sorted(set(target_lengths))
             if len(unique_lens) == 1:
-                target_exact_len = unique_lens[0]
+                target_exact_len = effective_target_length(unique_lens[0], params,
+                                                           max_len=_len_cap)
+                if target_exact_len != unique_lens[0]:
+                    logging.info(
+                        "Item %s label %s: target length %d is outside the lexicon's "
+                        "range; matching on length %d instead.",
+                        self.id, self.lab, unique_lens[0], target_exact_len)
             else:
-                target_preferred_len = int(round(sum(target_lengths) / float(len(target_lengths))))
+                avg = int(round(sum(target_lengths) / float(len(target_lengths))))
+                target_preferred_len = effective_target_length(avg, params,
+                                                               max_len=_len_cap)
 
         def candidate_length_ok(candidate, relax_mult=1.0):
             """Check if candidate length matches target within tolerance.
@@ -625,7 +736,7 @@ class Label:
             
         # load exact exclude words just in case a fallback reads from unfiltered sources
         global_exclude = set()
-        exc_path = params.get('exclude_words', None)
+        exc_path = resolve_repo_path(params.get('exclude_words', None))
         if exc_path and os.path.exists(exc_path):
             with open(exc_path, 'r', encoding='utf-8') as ef:
                 for ln in ef:
@@ -639,9 +750,9 @@ class Label:
         def candidate_surprisal(i, candidate):
             """Score candidate using full-context method when the model provides it."""
             target_tok = self.words[0] if self.words else ""
-            norm_cand = _normalize_distractor_token(candidate, dictionary, lang=lang,
-                                                    target_token=target_tok,
-                                                    match_casing_only=match_casing_only)
+            norm_cand = surface_form(candidate, dictionary, lang,
+                                     target_token=target_tok,
+                                     match_casing_only=match_casing_only)
             if hasattr(model, 'get_surprisal_from_hidden'):
                 try:
                     if i < len(self.hiddens) and self.hiddens[i] is not None:
@@ -676,6 +787,67 @@ class Label:
                 if dist_surp < min_surp_val:
                     min_surp_val = dist_surp
             return min_surp_val
+
+        # ------------------------------------------------------------------
+        # ONE admissibility test, applied everywhere.
+        #
+        # These guards used to be re-implemented inline at four sites -- the
+        # main pool, the match-surprisal path, the pre-scoring filter and the
+        # fallback cascade -- and no two agreed.  The pre-scoring filter
+        # applied no German guards at all; the fallback applied no length or
+        # avoid check; only the main pool checked the script.  That is the
+        # structural reason a word the happy path would reject can still
+        # arrive through a fallback, which is where lowercased nouns and
+        # proper nouns came from.
+        #
+        # Returns None when the candidate may be used, else a short reason.
+        # The reason is what the report sidecar records as the relaxation.
+        # ------------------------------------------------------------------
+        _script_re = re.compile(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$")
+
+        def admissibility(candidate, allow_banned=False, relax_length_mult=1.0,
+                          enforce_pos=True, require_script=True):
+            base = strip_punct(candidate)
+            cand_l = base.lower()
+            if not cand_l:
+                return 'empty'
+            if require_script and not _script_re.match(base):
+                return 'script'
+            if not candidate_length_ok(candidate, relax_mult=relax_length_mult):
+                return 'length'
+            if cand_l in avoid:
+                return 'is-target-or-local-repeat'
+            if cand_l in global_exclude:
+                return 'excluded'
+            if (not allow_banned) and cand_l in banned_l:
+                return 'banned'
+            if exclude_propn_candidates and is_propn_candidate(candidate):
+                return 'propn'
+            # Containment either way is a giveaway ("cat" vs "cats").
+            for _t in self.words:
+                _t = strip_punct(_t).lower()
+                if _t and (_t in cand_l or cand_l in _t):
+                    return 'contains-target'
+
+            if lang == 'de':
+                _pc = getattr(dictionary, 'pos_cache', {})
+                _tag = _pc.get(cand_l, None)
+                if _tag in ('X', 'PROPN'):
+                    return 'pos-' + _tag.lower()
+                if _is_lexically_garbage(cand_l, lang='de'):
+                    return 'garbage'
+                if enforce_pos:
+                    # The noun wall. With no tag, fall back to orthography --
+                    # a capitalised German word is a noun.
+                    _is_noun = (_tag in ('NOUN', 'PROPN')) if _tag is not None \
+                        else base[0].isupper()
+                    if bool(params.get('target_is_noun', False)) != _is_noun:
+                        return 'noun-wall'
+            return None
+
+        def is_admissible(candidate, **kw):
+            return admissibility(candidate, **kw) is None
+
         def pick_best_from_pool(pool, allow_banned=False, relax_length_mult=1.0, enforce_pos=None):
             """Pick the most implausible candidate from a pool, respecting filters.
             
@@ -686,43 +858,12 @@ class Label:
                 local_best = None
                 local_best_surp = float('-inf')
                 
-                valid_pool = []
-                for dist in sub_pool:
-                    dist_l = strip_punct(dist).lower()
-                    if not dist_l:
-                        continue
-                    if not candidate_length_ok(dist, relax_mult=relax_length_mult):
-                        continue
-                    if dist_l in avoid or dist_l in global_exclude:
-                        continue
-                    if exclude_propn_candidates and is_propn_candidate(dist):
-                        continue
-                    if (not allow_banned) and (dist_l in banned_l):
-                        continue
-                    if not re.match(r"^[A-Za-zÄÖÜäöüß\u0600-\u06FF]+$", strip_punct(dist)):
-                        continue
-
-                    # QUALITY GATE + GRAMMAR GUARD
-                    if lang == 'de':
-                        _pc = getattr(dictionary, 'pos_cache', {})
-                        _cand_tag = _pc.get(dist_l, None)
-                        
-                        if _is_lexically_garbage(dist_l, lang='de') or _cand_tag == 'X':
-                            continue
-
-                        if _cand_tag is not None:
-                            _is_noun_d = (_cand_tag in ('NOUN', 'PROPN'))
-                        else:
-                            _is_noun_d = strip_punct(dist)[0].isupper()
-                        
-                        target_is_noun_val = params.get('target_is_noun', False)
-                        if target_is_noun_val != _is_noun_d:
-                            continue
-
-                        if _cand_tag == 'PROPN' or is_propn_candidate(dist):
-                            continue
-
-                    valid_pool.append(dist)
+                valid_pool = [
+                    dist for dist in sub_pool
+                    if is_admissible(dist, allow_banned=allow_banned,
+                                     relax_length_mult=relax_length_mult,
+                                     enforce_pos=(enforce_pos is not False))
+                ]
                 
                 if not valid_pool:
                     if allow_banned:
@@ -740,7 +881,16 @@ class Label:
                     if can_batch:
                         try:
                             target_tok = self.words[0] if self.words else ""
-                            norm_pool = [_normalize_distractor_token(dist, dictionary, lang=lang, target_token=target_tok, match_casing_only=match_casing_only) for dist in valid_pool]
+                            # surface_form, not _normalize_distractor_token: the string
+                            # that is scored has to be the string that is
+                            # emitted. The latter lowercases for English while
+                            # emission mirrors the target's case, so a titlecase
+                            # target ranked "kitchen" and delivered "Kitchen" --
+                            # different BPE sequences, different surprisals.
+                            norm_pool = [surface_form(dist, dictionary, lang,
+                                                      target_token=target_tok,
+                                                      match_casing_only=match_casing_only)
+                                         for dist in valid_pool]
                             batch_surps = model.get_surprisal_batch_from_hidden(self.hiddens[i], norm_pool)
                             for idx, dist in enumerate(valid_pool):
                                 surp_matrix[dist].append(batch_surps[idx])
@@ -782,10 +932,6 @@ class Label:
         # initialize
         best_word = None
         best_min_surp = float('-inf')
-        # For Mode B + early positions: separately track the best candidate
-        # that also meets the boosted threshold, so the boost is effective.
-        best_qualified_word = None
-        best_qualified_surp = float('-inf')
         # When enabled, always pick the highest-surprisal candidate instead of
         # returning early on threshold satisfaction.
         force_max_surprisal = bool(params.get('force_max_surprisal', False))
@@ -804,48 +950,7 @@ class Label:
                     best_diff = float('inf')
                     best_cand = None
                     
-                    valid_pool = []
-                    for dist in sub_pool:
-                        dist_l = strip_punct(dist).lower()
-                        if dist_l in banned_l or dist_l in avoid or dist_l in global_exclude:
-                            continue
-                        if not candidate_length_ok(dist):
-                            continue
-                        
-                        # German Inviolable Guards: Noun-match, No X, No PROPN
-                        if lang == 'de':
-                            _pc = getattr(dictionary, 'pos_cache', {})
-                            _cand_tag = _pc.get(dist_l, None)
-                            
-                            # Reject X and PROPN
-                            if _cand_tag in ('X', 'PROPN') or is_propn_candidate(dist):
-                                continue
-                                
-                            # Reject Lexical Garbage
-                            if _is_lexically_garbage(dist_l, lang='de'):
-                                continue
-
-                            # Enforce Noun Wall using cache, fallback to casing for new words
-                            if _cand_tag is not None:
-                                _is_noun_d = (_cand_tag in ('NOUN', 'PROPN'))
-                            else:
-                                _is_noun_d = strip_punct(dist)[0].isupper()
-                            
-                            t_is_noun_val = params.get('target_is_noun', False)
-                            if t_is_noun_val != _is_noun_d:
-                                continue
-
-                        # light continuation filter: skip if candidate literally contains the target
-                        skip = False
-                        for target in self.words:
-                            t = strip_punct(target).lower()
-                            if t and (t in dist_l or dist_l in t):
-                                skip = True
-                                break
-                        if skip:
-                            continue
-
-                        valid_pool.append(dist)
+                    valid_pool = [dist for dist in sub_pool if is_admissible(dist)]
                         
                     if not valid_pool:
                         return None
@@ -857,7 +962,10 @@ class Label:
                         if can_batch:
                             try:
                                 target_tok = self.words[0] if self.words else ""
-                                norm_pool = [_normalize_distractor_token(dist, dictionary, lang=lang, target_token=target_tok, match_casing_only=match_casing_only) for dist in valid_pool]
+                                norm_pool = [surface_form(dist, dictionary, lang,
+                                                          target_token=target_tok,
+                                                          match_casing_only=match_casing_only)
+                                             for dist in valid_pool]
                                 batch_surps = model.get_surprisal_batch_from_hidden(self.hiddens[i], norm_pool)
                                 for idx, dist in enumerate(valid_pool):
                                     surp_matrix[dist].append(batch_surps[idx])
@@ -890,31 +998,16 @@ class Label:
                 if best_candidate:
                     # Apply grammatical casing based on the distractor's class and
                     # return immediately (documented Mode A match-surprisal behavior).
-                    self.distractor = _normalize_distractor_token(best_candidate, dictionary, lang=lang,
+                    self.distractor = surface_form(best_candidate, dictionary, lang,
                                                                   target_token=self.words[0] if self.words else "",
                                                                   match_casing_only=match_casing_only)
                     return self.distractor
 
         # 1. Pre-filter candidates (cheap checks: length, banned, POS, repeat)
-        qualified_candidates = []
-        for dist in distractor_opts:
-            dist_l = strip_punct(dist).lower()
-            if dist_l in banned_l or dist_l in avoid or dist_l in global_exclude:
-                continue
-            if not candidate_length_ok(dist):
-                continue
-            if is_propn_candidate(dist) and params.get("exclude_propn_candidates", False):
-                continue
-            # light continuation filter
-            skip = False
-            for target in self.words:
-                t = strip_punct(target).lower()
-                if t and (t in dist_l or dist_l in t):
-                    skip = True
-                    break
-            if skip:
-                continue
-            qualified_candidates.append(dist)
+        # This filter used to apply no German guards at all -- no noun wall, no
+        # X/PROPN rejection, no garbage check -- so the pool that reached
+        # scoring was broader than the pool the selector would accept.
+        qualified_candidates = [dist for dist in distractor_opts if is_admissible(dist)]
         
         # Apply semantic dissimilarity filter if enabled
         if params.get('semantic_filter', False) and qualified_candidates:
@@ -953,7 +1046,9 @@ class Label:
                 target_tok = self.words[0] if self.words else ""
                 for i in range(0, len(qualified_candidates), chunk_size):
                     chunk = qualified_candidates[i : i + chunk_size]
-                    norm_chunk = [_normalize_distractor_token(c, dictionary, lang=lang, target_token=target_tok, match_casing_only=match_casing_only) for c in chunk]
+                    norm_chunk = [surface_form(c, dictionary, lang, target_token=target_tok,
+                                               match_casing_only=match_casing_only)
+                                  for c in chunk]
                     try:
                         chunk_scores = model.get_surprisal_batch_from_hidden(hidden, norm_chunk, batch_size=m_batch_size)
                         all_scores.extend(chunk_scores)
@@ -968,7 +1063,6 @@ class Label:
                 
             # 3. Iterate through candidates and apply surprisal filters/selection
             passed_candidates = []
-            early_passed_candidates = []
             
             for dist in qualified_candidates:
                 # Get the min surprisal across contexts (min of surprisals = worst case)
@@ -984,9 +1078,15 @@ class Label:
                 
                 if meets_all:
                     if force_max_surprisal:
+                        # There used to be a second list, `early_passed_candidates`,
+                        # appended under `if is_early and early_boost > 0`.  The
+                        # early boost is already folded into surprisal_targets
+                        # above, so everything reaching here has met the boosted
+                        # threshold and that list was always identical to this
+                        # one -- but it was sampled again independently below and
+                        # overwrote the result, so the code drew a candidate,
+                        # discarded it, and drew another.
                         passed_candidates.append((dist, min_surp_val))
-                        if is_early and early_boost > 0:
-                            early_passed_candidates.append((dist, min_surp_val))
                     else:
                         best_word = dist
                         best_min_surp = min_surp_val
@@ -1007,29 +1107,24 @@ class Label:
                         idx = 0  # Strict highest for long words
                     best_word, best_min_surp = passed_candidates[idx]
                     
-                if early_passed_candidates:
-                    early_passed_candidates.sort(key=lambda x: x[1], reverse=True)
-                    if _is_short:
-                        top_n = min(150, len(early_passed_candidates))
-                        idx = random.randint(0, top_n - 1)
-                    else:
-                        idx = 0  # Strict highest for long words
-                    best_qualified_word, best_qualified_surp = early_passed_candidates[idx]
-        # Mode B + early position boost: prefer the best candidate that meets
-        # the boosted threshold.  Falls back to the unconstrained best_word if
-        # nothing passed the threshold.
-        if best_qualified_word is not None:
-            best_word = best_qualified_word
-            best_min_surp = best_qualified_surp
         # Hard guarantee: never return x-x-x for non-initial positions.
         # If no candidate survived strict filters, relax constraints in stages.
+        used_fallback = best_word is None
+        fallback_relaxation = ''
+        _fallback_pool_n = int(params.get('num_to_test', 200))
         if best_word is None:
             allow_banned_fallback = bool(params.get("allow_banned_fallback", False))
             desired_len = target_exact_len if target_exact_len is not None else target_preferred_len
             
             # --- SHORT WORD REPEAT TOLERANCE ---
-            # If target word is 3 letters or fewer, automatically allow repeats on fallback
-            if desired_len is not None and desired_len <= 3:
+            # A short target's pool is small enough that refusing every banned
+            # word can leave nothing at all, so repeats are allowed here as a
+            # last resort.  The threshold now follows `repeat_exempt_max_len`
+            # instead of a hardcoded 3, so one parameter governs both this and
+            # Repeatcounter -- previously the two disagreed (3 vs 4) and
+            # `max_repeat: 1` was quietly unenforced at the short end.
+            _repeat_exempt = int(params.get("repeat_exempt_max_len", 4))
+            if desired_len is not None and desired_len <= _repeat_exempt:
                 allow_banned_fallback = True
 
             # Fallback stage 1: Use distractor_opts without surprisal threshold
@@ -1048,7 +1143,12 @@ class Label:
                 try:
                     # O(1) indexed lookup — uses the frequency-neighborhood search
                     # to keep distractors within a valid psycholinguistic range.
-                    exact_full_pool = dictionary.get_best_frequency_pool(desired_len, target_zipf)
+                    # Keep the neighborhood a neighborhood: the default n=400
+                    # and the n=5000 below both ignored the frequency band that
+                    # the non-fallback path works to respect, so a threshold
+                    # miss routed straight around it.
+                    exact_full_pool = dictionary.get_best_frequency_pool(
+                        desired_len, target_zipf, n=_fallback_pool_n)
                 except Exception:
                     exact_full_pool = []
                 # Enforce noun/non-noun split in German regardless of match_casing_only.
@@ -1094,14 +1194,15 @@ class Label:
                     adj_len = desired_len + diff if desired_len is not None else 5
                     if adj_len >= 2:
                         try:
-                            pool_expansion = dictionary.get_best_frequency_pool(adj_len, target_zipf, n=5000)
+                            pool_expansion = dictionary.get_best_frequency_pool(
+                                adj_len, target_zipf, n=_fallback_pool_n)
                             if pool_expansion:
                                 liberal_pool.extend(pool_expansion)
                         except Exception:
                             pass
                 
                 if liberal_pool:
-                    liberal_pool = list(set(liberal_pool))
+                    liberal_pool = ordered_unique(liberal_pool)
                     random.shuffle(liberal_pool)
                     
                     # Use a very generous relax_mult=4.0 for length tolerance
@@ -1178,65 +1279,29 @@ class Label:
 
                     if final_pool:
                         random.shuffle(final_pool)
-                        for cand in final_pool:
-                            cand_l = cand.lower()
-                            if cand_l in banned_l or cand_l in avoid:
-                                continue
-                            # Apply the same guards as _find_best so the ultimate
-                            # desperation path cannot produce garbage or casing leaks.
-                            if lang == 'de':
-                                if len(cand_l) < 8:
-                                    if not re.search(r'[aeiouyäöü]', cand_l):
-                                        continue
-                                    if _wordfreq_mod is not None:
-                                        # Extremely tolerant frequency check for maximum candidates
-                                        if _wordfreq_mod.zipf_frequency(cand_l, 'de') < float(params.get('json_min_zipf', 0.5)):
-                                            continue
-                                if is_propn_candidate(cand):
-                                    continue
-                                
-                                # TIGHTENED END-GAMES: 
-                                # Even in desperation fallback, we never cross the Noun/non-Noun wall.
-                                _pc2 = getattr(dictionary, 'pos_cache', {})
-                                _is_noun_d2 = False
-                                if cand_l in _pc2:
-                                    _is_noun_d2 = _pc2[cand_l] in ('NOUN', 'PROPN')
-                                elif hasattr(dictionary, 'nouns_by_len'):
-                                    l_len2 = len(cand_l)
-                                    if l_len2 in dictionary.nouns_by_len and cand_l in dictionary.nouns_by_len[l_len2]:
-                                        _is_noun_d2 = True
-                                
-                                target_is_noun_val = params.get('target_is_noun', False)
-                                if target_is_noun_val != _is_noun_d2:
-                                    continue
-                            best_word = cand
-                            break
-                        if best_word is None:
-                            # Total desperation: ignore banned list, take first clean word
-                            random.shuffle(final_pool) # Shuffle to get variety in desperation
+                        # Same predicate as every other path, relaxed in named
+                        # steps rather than by omitting guards. This block used
+                        # to apply no length check and no `avoid` check at all
+                        # on its second pass, and a different, laxer German
+                        # guard than _find_best on both -- so the desperation
+                        # path could emit exactly what the main path rejected.
+                        for _relax in (
+                            dict(relax_length_mult=3.0),
+                            dict(relax_length_mult=3.0, allow_banned=True),
+                            dict(relax_length_mult=6.0, allow_banned=True),
+                            # Last resort: drop the noun wall but never the
+                            # PROPN, garbage or exclude-list guards.
+                            dict(relax_length_mult=6.0, allow_banned=True,
+                                 enforce_pos=False),
+                        ):
                             for cand in final_pool:
-                                cand_l = cand.lower()
-                                if lang == 'de':
-                                    if len(cand_l) < 8:
-                                        if not re.search(r'[aeiouyäöü]', cand_l):
-                                            continue
-                                    _pc2 = getattr(dictionary, 'pos_cache', {})
-                                    _is_noun_d2 = False
-                                    if cand_l in _pc2:
-                                        _is_noun_d2 = _pc2[cand_l] in ('NOUN', 'PROPN')
-                                    elif hasattr(dictionary, 'nouns_by_len'):
-                                        l_len2 = len(cand_l)
-                                        if l_len2 in dictionary.nouns_by_len and cand_l in dictionary.nouns_by_len[l_len2]:
-                                            _is_noun_d2 = True
-                                    target_is_noun_val = params.get('target_is_noun', False)
-                                    if target_is_noun_val != _is_noun_d2:
-                                        continue
-                                if is_propn_candidate(cand):
-                                    continue
-                                best_word = cand
+                                if is_admissible(cand, **_relax):
+                                    best_word = cand
+                                    fallback_relaxation = ",".join(
+                                        f"{k}={v}" for k, v in sorted(_relax.items()))
+                                    break
+                            if best_word is not None:
                                 break
-                        if best_word is None:
-                            best_word = final_pool[0]  # absolute last resort
                 else:
                     # Legacy fallback for English/etc.
                     emergency_pool = [w.text for w in getattr(dictionary, 'words', []) 
@@ -1248,17 +1313,43 @@ class Label:
                 logging.error(f"Ultimate fallback failed: {e}")
                 
             if best_word is None:
-                best_word = "wort" # Mathematically impossible with 634k words, but safe.
+                # No real word survived even the loosest admissibility.  The old
+                # code emitted a literal "wort"/"word" here, which is a German
+                # or English noun that reads as a real distractor -- silently
+                # corrupting the item rather than reporting a failure.
+                best_word = _placeholder_for_length(0)
+                fallback_relaxation = 'none-admissible'
+                logging.error(
+                    "Item %s label %s: no admissible candidate at any relaxation; "
+                    "emitting the placeholder. This position needs manual "
+                    "attention (see the report sidecar).", self.id, self.lab)
             best_min_surp = float('-inf')
 
         # Final casing pass based on DISTRACTOR category
-        self.distractor = _normalize_distractor_token(best_word, dictionary, lang=lang,
-                                                      target_token=self.words[0] if self.words else "",
-                                                      match_casing_only=match_casing_only)
+        self.distractor = surface_form(best_word, dictionary, lang,
+                                       target_token=self.words[0] if self.words else "",
+                                       match_casing_only=match_casing_only)
 
-        if not force_max_surprisal:
-            logging.warning("Could not find a word to meet threshold for item %s, label %s, returning %s with %f min surp instead",
-                self.id, self.lab, self.distractor, best_min_surp)
+        self.report['used_fallback'] = used_fallback
+        self.report['relaxation'] = fallback_relaxation
+        self.report['achieved_surprisal'] = (
+            None if best_min_surp in (float('-inf'), float('inf'))
+            else round(best_min_surp, 3))
+        self.report['threshold'] = (round(max(self.surprisal_targets), 3)
+                                    if self.surprisal_targets else None)
+        self.report['target_surprisal'] = (round(max(self.surprisals), 3)
+                                           if self.surprisals else None)
+        self.report['is_placeholder'] = _is_x_placeholder_token(best_word) or \
+            best_word in ('wort', 'word')
+
+        # This used to fire on every Mode A call, successes included, so the
+        # log gave no signal about which items actually missed their threshold.
+        if used_fallback:
+            logging.warning(
+                "Item %s label %s: no candidate met the surprisal threshold; "
+                "returning %s from the fallback cascade (min surp %s)",
+                self.id, self.lab, self.distractor,
+                "n/a" if best_min_surp == float('-inf') else f"{best_min_surp:.2f}")
         return self.distractor
 
 
@@ -1437,7 +1528,7 @@ class Sentence_Set:
                     self.labels[lab].context_words = sentence.words[:]
                     self.labels[lab].target_idx = i
 
-                self.labels[lab].add_sentence(sentence.words[i], sentence.probs[lab], sentence.surprisal[lab], hidden)
+                self.labels[lab].add_sentence(sentence.words[i], sentence.probs[lab], sentence.surprisal[lab], hidden, position=i)
                 # store pos into the last appended slot
                 try:
                     self.labels[lab].pos[-1] = pos
@@ -1486,10 +1577,18 @@ class Sentence_Set:
             local_banned.append(dist)
             repeats.increment(dist)
 
+        # One first-word distractor per distinct sentence-initial target, so
+        # condition rows of the same item that start with the same word get the
+        # same distractor.  Previously every row drew independently.
+        first_word_choices = {}
+        outer_params = params
+
         def choose_first_word(sentence):
             """Choose a real-word distractor for sentence-initial position.
             Enforce exact stripped-length match whenever possible.
             """
+            # Private copy, same reason as in choose_distractor.
+            params = dict(outer_params)
             target = strip_punct(sentence.words[0])
             target_l = target.lower()
             target_len = len(target)
@@ -1579,7 +1678,15 @@ class Sentence_Set:
                             break
             if best is None and pool:
                 best = pool[0] # Desperation mode, ignore filters
-            return best if best is not None else "wort"
+            # Never a literal "wort": that is a real German noun and reads as a
+            # genuine distractor, so it corrupts the item silently instead of
+            # reporting a failure.
+            if best is None:
+                logging.error(
+                    "Item %s: no admissible first-word distractor; emitting the "
+                    "placeholder.", self.id)
+                return _placeholder_for_length(0)
+            return best
 
         use_first_placeholder = bool(params.get("first_token_placeholder", True))
         for sentence in self.sentences: #give the sentences the distractors
@@ -1589,7 +1696,21 @@ class Sentence_Set:
                 first_placeholder = _placeholder_for_length(first_len)
                 sentence.distractors.append(_copy_edge_punct_no_case(sentence.words[0], first_placeholder))
             else:
-                first_dist = choose_first_word(sentence)
+                # Reuse the choice for an identical sentence-initial target, and
+                # register it globally.  Previously every condition row drew its
+                # own position-0 distractor with a fresh shuffle, and the result
+                # never reached `banned`, `local_banned` or `repeats`, so rows of
+                # one item disagreed at position 0 and `max_repeat` was simply
+                # not enforced there.
+                first_key = strip_punct(sentence.words[0]).lower()
+                if first_key in first_word_choices:
+                    first_dist = first_word_choices[first_key]
+                else:
+                    first_dist = choose_first_word(sentence)
+                    first_word_choices[first_key] = first_dist
+                    banned.append(first_dist)
+                    local_banned.append(first_dist)
+                    repeats.increment(first_dist)
                 first_dist = copy_punct(sentence.words[0], first_dist)
                 if lang == 'en':
                     first_dist = _normalize_english_distractor_case(first_dist, is_first_word=True, target_token=sentence.words[0])

@@ -93,3 +93,8 @@ semantic_similarity_histogram.png
 frequency_scatter_mediumgpt.png
 length_scatter_mediumgpt.png
 semantic_similarity_histogram_mediumgpt.png
+
+# Build artifacts (uv build / pip install .)
+build/
+dist/
+*.egg-info/

@@ -25,7 +25,7 @@ import json
 import bisect
 from collections import defaultdict
 from HanTa import HanoverTagger as ht
-from utils import strip_punct
+from utils import strip_punct, ordered_unique, resolve_repo_path
 from distractor import distractor_dict, distractor
 
 
@@ -42,6 +42,60 @@ def _is_english_dominant(token: str, margin: float = 0.3) -> bool:
 
 
 # QUALITY GATE: Runtime validator for cache words
+
+def load_pos_lexicon(artifact_path, legacy_path, lang_label):
+    """Load POS tags for *lang_label*, preferring the rebuildable artifact.
+
+    Returns a plain {word: UPOS} dict.
+
+    Two formats are accepted.  The artifact written by `build_lexicon.py` has a
+    `_meta` stamp (tagger, version, build date) alongside its `tags`; the legacy
+    cache is a bare {word: tag} mapping.  The artifact wins when present, and
+    the legacy file remains the fallback so a machine with no taggers installed
+    -- a cluster or Colab node -- still gets tags, which is what this load has
+    always been for.  Deleting the artifact reverts to the legacy file.
+    """
+    # Same class of bug as the exclude lists: these are repo-relative paths and
+    # only resolved while the CWD happened to be the repo root.
+    artifact_path = resolve_repo_path(artifact_path)
+    legacy_path = resolve_repo_path(legacy_path)
+
+    if artifact_path and os.path.exists(artifact_path):
+        try:
+            with open(artifact_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            meta = data.get("_meta", {})
+            tags = data.get("tags", {})
+            if tags:
+                print(f"    [LEXICON] {lang_label}: {len(tags)} tags from "
+                      f"{artifact_path} (tagger: {meta.get('tagger', 'unknown')}, "
+                      f"built {meta.get('built', 'unknown')})", flush=True)
+                return dict(tags)
+            logging.warning("[LEXICON] %s has no 'tags' section; "
+                            "falling back to %s", artifact_path, legacy_path)
+        except Exception as e:
+            logging.error("[LEXICON] Could not read %s (%s); falling back to %s",
+                          artifact_path, e, legacy_path)
+
+    if legacy_path and os.path.exists(legacy_path):
+        try:
+            with open(legacy_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            print(f"    [LEXICON] {lang_label}: {len(data)} tags from the legacy "
+                  f"cache {legacy_path}. Rebuild with "
+                  f"`python build_lexicon.py --lang {lang_label}` -- the legacy "
+                  f"file was written append-only and cannot self-correct.",
+                  flush=True)
+            return dict(data)
+        except Exception as e:
+            logging.error("[LEXICON] Could not read %s: %s", legacy_path, e)
+
+    logging.warning("[LEXICON] %s: no POS lexicon found; tagging happens at "
+                    "run time if a tagger is installed.", lang_label)
+    return {}
+
+
+
 def _is_valid_cache_word(word: str, min_target_length: int = 3, lang: str = 'de', short_min_zipf: float = 3.5, mid_min_zipf: float = 3.0) -> bool:
     """
     Quality gate for words pulled from POS cache.
@@ -96,10 +150,14 @@ def _is_valid_cache_word(word: str, min_target_length: int = 3, lang: str = 'de'
             return False
     
     # Gate 5: CRITICAL ZIPF VALIDATION
-    # For German, enforce strict minimum Zipf configured by params
-    if lang == 'de' and word_len < 9:
+    # This used to run only when lang == 'de', so `short_min_zipf` (3.5 in
+    # params_en.txt) and `min_zipf` were never enforced for English or Arabic
+    # candidates -- which is how 'ocd', 'fyi', 'mla', 'yall', 'ive' and 'thy'
+    # reached the output.  The thresholds stay length-conditional; only the
+    # language restriction is gone.
+    if word_len < 9:
         try:
-            z = wordfreq.zipf_frequency(word_lower, 'de')
+            z = wordfreq.zipf_frequency(word_lower, lang)
             if word_len <= 5:
                 if z < short_min_zipf:  # STRICT for short words
                     return False
@@ -136,38 +194,89 @@ STTS_TO_UPOS = {
 }
 
 
-def _farasa_tag_to_upos(tagged):
-    """Convert a raw Farasa tag string (e.g. 'S-و/CONJ+ال/DET+قمر/NOUN') to UPOS.
+# Farasa morpheme classes that attach to a lexical head rather than being one.
+# PRON belongs here: Arabic writes possessive and object pronouns as suffixes
+# ("كتابه" = his book), so taking the last morpheme's tag labelled every such
+# noun or verb a pronoun.  The shipped Arabic lexicon holds 7,166 PRON entries
+# for that reason.
+_FARASA_CLITICS = frozenset({
+    'CONJ', 'PREP', 'DET', 'PART', 'PUNC', 'NSUFF', 'CASE', 'PRON', 'S', 'E',
+})
 
-    Walks the '+'-separated morphemes from the END, skipping clitic classes
-    (CONJ/PREP/DET/PART/PUNC) to find the true lexical head, then standardizes
-    the Farasa tag to Universal POS. Unknown/garbage tags become 'X'.
+# Farasa tag -> UPOS.  Anything not listed becomes 'X'.
+_FARASA_TO_UPOS = {
+    'NOUN': 'NOUN', 'V': 'VERB', 'ADJ': 'ADJ', 'ADV': 'ADV', 'NUM': 'NUM',
+    'PREP': 'ADP', 'CONJ': 'CCONJ', 'DET': 'DET', 'PART': 'PART',
+    'PRON': 'PRON', 'INTERJ': 'INTJ', 'ABBREV': 'X', 'FOREIGN': 'X',
+}
+
+
+def _farasa_morpheme_tags(tagged):
+    """Return the morpheme tags of a raw Farasa POS string for ONE word.
+
+    Farasa puts every segment's form on the left of a single '/' and every
+    segment's tag on the right, each side '+'-separated -- not as form/tag
+    pairs.  Current farasapy also wraps the result in sentinels::
+
+        'S/S كتاب/NOUN-MS E/E'                  -> ['NOUN']
+        'S/S ال+ كتاب/DET+NOUN-MS E/E'          -> ['DET', 'NOUN']
+        'S/S ال+ مدرس +ة/DET+NOUN+NSUFF-FS E/E' -> ['DET', 'NOUN', 'NSUFF']
+
+    The original parser split on '+' alone and read the trailing 'E' as the
+    tag, so every Arabic word came back 'X' -- and 'X' enters no candidate
+    pool, meaning Arabic generation ran with no POS information whatsoever.
+    Splitting on whitespace instead paired each form with its NEIGHBOUR's tag,
+    which labelled every definite noun 'DET' (12,289 of 43,567 words).
+
+    Feature suffixes ('NOUN-MS', 'NSUFF-FS') are stripped: they are gender and
+    number, and they made even a correctly located tag fail the lookup.
+
+    Only single-word input is supported, which is all the pipeline tags.
     """
-    parts = tagged.split('+')
-    pos = 'X'
-    for part in reversed(parts):
-        if '/' in part:
-            curr = part.split('/')[-1].strip().upper()
-            if curr not in ('CONJ', 'PREP', 'DET', 'PART', 'PUNC'):
-                pos = curr
-                break
-    if pos == 'X' and parts:
-        if '/' in parts[-1]:
-            pos = parts[-1].split('/')[-1].strip().upper()
+    body = tagged.strip()
+    # Drop the sentinels; they are not morphemes of the word.
+    if body.startswith('S/S'):
+        body = body[3:]
+    if body.endswith('E/E'):
+        body = body[:-3]
+    body = body.strip()
+    if '/' not in body:
+        return []
 
-    if pos == 'V': pos = 'VERB'
-    elif pos == 'PREP': pos = 'ADP'
-    elif pos == 'CONJ': pos = 'CCONJ'
-    elif 'PRON' in pos: pos = 'PRON'
-    elif pos not in ('NOUN', 'ADJ', 'ADV', 'NUM', 'DET', 'PART', 'PROPN'):
-        pos = 'X'
-    return pos
+    _forms, _, tag_block = body.rpartition('/')
+    tags = []
+    for tag in tag_block.split('+'):
+        tag = tag.strip().upper().split('-')[0]   # 'NOUN-MS' -> 'NOUN'
+        if tag:
+            tags.append(tag)
+    return tags
+
+
+def _farasa_tag_to_upos(tagged):
+    """Convert a raw Farasa tag string to UPOS.
+
+    Walks the morphemes from the END, skipping clitics to find the true lexical
+    head.  If every morpheme is a clitic -- which is what a standalone pronoun
+    or preposition looks like -- the last one is the head after all.
+    """
+    morphemes = [tag for tag in _farasa_morpheme_tags(tagged)
+                 if tag not in ('S', 'E')]
+    if not morphemes:
+        return 'X'
+
+    for tag in reversed(morphemes):
+        if tag not in _FARASA_CLITICS:
+            return _FARASA_TO_UPOS.get(tag, 'X')
+
+    # All clitics: the word IS a function word, so take the last tag.
+    return _FARASA_TO_UPOS.get(morphemes[-1], 'X')
 
 
 class wordfreq_dict(distractor_dict):
     """General class of dictionaries"""
 
-    def __init__(self, params={}):
+    def __init__(self, params=None):
+        params = {} if params is None else params
         self.params = params
         self.words = []
         self.words_by_len = {}
@@ -183,10 +292,18 @@ class wordfreq_dict(distractor_dict):
         # Return just the text for compatibility with old Stage 2 logic if still used
         return [w.text for w in pool]
 
-    def get_best_frequency_pool(self, desired_len, target_freq, n=400):
+    def get_best_frequency_pool(self, desired_len, target_zipf, n=400):
         """
-        Retrieves a 'neighborhood' of words with frequencies closest to target_freq.
+        Retrieves a 'neighborhood' of words with frequencies closest to the target.
         Uses binary search for O(log N) neighborhood identification.
+
+        *target_zipf* is a **Zipf** value (wordfreq's 1-7 scale), not the
+        natural-log frequency stored on each ``distractor``.  The unit is in
+        the parameter name deliberately: the two are a factor of ln(10) apart,
+        and passing natlog here used to push the bisection key off the end of
+        the array on every call, so the "neighborhood" returned was always the
+        tail of the list — i.e. the rarest words of that length, identically
+        for every target.
         """
         full_pool = self.words_by_len.get(desired_len, [])
         if not full_pool:
@@ -194,15 +311,14 @@ class wordfreq_dict(distractor_dict):
             
         if len(full_pool) <= n:
             return [w.text for w in full_pool]
-            
-        # Since full_pool is sorted by frequency DESCENDING, we use a custom key
-        # frequencies are [7.0, 6.9, ..., 1.0]
-        # To find 'target_freq' in a descending list, we can search in the negative list
-        # or just use bisect with a custom order.
-        
-        # Extract Zipf frequencies for binary search
-        # NOTE: Using negative frequencies so bisection on descending order works
-        freqs_neg = [-w.freq for w in full_pool] # [-7.0, -6.9, ..., -1.0] (ascending)
+
+        # `w.freq` is natural-log frequency (zipf * ln(10)); convert the key to
+        # match rather than the whole array.
+        target_freq = target_zipf * math.log(10)
+
+        # Since full_pool is sorted by frequency DESCENDING, we bisect over the
+        # negated frequencies, which are ascending.
+        freqs_neg = [-w.freq for w in full_pool] # [-16.1, -15.9, ..., -2.3] (ascending)
         
         idx = bisect.bisect_left(freqs_neg, -target_freq)
         
@@ -326,7 +442,7 @@ class wordfreq_dict(distractor_dict):
 
         # ABSOLUTE TRUTH GUARD: Only tag words that are NOT already in our verified cache.
         # If force_refresh=True, ignore cache and tag all words.
-        unique_words = list(set(w.lower() for w in words if force_refresh or w.lower() not in self.pos_cache))
+        unique_words = ordered_unique(w.lower() for w in words if force_refresh or w.lower() not in self.pos_cache)
         
         if not unique_words:
             # print(f"    [NLP] Skipping Stanza: All {len(words)} candidates are already verified in Cache.", flush=True)
@@ -371,22 +487,39 @@ class wordfreq_dict(distractor_dict):
     def get_potential_distractors(self, min_length, max_length, min_freq, max_freq, params, pos_filter=None):
         """Returns list of candidates, using heuristic first, then widening, then batch SpaCy validation."""
         _lang = getattr(self, 'lang', 'de')
-        n = params.get('num_to_test', 200)
-        # Fetch MORE so that after POS filtering we still have 'n' candidates.
-        # If we have a POS filter, we need a significantly larger pool to find survivors.
-        target_pool_size = max(n * 2, 500)
-        if pos_filter:
-            target_pool_size = max(n * 5, 2000)
+        n = int(params.get('num_to_test', 200))
+        # How many candidates to aim for before the tiers give up widening.
+        #
+        # This used to be `max(n * 5, 2000)` under a pos_filter -- i.e. 2000 for
+        # every English and German target.  A frequency band of +/- 1 Zipf at a
+        # single exact length holds nothing like 2000 words, so the widening
+        # loop below ran to its limit on EVERY target and turned the declared
+        # band into +/- 4.9 Zipf.  Mode B then picks the maximum-surprisal
+        # candidate, which sits at the rare edge, so every distractor landed far
+        # below its target's frequency.  A smaller in-band pool beats a large
+        # out-of-band one, because selection ranks within the pool either way.
+        pool_factor = float(params.get('pool_size_factor', 2.0 if pos_filter else 1.0))
+        target_pool_size = max(int(n * pool_factor), 50)
+
+        # The size at which the retrieval tiers stop trying.  Every tier below
+        # TIER 1 relaxes the frequency band, the length window, or both, so
+        # they must fire only when the pool is genuinely too small to choose
+        # from -- not to reach `target_pool_size`, which for German
+        # (num_to_test 2000, factor 2) is 4,000 candidates that no +/-1 Zipf
+        # band at one length can supply.  Chasing it meant TIER 1.5/2/3 ran on
+        # essentially every target and refilled the pool with out-of-band
+        # words: 20 of 45 German positions came out below their band with a
+        # pool of 900-2000 in-band candidates already available.
+        min_pool_size = int(params.get('min_pool_size', 60))
         
         # Get exclude list from params for pre-filtering
         exclude_words_set = set()
         exclude_path = params.get('exclude_words', None)
         if exclude_path:
             import os
-            # Resolve relative paths
-            if not os.path.isabs(exclude_path) and not os.path.exists(exclude_path):
-                base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                exclude_path = os.path.join(base, exclude_path)
+            # NB: one `dirname` too many here used to resolve to the repo's
+            # parent directory, silently dropping the exclude list.
+            exclude_path = resolve_repo_path(exclude_path)
             if os.path.exists(exclude_path):
                 try:
                     with open(exclude_path, 'r', encoding='utf-8') as f:
@@ -400,79 +533,103 @@ class wordfreq_dict(distractor_dict):
         # TIER 1: Frequency-Matched Fetch (Status Quo)
         distractor_opts = self.get_words(min_length, max_length, min_freq, max_freq, pos_filter=None, use_spacy=False)
         
-        # SHORT-WORD PROTECTION: For ≤5 char words, apply QUALITY GATE
-        # (Protects against web-scraping junk like 'fug', 'xte', 'uru' that enter via wordfreq)
-        # NOTE: AIR-GAP OPTIMIZATION - Do NOT require words to be in JSON cache.
-        # Instead, rely on _is_valid_cache_word() quality gates (Zipf, vowels, etc.)
-        # Pre-batch-tagging happens later in the pipeline if needed.
-        if max_length <= 5:
-            _sz = float(params.get('short_word_min_zipf', 3.5)) if params else 3.5
-            _mz = float(params.get('min_zipf', 3.0)) if params else 3.0
-            distractor_opts = [w for w in distractor_opts if _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length, lang=_lang, short_min_zipf=_sz, mid_min_zipf=_mz)]
+        # QUALITY GATE: reject web-scraping junk like 'fug', 'xte', 'uru' that
+        # passes a frequency check.  This used to be wrapped in
+        # `if max_length <= 5:`, so any target of 6+ characters got no
+        # structural filtering at all -- the gate's own thresholds are already
+        # length-conditional, so the outer guard only disabled it.
+        _sz = float(params.get('short_word_min_zipf', 3.5)) if params else 3.5
+        _mz = float(params.get('min_zipf', 3.0)) if params else 3.0
+
+        def _quality_ok(w):
+            return _is_valid_cache_word(strip_punct(w).lower(),
+                                        min_target_length=min_length, lang=_lang,
+                                        short_min_zipf=_sz, mid_min_zipf=_mz)
+
+        distractor_opts = [w for w in distractor_opts if _quality_ok(w)]
         
         # PRE-FILTER: Remove excluded words
         if exclude_words_set:
             distractor_opts = [w for w in distractor_opts if strip_punct(w).lower() not in exclude_words_set]
 
         # TIER 1.25: Stepwise Frequency-Band Widening (`max_freq_widen`)
-        # If the tight band starved, widen [min_freq, max_freq] symmetrically by
-        # 1 natural-log unit (~0.43 Zipf) per step, up to `max_freq_widen` steps,
-        # keeping the same length window and quality gates as TIER 1.
+        # If the tight band starved, widen [min_freq, max_freq] symmetrically in
+        # steps of `freq_widen_step` ZIPF units, up to `max_freq_widen` steps.
+        # The step used to be 1 natural-log unit (0.43 Zipf) with 9 steps
+        # allowed, so a fully-widened band was +/- 4.9 Zipf wider than declared
+        # -- effectively unbounded.  Widening is now both smaller-grained and
+        # reported, so a run says how far it had to go.
         max_freq_widen = int(params.get('max_freq_widen', 9))
+        widen_step = float(params.get('freq_widen_step', 0.1)) * math.log(10)
+        # Widen only when the pool is too small to choose from -- NOT to reach
+        # `target_pool_size`.  Those are different questions: a bigger pool
+        # cannot be had without leaving the frequency band, and selection ranks
+        # within the pool either way, so chasing the larger number simply trades
+        # the frequency match away.  German asks for num_to_test 2000, which no
+        # +/-1 Zipf band at one length can supply, so it widened on 43 of 45
+        # positions and only 10 landed inside the declared band.
+        widen = 0
         if min_freq is not None and max_freq is not None:
-            widen = 0
-            while len(distractor_opts) < target_pool_size and widen < max_freq_widen:
+            while len(distractor_opts) < min_pool_size and widen < max_freq_widen:
                 widen += 1
                 wider_pool = self.get_words(min_length, max_length,
-                                            min_freq - widen, max_freq + widen,
+                                            min_freq - widen * widen_step,
+                                            max_freq + widen * widen_step,
                                             pos_filter=None, use_spacy=False)
-                if max_length <= 5:
-                    _sz = float(params.get('short_word_min_zipf', 3.5)) if params else 3.5
-                    _mz = float(params.get('min_zipf', 3.0)) if params else 3.0
-                    wider_pool = [w for w in wider_pool if _is_valid_cache_word(strip_punct(w).lower(), min_target_length=min_length, lang=_lang, short_min_zipf=_sz, mid_min_zipf=_mz)]
+                wider_pool = [w for w in wider_pool if _quality_ok(w)]
                 if exclude_words_set:
                     wider_pool = [w for w in wider_pool if strip_punct(w).lower() not in exclude_words_set]
                 if wider_pool:
-                    distractor_opts = list(set(distractor_opts) | set(wider_pool))
+                    distractor_opts = ordered_unique(list(distractor_opts) + list(wider_pool))
+            if widen:
+                logging.info(
+                    "Frequency band widened by %.2f Zipf (%d step(s)) to reach %d "
+                    "candidates of length %d-%d.",
+                    widen * float(params.get('freq_widen_step', 0.1)), widen,
+                    len(distractor_opts), min_length, max_length)
+        self.last_freq_widen_steps = widen
 
         # TIER 1.5: Adaptive Frequency Widening
         # If tight band failed, use the optimized neighborhood search (binary search)
-        if len(distractor_opts) < target_pool_size and 'target_zipf' in params:
+        if len(distractor_opts) < min_pool_size and 'target_zipf' in params:
             target_zipf = params['target_zipf']
             logging.info(f"Tight band search starved. Using neighborhood search around Zipf {target_zipf:.2f}")
             
-            # Use binary-search-based neighborhood identifier
-            # Start with a generous neighborhood (n=1000) for fast retrieval
+            # Neighborhood size must stay a *neighborhood*: n=1000 against a
+            # length bucket of ~3-4k words is a third of the lexicon, which
+            # throws away the frequency match this tier exists to preserve.
             target_exact_len = params.get('target_exact_length') or ((min_length + max_length) // 2)
-            # Try exact length neighborhood first
-            neighbor_pool = self.get_best_frequency_pool(target_exact_len, target_zipf, n=1000)
+            neighbor_pool = self.get_best_frequency_pool(target_exact_len, target_zipf,
+                                                         n=target_pool_size)
             
             # Filter and add to candidates
             if exclude_words_set:
                 neighbor_pool = [w for w in neighbor_pool if w not in exclude_words_set]
             
             distractor_opts.extend(neighbor_pool)
-            distractor_opts = list(set(distractor_opts))
+            distractor_opts = ordered_unique(distractor_opts)
 
         # TIER 2: Quality Gate Fallback
         # If still starving, we can pull from other nearby lengths using the same frequency search
-        if len(distractor_opts) < target_pool_size:
+        if len(distractor_opts) < min_pool_size:
             target_exact_len = params.get('target_exact_length') or ((min_length + max_length) // 2)
             target_zipf = params.get('target_zipf', 5.0)
+            _len_floor = int(params.get('min_word_len', DEFAULT_MIN_WORD_LEN))
             for length_diff in [1, -1]: # Try nearby length neighborhoods
                 adj_len = target_exact_len + length_diff
-                if adj_len >= 3:
-                    adj_pool = self.get_best_frequency_pool(adj_len, target_zipf, n=500)
+                if adj_len >= _len_floor:
+                    adj_pool = self.get_best_frequency_pool(adj_len, target_zipf,
+                                                            n=target_pool_size)
                     if exclude_words_set:
                         adj_pool = [w for w in adj_pool if w not in exclude_words_set]
                     distractor_opts.extend(adj_pool)
-                    distractor_opts = list(set(distractor_opts))
-                if len(distractor_opts) >= target_pool_size:
+                    distractor_opts = ordered_unique(distractor_opts)
+                if len(distractor_opts) >= min_pool_size:
                     break
 
         # TIER 3: GRADUAL EMERGENCY EXPANSION (Ultimate Quality fallback)
         # If thresholds are NOT met, gradually expand length tolerance.
-        if len(distractor_opts) < target_pool_size and hasattr(self, 'get_emergency_pool'):
+        if len(distractor_opts) < min_pool_size and hasattr(self, 'get_emergency_pool'):
             target_exact_len = params.get('target_exact_length') or ((min_length + max_length) // 2)
             
             # Expansion Tiers: +/- 1, then +/- 2 (if word is long enough)
@@ -483,8 +640,9 @@ class wordfreq_dict(distractor_dict):
             for scale in expansion_scales:
                 for diff in range(1, scale + 1):
                     lengths_to_try = [target_exact_len + diff, target_exact_len - diff]
+                    _len_floor = int(params.get('min_word_len', DEFAULT_MIN_WORD_LEN))
                     for l in lengths_to_try:
-                        if l < 2: continue # Never go below 2
+                        if l < _len_floor: continue
                         # Use target_is_noun from params for faster pre-filtered expansion
                         target_is_noun_p = params.get('target_is_noun', False)
                         
@@ -496,11 +654,11 @@ class wordfreq_dict(distractor_dict):
                             pool = self.get_emergency_pool(l, is_noun=True) + self.get_emergency_pool(l, is_noun=False)
                         
                         distractor_opts.extend(pool)
-                        distractor_opts = list(set(distractor_opts))
+                        distractor_opts = ordered_unique(distractor_opts)
                     
-                    if len(distractor_opts) >= target_pool_size:
+                    if len(distractor_opts) >= min_pool_size:
                         break
-                if len(distractor_opts) >= target_pool_size:
+                if len(distractor_opts) >= min_pool_size:
                     break
 
         # 3. --- HYPER-SPEED OPTIMIZATION: BATCH TAGGING ---
@@ -684,7 +842,8 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
     - exclude_words (path, optional)
     """
 
-    def __init__(self, params={}):
+    def __init__(self, params=None):
+        params = {} if params is None else params
         super().__init__(params)
         self.lang = "en"
         self.nlp_sp = None
@@ -712,10 +871,7 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
         exclusions_lower = set()
         if exclude is not None:
             import os
-            if not os.path.isabs(exclude) and not os.path.exists(exclude):
-                fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), exclude)
-                if os.path.exists(fallback):
-                    exclude = fallback
+            exclude = resolve_repo_path(exclude)
             try:
                 with open(exclude, "r", encoding="utf-8") as f:
                     exclusions_lower = set(line.strip().lower() for line in f if line.strip())
@@ -727,16 +883,9 @@ class wordfreq_English_zipf_dict(wordfreq_dict):
         # === PRELOAD EN POS CACHE ===
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
-        try:
-            import json
-            import os
-            cache_file = "models/english_code/english_pos_cache.json"
-            if os.path.exists(cache_file):
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cached_data = json.load(f)
-                    self.pos_cache.update(cached_data)
-        except Exception as e:
-            print(f"[CACHE] Error loading EN POS cache: {e}")
+        self.pos_cache.update(load_pos_lexicon(
+            "models/english_code/english_pos_lexicon.json",
+            "models/english_code/english_pos_cache.json", "en"))
 
         include_words = None
         if include is not None and os.path.exists(include):
@@ -794,7 +943,8 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
     """Zipf-based German dictionary built from the wordfreq library."""
 
-    def __init__(self, params={}):
+    def __init__(self, params=None):
+        params = {} if params is None else params
         super().__init__(params)
         self.lang = "de"
         self.nlp_sp = None
@@ -806,10 +956,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
 
         exclusions_lower = set()
         if exclude is not None:
-            if not os.path.isabs(exclude) and not os.path.exists(exclude):
-                fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), exclude)
-                if os.path.exists(fallback):
-                    exclude = fallback
+            exclude = resolve_repo_path(exclude)
             try:
                 with open(exclude, "r", encoding="utf-8") as f:
                     for line in f:
@@ -829,16 +976,11 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             self.common_casing = {}
 
         # === PRELOAD GERMAN POS CACHE ===
-        try:
-            cache_file = "models/german_code/german_pos_cache_v2.json"
-            if os.path.exists(cache_file):
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cached_data = json.load(f)
-                    self.pos_cache.update(cached_data)
-                # Seed nouns_by_len and others_by_len pools with loaded data
-                self._populate_pools_from_cache()
-        except Exception as e:
-            logging.error(f"[CACHE] Error loading German POS cache: {e}")
+        self.pos_cache.update(load_pos_lexicon(
+            "models/german_code/german_pos_lexicon.json",
+            "models/german_code/german_pos_cache_v2.json", "de"))
+        # Seed nouns_by_len and others_by_len pools with the loaded tags
+        self._populate_pools_from_cache()
 
         # HanTa Morphological Dictionary Bouncer
         self.hanta = None
@@ -1026,7 +1168,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             if w_clean not in self.pos_cache:
                 to_tag.append(w_clean)
         
-        to_tag = list(set(to_tag))
+        to_tag = ordered_unique(to_tag)
         if not to_tag: return
 
         stts_map = STTS_TO_UPOS  # shared module-level STTS -> UPOS map
@@ -1039,26 +1181,23 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             if not stanza_tags or ('X' in stanza_tags and len(stanza_tags) == 1):
                 continue 
                 
-            w_cap = w.capitalize()
-            _, tag = self.hanta.analyze(w_cap)
-            clean_tag = tag.replace('(', '').replace(')', '')
-            upos = stts_map.get(clean_tag, 'X')
-            
-            if upos == 'NOUN':
-                _, tag_low = self.hanta.analyze(w.lower())
-                clean_tag_low = tag_low.replace('(', '').replace(')', '')
-                upos_low = stts_map.get(clean_tag_low, 'X')
-                if upos_low in ('VERB', 'ADJ', 'ADV', 'AUX'):
-                    upos = upos_low
-                    
+            # Same rule as candidate tagging -- these two used to hold two
+            # slightly different copies of it, so an input word and a candidate
+            # word could get different tags from the same tagger.
+            upos = self.hanta_upos(w)
+
             # The Verification Rule: If HanTa confirms any of the Stanza tags, we cache it
             if upos in stanza_tags and upos != 'X':
                 self._record_pos_tag(w, upos)
                 new_entries += 1
                 
         if new_entries > 0:
-            print(f"    [Hybrid] Successfully verified and cached {new_entries} new input words!", flush=True)
-            self.save_pos_cache()
+            # In-memory only.  Persisting here made a run's own tagging decisions
+            # an input to the next run (same input + same seed, different
+            # output), and because the disk write was append-only a wrong tag
+            # could never be corrected afterwards.  Rebuild the lexicon with
+            # `python build_lexicon.py --lang de` instead.
+            print(f"    [Hybrid] Verified {new_entries} new input words (in-memory).", flush=True)
 
     def batch_tag_words(self, words, params=None, force_refresh=False):
         """Batch-tag German candidates strictly using HanTa Morphological Dictionary."""
@@ -1076,7 +1215,7 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
             if force_refresh or w_clean not in self.pos_cache:
                 to_tag.append(w_clean)
         
-        to_tag = list(set(to_tag))
+        to_tag = ordered_unique(to_tag)
         if not to_tag: return
 
         stts_map = STTS_TO_UPOS  # shared module-level STTS -> UPOS map
@@ -1084,32 +1223,42 @@ class wordfreq_German_zipf_dict(wordfreq_dict):
         print(f"    [HanTa] Looking up {len(to_tag)} words in strict morphological dictionary...", flush=True)
         
         for w in to_tag:
-            # Check with proper noun casing for HanTa to evaluate correctly
-            w_cap = w.capitalize()
-            # HanTa returns (lemma, STTS_TAG)
-            _, tag = self.hanta.analyze(w_cap)
-            
-            # Map HanTa's STTS tag to universal UPOS
-            # HanTa returns tags with parentheses like VV(INF) or ADJ(A), but standard STTS is VVINF or ADJA.
-            clean_tag = tag.replace('(', '').replace(')', '')
-            upos = stts_map.get(clean_tag, 'X')
-            
-            # Additional safety: If HanTa says it's a noun, ensure the true lowercase form isn't natively a verb/adj
-            if upos == 'NOUN':
-                # Leverage HanTa's morphological lemmatizer properly:
-                # If a word is natively a noun, HanTa autocorrects its lemma to be capitalized (e.g. "hosentasche" -> "Hosentasche")
-                # If it's a true verb, the lemma remains lowercase (e.g. "gegoogelt" -> "googeln")
-                try:
-                    lemma_low, tag_low_str = self.hanta.analyze(w.lower())
-                    clean_tag_low = tag_low_str.replace('(', '').replace(')', '')
-                    upos_low = stts_map.get(clean_tag_low, 'X')
-                    
-                    if upos_low in ('VERB', 'ADJ', 'ADV', 'AUX') and lemma_low and lemma_low[0].islower():
-                        upos = upos_low
-                except Exception:
-                    pass
-                    
-            self._record_pos_tag(w, upos)
+            self._record_pos_tag(w, self.hanta_upos(w))
+
+    def hanta_upos(self, word):
+        """UPOS tag for a lowercase German candidate, via HanTa.
+
+        Capitalisation is the signal HanTa needs to recognise a proper noun --
+        lowercased, "alonso" comes back ADV, "daphne" a verb, "kev" a number --
+        so the word must be capitalised before tagging.  But capitalising a
+        *verb* produces a grammatically real nominalised infinitive: "abarbeiten"
+        -> NNI, "abartig" -> NNA.  Neither tag is in STTS_TO_UPOS, so both
+        became 'X', and an X entry enters no candidate pool at all.
+
+        The previous attempt to undo that re-analysed any NOUN in lowercase and
+        took the lowercase tag if it looked verbal, which demoted 527 genuine
+        nouns ("artefakte", "antwerpen") because HanTa mangles a lowercased
+        noun's lemma.
+
+        So: trust the capitalised analysis, and consult the lowercase one only
+        for the two nominalisation tags that capitalising itself produced.
+        Measured over the whole German lexicon, this cuts unusable 'X' entries
+        from 3,064 to 180, grows the noun pool by 1,632, and correctly
+        identifies 1,353 more proper nouns.
+        """
+        _, tag = self.hanta.analyze(word.capitalize())
+        # HanTa writes VV(INF) / ADJ(A); standard STTS is VVINF / ADJA.
+        clean_tag = tag.replace('(', '').replace(')', '')
+
+        if clean_tag == 'NE':
+            return 'PROPN'
+        if clean_tag in ('NNI', 'NNA'):
+            # Nominalised infinitive / adjective: an artefact of capitalising.
+            _, tag_low = self.hanta.analyze(word.lower())
+            return STTS_TO_UPOS.get(tag_low.replace('(', '').replace(')', ''), 'X')
+        if clean_tag == 'NN':
+            return 'NOUN'
+        return STTS_TO_UPOS.get(clean_tag, 'X')
 
     def _record_pos_tag(self, word, upos):
         """Cache-aware POS tagging that populates length-indexed pools.
@@ -1258,6 +1407,81 @@ def get_frequency_en(word):
 
 
 
+# Length bounds the candidate lexicons can actually serve.  `min_word_len` also
+# governs which words are loaded into the lexicon at all, so a target shorter
+# than it has an empty bucket and cannot be length-matched.
+DEFAULT_MIN_WORD_LEN = 3
+MAX_TARGET_LENGTH = 15
+
+
+def effective_target_length(length, params, max_len=MAX_TARGET_LENGTH):
+    """Clamp a target's true length into the range the lexicon can serve.
+
+    The threshold functions clamped the length they searched with while
+    `candidate_length_ok` in sentence_set.py compared against the *true*
+    length, so with `len_tolerance: 0` a 1- or 2-letter English target rejected
+    every candidate the pool could offer and fell through the whole cascade to
+    the desperation fallback.  17% of non-initial tokens in English_sample.txt
+    are 1-2 characters.  Both sides now clamp identically, via this function.
+
+    Pass `max_len=None` to skip the upper clamp (German does not cap length).
+    """
+    floor = DEFAULT_MIN_WORD_LEN
+    if params is not None:
+        try:
+            floor = int(params.get('min_word_len', DEFAULT_MIN_WORD_LEN))
+        except (TypeError, ValueError):
+            pass
+    out = max(floor, int(length))
+    if max_len is not None:
+        out = min(out, int(max_len))
+    return out
+
+
+# Default frequency-band half-width, in Zipf units.  A distractor is drawn from
+# targetZipf +/- this value.  1.0 is the value params_de.txt has always carried;
+# it is now the default for every language because the alternative branch was
+# degenerate (see _freq_band).
+DEFAULT_FREQ_TOLERANCE = 1.0
+
+# Bounds of the untightened band, in natural-log frequency units
+# (Zipf 1.30 .. 4.78).  Only used when freq_tolerance is explicitly null.
+_WIDE_BAND_LOW = 3.0
+_WIDE_BAND_HIGH = 11.0
+
+
+def _freq_band(freqs, params):
+    """Return (min_freq, max_freq) in natural-log units for a set of targets.
+
+    With a ``freq_tolerance`` (Zipf units, default 1.0) the band is centred on
+    the mean target frequency.  ``freq_tolerance: null`` restores the old wide
+    band.
+
+    The old wide branch read::
+
+        min_freq = min(min(freqs), 11)
+        max_freq = max(max(freqs), 3)
+
+    with the two bounds the wrong way round, so for any target between 3 and 11
+    natlog -- i.e. Zipf <= 4.78, which is most content words -- it collapsed to
+    min_freq == max_freq == the target's own frequency, a band of width zero.
+    That starved the tight-band search on every English and Arabic run (only
+    params_de.txt set freq_tolerance) and pushed selection into the fallback
+    tiers, which is the origin of the frequency-mismatched output.
+    """
+    tol = DEFAULT_FREQ_TOLERANCE
+    if params is not None and 'freq_tolerance' in params:
+        tol = params['freq_tolerance']
+
+    if tol is None:
+        return (min(min(freqs), _WIDE_BAND_LOW),
+                max(max(freqs), _WIDE_BAND_HIGH))
+
+    tol_natlog = float(tol) * math.log(10)
+    mean_freq = sum(freqs) / len(freqs)
+    return mean_freq - tol_natlog, mean_freq + tol_natlog
+
+
 def get_thresholds_de(words, params=None):
     """German thresholds based on German frequency.
 
@@ -1269,23 +1493,12 @@ def get_thresholds_de(words, params=None):
     freqs = []
     for word in words:
         stripped = strip_punct(word)
-        # Allow unlimited word lengths (no clamping)
-        lengths.append(max(3, len(stripped)))
+        lengths.append(effective_target_length(len(stripped), params, max_len=None))
         freqs.append(get_frequency_de(stripped))
     min_length = min(lengths)
     max_length = max(lengths)
 
-    # --- Tight frequency band matching ---
-    if params and 'freq_tolerance' in params:
-        tol_zipf = float(params['freq_tolerance'])
-        tol_natlog = tol_zipf * math.log(10)
-        mean_freq = sum(freqs) / len(freqs)
-        min_freq = mean_freq - tol_natlog
-        max_freq = mean_freq + tol_natlog
-    else:
-        # Legacy wide-range behavior
-        min_freq = min(min(freqs), 11)
-        max_freq = max(max(freqs), 3)
+    min_freq, max_freq = _freq_band(freqs, params)
 
     return min_length, max_length, min_freq, max_freq
 
@@ -1299,21 +1512,12 @@ def get_thresholds_en(words, params=None):
     freqs = []
     for word in words:
         stripped = strip_punct(word)
-        # Clamp word lengths to Boyce-style bins [3, 15] before range creation.
-        lengths.append(max(3, min(len(stripped), 15)))
+        lengths.append(effective_target_length(len(stripped), params))
         freqs.append(get_frequency_en(stripped))
     min_length = min(lengths)
     max_length = max(lengths)
 
-    if params and 'freq_tolerance' in params:
-        tol_zipf = float(params['freq_tolerance'])
-        tol_natlog = tol_zipf * math.log(10)
-        mean_freq = sum(freqs) / len(freqs)
-        min_freq = mean_freq - tol_natlog
-        max_freq = mean_freq + tol_natlog
-    else:
-        min_freq = min(min(freqs), 11)
-        max_freq = max(max(freqs), 3)
+    min_freq, max_freq = _freq_band(freqs, params)
 
     return min_length, max_length, min_freq, max_freq
 
@@ -1344,7 +1548,8 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
     Diacritics (tashkeel) are stripped for consistent matching.
     """
 
-    def __init__(self, params={}):
+    def __init__(self, params=None):
+        params = {} if params is None else params
         super().__init__(params)
         self.lang = "ar"
         self.nlp_sp = None
@@ -1374,10 +1579,7 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         exclusions_lower = set()
         if exclude is not None:
             import os
-            if not os.path.isabs(exclude) and not os.path.exists(exclude):
-                fallback = os.path.join(os.path.dirname(os.path.abspath(__file__)), exclude)
-                if os.path.exists(fallback):
-                    exclude = fallback
+            exclude = resolve_repo_path(exclude)
             try:
                 with open(exclude, "r", encoding="utf-8") as f:
                     exclusions_lower = set(
@@ -1391,14 +1593,9 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         # === PRELOAD AR POS CACHE ===
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
-        try:
-            cache_file = "models/arabic_code/arabic_pos_cache.json"
-            if os.path.exists(cache_file):
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cached_data = json.load(f)
-                    self.pos_cache.update(cached_data)
-        except Exception as e:
-            print(f"[CACHE] Error loading AR POS cache: {e}")
+        self.pos_cache.update(load_pos_lexicon(
+            "models/arabic_code/arabic_pos_lexicon.json",
+            "models/arabic_code/arabic_pos_cache.json", "ar"))
 
         include_words = None
         if include is not None and os.path.exists(include):
@@ -1499,7 +1696,7 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
             if w_clean not in self.pos_cache:
                 to_tag.append(w_clean)
         
-        to_tag = list(set(to_tag))
+        to_tag = ordered_unique(to_tag)
         if not to_tag: return
 
         print(f"[HYBRID Cache] Validating {len(to_tag)} Arabic inputs via Stanza-Farasa consensus...", flush=True)
@@ -1526,18 +1723,14 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
                     with open(cache_file, "r", encoding="utf-8") as f:
                         existing = json.load(f)
                 
-                # Append only
-                cache_updated = False
-                for k, v in self.pos_cache.items():
-                    if k not in existing and v != 'X':
-                        existing[k] = v
-                        cache_updated = True
-                        
-                if cache_updated:
-                    with open(cache_file, "w", encoding="utf-8") as f:
-                        json.dump(existing, f, ensure_ascii=False, indent=2)
+                # Read-only: merge anything the artifact already knows that this
+                # run has not tagged.  The write that used to be here made
+                # generation nondeterministic across runs (see the German note
+                # in batch_tag_inputs above).
+                for k, v in existing.items():
+                    self.pos_cache.setdefault(k, v)
             except Exception as e:
-                print(f"[HYBRID] Cache save failed: {e}")
+                print(f"[HYBRID] Cache read failed: {e}")
 
     def batch_tag_words(self, words, params=None, force_refresh=False):
         """Tag Arabic words using Farasa POSTagger."""
@@ -1547,7 +1740,7 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
         if not hasattr(self, 'pos_cache'):
             self.pos_cache = {}
 
-        unique_words = list(set(w for w in words if force_refresh or w not in self.pos_cache))
+        unique_words = ordered_unique(w for w in words if force_refresh or w not in self.pos_cache)
         if not unique_words:
             return
 
@@ -1561,14 +1754,10 @@ class wordfreq_Arabic_zipf_dict(wordfreq_dict):
             except Exception:
                 self.pos_cache[w] = 'X'
 
-        # Try to save to cache file just to keep running performance high
-        try:
-            cache_file = "models/arabic_code/arabic_pos_cache.json"
-            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-            with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump(self.pos_cache, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        # No disk write.  This one was a full json.dump OVERWRITE of the whole
+        # cache mid-run, X entries included -- so unlike the German path it did
+        # not even honour the documented append-only contract, and a crashed run
+        # could leave a truncated lexicon behind.
 
 
 def get_frequency_ar(word):
@@ -1585,21 +1774,12 @@ def get_thresholds_ar(words, params=None):
     freqs = []
     for word in words:
         stripped = strip_punct(word)
-        # Arabic words can be shorter; clamp to [2, 15].
-        lengths.append(max(2, min(len(stripped), 15)))
+        lengths.append(effective_target_length(len(stripped), params))
         freqs.append(get_frequency_ar(stripped))
     min_length = min(lengths)
     max_length = max(lengths)
 
-    if params and 'freq_tolerance' in params:
-        tol_zipf = float(params['freq_tolerance'])
-        tol_natlog = tol_zipf * math.log(10)
-        mean_freq = sum(freqs) / len(freqs)
-        min_freq = mean_freq - tol_natlog
-        max_freq = mean_freq + tol_natlog
-    else:
-        min_freq = min(min(freqs), 11)
-        max_freq = max(max(freqs), 3)
+    min_freq, max_freq = _freq_band(freqs, params)
 
     return min_length, max_length, min_freq, max_freq
 

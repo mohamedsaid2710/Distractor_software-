@@ -1,21 +1,66 @@
 import logging
 import importlib
+import math
+import random
 from set_params import set_params
 from limit_repeats import Repeatcounter
 from input import read_input
-from output import append_results
+from output import (append_results, init_report, append_report, report_path,
+                    summarize_report)
 import re
+
+
+DEFAULT_SEED = 12345
+
+
+def seed_everything(seed):
+    """Pin every RNG the pipeline can reach.
+
+    Selection is driven by random.shuffle/randint/sample/choice in
+    sentence_set.py and wordfreq_distractor.py, so without this two runs on
+    the same input produce different distractors and no before/after
+    comparison means anything.  numpy and torch are seeded too because the
+    scorers use them; both imports are optional so this stays usable in the
+    no-model unit tests.
+    """
+    random.seed(seed)
+    try:
+        import numpy as np
+        np.random.seed(seed % (2 ** 32))
+    except Exception:
+        pass
+    try:
+        import torch
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except Exception:
+        pass
 
 
 #these are the default values, but can be overridden by parameters file 
 def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
     """Takes an input file, and an output file location
     Does the whole distractor thing (according to specified parameters)
-    Writes in outformat"""
+    Writes in outformat.
+
+    Returns the list of item IDs that failed and are therefore missing from
+    the output file (empty on a fully successful run)."""
     if outformat not in ["delim", "ibex"]:
         logging.error("outfile format not understood")
         raise ValueError
     params = set_params(parameters)
+
+    # Reproducibility: pin the RNGs before anything draws from them.
+    # `seed: null` in the params file opts out and restores the old
+    # nondeterministic behaviour.
+    seed = params.get("seed", DEFAULT_SEED)
+    if seed is not None:
+        seed_everything(int(seed))
+        print(f">>> Random seed: {int(seed)}")
+    else:
+        print(">>> Random seed: unset (output will not be reproducible)")
+
     dict_class = getattr(importlib.import_module(params.get("dictionary_loc", "wordfreq_distractor")),
                          params.get("dictionary_class", "wordfreq_English_zipf_dict"))
     d = dict_class(params)
@@ -25,7 +70,8 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
     m = model_class(params)
     threshold_func = getattr(importlib.import_module(params.get("threshold_loc", "wordfreq_distractor")),
                              params.get("threshold_name", "get_thresholds_en"))
-    repeats=Repeatcounter(params.get("max_repeat", 0))
+    repeats = Repeatcounter(params.get("max_repeat", 0),
+                            exempt_max_len=params.get("repeat_exempt_max_len", 4))
     
     # PROACTIVE PARALLEL TAGGING: Scan all sentences and tag likely candidates in one batch
     if params.get("proactive_tagging", True):
@@ -36,8 +82,14 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
     with open(outfile, 'w', encoding='utf-8'):
         pass
 
+    write_report = bool(params.get("write_report", True))
+    report_lang = params.get("language", "en")
+    if write_report:
+        init_report(outfile)
+
     total = len(sents)
     executed_ids = []
+    failed_ids = []
     for i, (ss_id, ss) in enumerate(sents.items(), 1):
         # Get tag from the first sentence in the set (most sets only have one)
         tag = ss.sentences[0].tag if ss.sentences else "None"
@@ -51,6 +103,9 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
             
             # INCREMENTAL SAVE: Save this sentence set immediately
             append_results(outfile, ss, outformat)
+            if write_report:
+                append_report(outfile, ss, report_lang,
+                              len_tolerance=int(params.get('len_tolerance', 0)))
             executed_ids.append(ss_id)
             print(f"    ✅ Success: Item {ss_id} saved to {outfile}")
             
@@ -58,17 +113,39 @@ def run_stuff(infile, outfile, parameters="params_en.txt", outformat="delim"):
             print(f"    ❌ ERROR on Item {ss_id}: {str(e)}")
             import traceback
             traceback.print_exc()
-            continue
-        
-        ss.clean_up()
+            failed_ids.append(ss_id)
+        finally:
+            # `continue` used to jump over this, so every failed item leaked its
+            # full-vocabulary probability tensors for the rest of the run --
+            # exactly when memory pressure was already the likely cause.
+            ss.clean_up()
     
+    if write_report:
+        summarize_report(outfile)
     print(f"\n>>> GENERATION COMPLETE. Processed {len(executed_ids)}/{total} items.")
     print(f">>> Successfully saved IDs: {executed_ids}")
+    if failed_ids:
+        # A run that silently exits 0 having dropped items is indistinguishable
+        # from a clean one, which is not something to discover after analysis.
+        print(f">>> FAILED IDs ({len(failed_ids)}): {failed_ids}")
+        logging.error("%d of %d items failed and are missing from %s: %s",
+                      len(failed_ids), total, outfile, failed_ids)
+
+    return failed_ids
     
     
-    # FINAL CACHE SAVE: Persist all tagged words to disk
-    if hasattr(d, 'save_pos_cache'):
-        d.save_pos_cache()
+    # Generation never writes the POS lexicon.
+    #
+    # This used to call d.save_pos_cache() here.  That write was append-only --
+    # "if a word is already in the cache on disk, do NOT overwrite it" -- so a
+    # wrong tag, once written, was permanent: no amount of re-running could
+    # correct it, and the run that produced it fed the next run's candidate
+    # pools.  Measured on the shipped German cache, 14 of 17 proper nouns that
+    # leaked into a sample run were tagged ADV/VERB/NUM/ADJ there while the
+    # current tagger calls every one of them PROPN.
+    #
+    # The lexicon is now a read-only input, rebuilt deliberately by
+    # `python build_lexicon.py --lang de`.
 
 
 def pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=False):
@@ -106,10 +183,12 @@ def pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=Fals
                 # Get thresholds for this word
                 try:
                     min_l, max_l, min_f, max_f = threshold_func([word], params)
-                    target_freq = (min_f + max_f) / 2
-                    
+                    # threshold_func returns natural-log frequencies;
+                    # get_best_frequency_pool takes Zipf.
+                    target_zipf = ((min_f + max_f) / 2) / math.log(10)
+
                     # Fetch candidates of the exact required length
-                    pool = d.get_best_frequency_pool(len(word_clean), target_freq, n=100)
+                    pool = d.get_best_frequency_pool(len(word_clean), target_zipf, n=100)
                     for cand in pool:
                         all_candidates.add(cand.lower())
                 except Exception:
@@ -118,7 +197,8 @@ def pre_tag_all_distractors(sents, d, threshold_func, params, force_refresh=Fals
     if all_candidates:
         print(f"    [PRE-TAG] Found {len(all_candidates)} unique candidates to verify.")
         # batch_tag_words handles deduplication and cache-checking internally
-        d.batch_tag_words(list(all_candidates), params, force_refresh=force_refresh)
+        # sorted(), not list(): set iteration order is hash-randomised per process
+        d.batch_tag_words(sorted(all_candidates), params, force_refresh=force_refresh)
         print(">>> [PRE-TAG] Parallel tagging complete.\n", flush=True)
 
 

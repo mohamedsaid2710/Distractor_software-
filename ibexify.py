@@ -6,6 +6,8 @@ import argparse
 import csv
 import logging
 
+from output import ibex_line
+
 
 def ibexify(infile, outfile):
     """Convert semicolon-delimited distractor output into Ibex format."""
@@ -24,12 +26,7 @@ def ibexify(infile, outfile):
                     )
                     continue
                 tag, item_id, sentence, distractors = row[0], row[1], row[2], row[3]
-                # format: [["tag", 'id'], "Maze", {s:"<sentence>", a:"<distractor>"}],
-                s = sentence.replace('"', '\\"')
-                d = distractors.replace('"', '\\"')
-                out.write(
-                    f'[["{tag}", {repr(item_id)}], "Maze", {{s:"{s}", a:"{d}"}}], \n'
-                )
+                out.write(ibex_line(tag, item_id, sentence, distractors))
 
 
 def _build_parser():

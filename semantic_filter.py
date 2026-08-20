@@ -26,8 +26,15 @@ def _load_fasttext(lang='de'):
         import fasttext.util
         import fasttext
         
-        # Map language codes
-        ft_lang = {'de': 'de', 'en': 'en', 'ar': 'ar'}.get(lang, 'de')
+        # Map language codes. This used to fall back to 'de' for anything not
+        # exactly de/en/ar, so a new language silently got GERMAN vectors and a
+        # semantic-similarity filter that was measuring nothing meaningful.
+        # fastText publishes vectors for 157 languages; pass the code through
+        # and let the download fail loudly if there are none.
+        ft_lang = (lang or '').strip().lower()[:2]
+        if not ft_lang:
+            logging.warning("No language given to the semantic filter; skipping it.")
+            return None
         
         # Check for pre-downloaded model
         model_path = f'cc.{ft_lang}.300.bin'
@@ -92,14 +99,20 @@ def _load_gensim_fasttext(lang='de'):
 
 
 def get_word_vector(word, lang='de'):
-    """Get the embedding vector for a word."""
+    """Get the embedding vector for a word.
+
+    The word is NOT lowercased. The German vectors are cased -- "Weg" (way, a
+    noun) and "weg" (away, an adverb) have different vectors -- so lowercasing
+    threw away exactly the distinction German casing carries, and looked up a
+    form that may not be the one in the model.
+    """
     model = _load_fasttext(lang)
     if model is None:
         return None
-    
+
     try:
         # fastText can handle OOV words via subword embeddings
-        return model.get_word_vector(word.lower())
+        return model.get_word_vector(word)
     except Exception:
         return None
 
@@ -192,7 +205,9 @@ def batch_filter_semantic(target, candidates, threshold=0.35, lang='de'):
         return candidates
     
     try:
-        target_vec = model.get_word_vector(target.lower())
+        # Not lowercased: German fastText vectors are cased, and casing is
+        # exactly the distinction German nouns carry ("Weg" vs "weg").
+        target_vec = model.get_word_vector(target)
     except Exception:
         return candidates
     
@@ -205,7 +220,7 @@ def batch_filter_semantic(target, candidates, threshold=0.35, lang='de'):
     for i, cand in enumerate(candidates):
         try:
             text = cand.text if hasattr(cand, 'text') else str(cand)
-            vec = model.get_word_vector(text.lower())
+            vec = model.get_word_vector(text)
             if vec is not None:
                 cand_vecs.append(vec)
                 valid_indices.append(i)

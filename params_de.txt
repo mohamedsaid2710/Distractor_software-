@@ -5,10 +5,40 @@
 # --- Core Scorer & Generation Settings ---
 min_delta: 8
 min_abs: 15
+min_abs_short: 15       # Absolute surprisal floor for targets <= short_word_max_len.
+                        # A flat min_abs is unreachable for function words; 15 is the
+                        # value German has used successfully (0 threshold misses).
 num_to_test: 2000
+max_freq_widen: 9       # Max widening steps if the tight frequency band starves.
+min_pool_size: 60       # THE DIFFICULTY DIAL. Retrieval stops relaxing once the pool
+                        # reaches this size, so it trades frequency matching against
+                        # implausibility: a bigger pool can only be filled by leaving
+                        # the frequency band, which buys higher-surprisal candidates.
+                        # Measured on the shipped samples (in-band / met-threshold):
+                        #    30 -> EN 34/47, 38/47   DE 41/45, 31/45
+                        #    60 -> EN 32/47, 40/47   DE 31/45, 38/45
+                        #   120 -> EN 31/47, 40/47   DE 30/45, 40/45
+                        #   250 -> EN 30/47, 39/47   DE 28/45, 42/45
+                        # Lower it when frequency matching matters most; raise it when
+                        # maximal implausibility does. English is flat between 60 and
+                        # 120; German is steep throughout.
+freq_widen_step: 0.1    # Zipf units added to each side of the band per step, so the
+                        # worst case above is +/- 0.9 Zipf beyond freq_tolerance.
+pool_size_factor: 2.0   # Candidates gathered = num_to_test x this. Keep it modest: a
+                        # large pool can only be filled by widening the frequency
+                        # band, and selection ranks within the pool either way.
 force_max_surprisal: True
 match_surprisal: False
 absolute_threshold_only: False
+
+# --- Reproducibility ---
+# Pins every RNG used during selection, so the same input + the same seed
+# gives byte-identical output. Set to `null` for the old random behaviour.
+seed: 12345
+write_report: True      # Also write <output>.report.csv: per position, the achieved
+                        # surprisal, its threshold, the frequency band, the pool size
+                        # and which relaxation (if any) was used. The delim/ibex files
+                        # are unchanged.
 
 # --- Linguistic & POS Matching ---
 language: "de"
@@ -31,6 +61,9 @@ semantic_filter: True
 semantic_threshold: 0.35
 
 # --- Model & Hardware Settings ---
+context_window: null    # Left-context tokens used when scoring, for BOTH targets
+                        # and candidates. null = the model's full window.
+                        # Lower it (e.g. 64) only to speed up very long items.
 hf_model_name: "benjamin/gerpt2"
 device: "cuda"          # "cuda" / "cpu"; omit the line entirely to auto-detect.
                         # An unavailable device warns and falls back to CPU rather than crashing.
@@ -50,10 +83,19 @@ chunk_size: 1024
 exclude_words: "exclude_de.txt"
 
 # --- Position & Repeat Settings ---
-early_position_boost: 20
+# NOTE (2026-08-20): this boost never actually applied until now -- the code
+# parsed the label ID with int(), and make_labels rewrites every label to
+# "1_L5" form before the test runs, so the ValueError was swallowed. The value
+# below was therefore never validated against real surprisals. It is set to 0
+# until measured numbers show what is reachable; the previous value was 20.
+# With min_abs 15 it would raise the absolute floor to 35 (40 with short_word_boost) bits.
+early_position_boost: 0
 early_position_count: 5
 first_token_placeholder: True
 max_repeat: 1
+repeat_exempt_max_len: 4  # Words this long or shorter are exempt from max_repeat.
+                          # Set to 0 to enforce max_repeat at every length; short
+                          # targets may then run out of admissible candidates.
 allow_banned_fallback: False
 
 # --- Internal Architecture (Defaults) ---

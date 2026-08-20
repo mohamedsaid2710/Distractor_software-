@@ -62,6 +62,9 @@ class HFCausalScorer(lang_model):
         self._set_batch_size(params)
 
         self.tokenizer = self._load_tokenizer(model_name)
+        # Byte-level BPE puts the word-boundary space inside the token; see
+        # encode_word().
+        self._prefix_space = self._detect_prefix_space()
         self.model = self._load_model(model_name).to(self.device)
         self.model.eval()
 
@@ -70,6 +73,15 @@ class HFCausalScorer(lang_model):
             "n_positions",
             getattr(self.model.config, "max_position_embeddings", 1024),
         )
+
+        # Optional cap on how much left context is used, in tokens.  Targets
+        # used to get up to `max_len` while candidates were hard-capped at 64,
+        # so the two numbers compared in the threshold arithmetic
+        # (`max(min_abs, target_surprisal + min_delta)`) came from different
+        # amounts of context -- an error that is zero for the first 64 tokens
+        # and grows after, i.e. correlated with position.  None = full context.
+        cw = params.get("context_window", None)
+        self.context_window = None if cw in (None, "", 0) else int(cw)
 
         # GPT-2 style models have no pad token by default; align it to eos for stable batching.
         if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
@@ -221,6 +233,59 @@ class HFCausalScorer(lang_model):
                 % (self.LANG_NAME, model_name, self.DOWNLOAD_FLAG)
             ) from e
 
+    # Probes in several scripts: a byte-level BPE tokenizer encodes " x"
+    # differently from "x", a WordPiece/SentencePiece one may not.
+    _SPACE_PROBES = ("the", "und", "\u0641\u064a", "test")
+
+    def _detect_prefix_space(self):
+        """True when this tokenizer marks word boundaries with a leading space."""
+        try:
+            return any(
+                self.tokenizer.encode(" " + p, add_special_tokens=False)
+                != self.tokenizer.encode(p, add_special_tokens=False)
+                for p in self._SPACE_PROBES
+            )
+        except Exception:
+            return False
+
+    def encode_word(self, word, at_start=False):
+        """Encode one word *as it appears in running text*.
+
+        GPT-2, GerPT2 and AraGPT2 all use byte-level BPE, where the space
+        before a word is part of the word's own token (the "\u0120" prefix).
+        Encoding a bare word therefore yields the segmentation for a word
+        glued to the previous one:
+
+            encode("kitchen")  -> [15813, 6607]   "kit" + "chen"
+            encode(" kitchen") -> [9592]          " kitchen"
+
+        Every encode site in this file used the bare form, and `update` simply
+        concatenated the results, so an accumulated context for "The cat sat on
+        the mat" decoded to "Thecatsatonthemat".  Every surprisal in the
+        pipeline was computed on an off-distribution context, and candidates
+        were segmented differently from how they would appear in the sentence.
+        That distorts ranking, not just magnitude -- which matters because
+        `min_abs` is an absolute threshold in bits.
+
+        `at_start=True` for a genuinely sentence-initial word, which has no
+        preceding space.
+        """
+        if getattr(self, "_prefix_space", False) and not at_start:
+            return self.tokenizer.encode(" " + word, add_special_tokens=False)
+        return self.tokenizer.encode(word, add_special_tokens=False)
+
+    def context_limit(self, reserve=1):
+        """How many left-context tokens to keep, given `reserve` tokens for the word.
+
+        Honours both the model's position limit and the optional
+        `context_window` parameter, and is used by every scoring path so they
+        all see the same amount of context.
+        """
+        limit = max(0, self.max_len - int(reserve))
+        if self.context_window is not None:
+            limit = min(limit, self.context_window)
+        return limit
+
     def tokenize(self, word):
         return self.tokenizer.tokenize(word)
 
@@ -234,7 +299,7 @@ class HFCausalScorer(lang_model):
         The returned surprisal tensor covers the whole vocabulary and is what
         `get_surprisal` indexes into.
         """
-        parts = self.tokenizer.encode(word, add_special_tokens=False)
+        parts = self.encode_word(word, at_start=not hidden)
         if not isinstance(hidden, list):
             try:
                 hidden = list(hidden)
@@ -242,7 +307,7 @@ class HFCausalScorer(lang_model):
                 hidden = []
         new_hidden = hidden + parts
 
-        allowed_ctx = max(0, self.max_len - 1)
+        allowed_ctx = self.context_limit(1)
         ctx = new_hidden[-allowed_ctx:] if len(new_hidden) > allowed_ctx else new_hidden
 
         input_ids = torch.tensor([ctx], device=self.device)
@@ -260,7 +325,7 @@ class HFCausalScorer(lang_model):
         Only the FIRST subtoken is used here (fast path); the exact multi-token
         score lives in `get_surprisal_from_hidden` / the batch scorer.
         """
-        parts = self.tokenizer.encode(word, add_special_tokens=False)
+        parts = self.encode_word(word)
         if len(parts) == 0:
             return 0.0
         token = parts[0]
@@ -272,12 +337,13 @@ class HFCausalScorer(lang_model):
 
     def get_surprisal_from_hidden(self, hidden, word):
         """Exact surprisal of `word` after context `hidden` (sums ALL subtokens)."""
-        parts = self.tokenizer.encode(word, add_special_tokens=False)
+        ctx_probe = list(hidden) if isinstance(hidden, (list, tuple)) else list(hidden)
+        parts = self.encode_word(word, at_start=not ctx_probe)
         if len(parts) == 0:
             return 0.0
 
         ctx = list(hidden) if isinstance(hidden, (list, tuple)) else list(hidden)
-        allowed_ctx = max(0, self.max_len - len(parts))
+        allowed_ctx = self.context_limit(len(parts))
         if len(ctx) > allowed_ctx:
             ctx = ctx[-allowed_ctx:]
 
@@ -323,23 +389,23 @@ class HFCausalScorer(lang_model):
         all_results = []
         pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
 
-        # Focused context window: only the last 64 context tokens are used, which
-        # keeps long sentences fast without materially changing local surprisal.
-        MAX_CONTEXT = 64
-        allowed_ctx = min(ctx_len, MAX_CONTEXT)
-        active_ctx = ctx_ids[-allowed_ctx:] if ctx_len > 0 else []
-        n_ctx = len(active_ctx)
-
         for i in range(0, len(words), batch_size):
             chunk = words[i:i + batch_size]
+            encoded = []
+            for w in chunk:
+                parts = self.encode_word(w, at_start=(ctx_len == 0))
+                encoded.append(parts if parts else [pad_id])
+
+            # Same context window as the single-word path.  This used to be a
+            # hardcoded MAX_CONTEXT = 64 while targets got up to max_len.
+            allowed_ctx = min(ctx_len, self.context_limit(max(len(p) for p in encoded)))
+            active_ctx = ctx_ids[-allowed_ctx:] if allowed_ctx > 0 else []
+            n_ctx = len(active_ctx)
+
             batch_ids = []
             batch_masks = []
             word_lengths = []
-
-            for w in chunk:
-                parts = self.tokenizer.encode(w, add_special_tokens=False)
-                if not parts:
-                    parts = [pad_id]
+            for parts in encoded:
                 word_lengths.append(len(parts))
                 full_seq = active_ctx + parts
                 batch_ids.append(full_seq)

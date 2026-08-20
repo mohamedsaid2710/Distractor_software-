@@ -19,6 +19,25 @@ import sys
 import wordfreq
 
 
+
+# Words that stay lowercase in German regardless of position.  This used to be
+# built inside the `else` branch of the casing check while the lookup that
+# needed it sat one indent level out, so running against params_de.txt --
+# which sets `match_casing_only: True` -- raised NameError and no German output
+# could be assessed at all.
+GERMAN_FUNCTION_WORDS = {
+    'ins', 'im', 'am', 'ans', 'zum', 'zur', 'vom', 'beim', 'durchs', 'fürs',
+    'ums', 'aufs', 'übers', 'unters', 'hinters', 'vors',
+    'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einem', 'eines',
+    'einer', 'einen',
+    'mein', 'dein', 'sein', 'ihr', 'unser', 'euer',
+    'ab', 'an', 'auf', 'aus', 'bei', 'bis', 'durch', 'für', 'gegen',
+    'hinter', 'in', 'mit', 'nach', 'neben', 'ohne', 'über', 'um',
+    'unter', 'von', 'vor', 'zu', 'zwischen',
+    'pro', 'per', 'ach', 'oh',
+}
+
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = HERE if os.path.exists(os.path.join(HERE, "input.py")) else os.path.dirname(HERE)
 if ROOT not in sys.path:
@@ -186,18 +205,15 @@ def main():
         sentence_obj = next((s for s in sentence_set.sentences if s.tag == tag), sentence_set.sentences[0])
 
         dtoks = distractor_sentence.split()
-        expected_first_len = len(strip_punct(sentence_obj.words[0]))
         if first_token_placeholder:
+            # The placeholder is a fixed x-x-x, deliberately NOT length-matched:
+            # position 0 has no prior context and therefore no real competition,
+            # and a constant string is the standard Maze convention. This check
+            # used to demand a length match, which the generator no longer makes.
             if not dtoks or (not is_x_placeholder(dtoks[0])):
                 placeholder_errors += 1
                 if len(examples) < args.max_examples:
                     examples.append((item_id, 0, "first-token-not-placeholder", dtoks[0] if dtoks else ""))
-            else:
-                got_len = x_placeholder_len(dtoks[0])
-                if got_len != expected_first_len:
-                    placeholder_errors += 1
-                    if len(examples) < args.max_examples:
-                        examples.append((item_id, 0, f"first-placeholder-len-mismatch:{got_len}!={expected_first_len}", dtoks[0]))
         else:
             if not dtoks:
                 placeholder_errors += 1
@@ -257,23 +273,8 @@ def main():
                             casing_errors += 1
                             if len(examples) < args.max_examples:
                                 examples.append((item_id, i, f"casing-mirror-fail:tgt={tgt_is_cap},dist={is_cap}", dtoks[i]))
-                    else:
-                        # German function words whitelist
-                        FUNCTION_WORDS = {
-                        'ins', 'im', 'am', 'ans', 'zum', 'zur', 'vom', 'beim', 'durchs', 'fürs',
-                        'ums', 'aufs', 'übers', 'unters', 'hinters', 'vors',
-                        'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einem', 'eines', 'einer', 'einen',
-                        'mein', 'dein', 'sein', 'ihr', 'unser', 'euer',
-                        'ab', 'an', 'auf', 'aus', 'bei', 'bis', 'durch', 'für', 'gegen',
-                        'hinter', 'in', 'mit', 'nach', 'neben', 'ohne', 'über', 'um',
-                        'unter', 'von', 'vor', 'zu', 'zwischen',
-                        'pro', 'per', 'ach', 'oh'
-                    }
-                    
-                    is_cap = dtoks[i][0].isupper()
-                    
-                    # Function words must be lowercase
-                    if clean_w.lower() in FUNCTION_WORDS:
+                    elif clean_w.lower() in GERMAN_FUNCTION_WORDS:
+                        # Function words must be lowercase
                         if is_cap:
                             casing_errors += 1
                             if len(examples) < args.max_examples:
@@ -309,7 +310,9 @@ def main():
             # 3. Surprisal checks
             try:
                 delta, dist_s = score_distractor(model, sentence_obj, i, dtoks[i])
-                if delta <= min_delta:
+                # The generator accepts a candidate at `delta >= min_delta`, so
+                # `<=` here flagged the exact boundary as a failure.
+                if delta < min_delta:
                     plausible_errors += 1
                     if len(examples) < args.max_examples:
                         examples.append((item_id, i, f"low-delta:{delta:.2f}", tok))
