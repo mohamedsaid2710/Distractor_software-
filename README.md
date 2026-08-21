@@ -37,7 +37,7 @@ cd Distractor_software-
 
 # Install dependencies using uv (Fast & Reliable)
 uv sync                    # core + English
-uv sync --all-extras       # adds German, Arabic, the semantic filter and the plot scripts
+uv sync --all-extras       # adds German, Arabic and the semantic filter
 source .venv/bin/activate  # (Optional) Activate to drop the `uv run` prefix below
 ```
 
@@ -48,7 +48,6 @@ Language support is optional so an English-only user does not install every tagg
 | `[de]` | HanTa, Stanza | |
 | `[ar]` | Farasa, Stanza | **also needs a Java runtime** on the machine |
 | `[semantic]` | fastText | vectors are ~7 GB **per language** |
-| `[plots]` | matplotlib | for `scripts/plot_*.py` |
 | `[assess]` | German spaCy model | for `assess_output.py`'s German POS checks |
 
 pip users: `pip install .` for the core, `pip install '.[all]'` for everything.

@@ -24,7 +24,7 @@ import logging
 import json
 import bisect
 from collections import defaultdict
-# NOTE: HanTa, stanza, farasapy, fasttext and matplotlib are OPTIONAL -- they are
+# NOTE: HanTa, stanza, farasapy and fasttext are OPTIONAL -- they are
 # per-language extras, so importing any of them at module level makes a
 # core/English-only install unimportable. HanTa is imported inside
 # wordfreq_German_zipf_dict.__init__, which is the only place it is used.

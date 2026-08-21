@@ -35,13 +35,11 @@ ar = ["stanza>=1.10.0", "farasapy>=0.0.14"]
 # fastText semantic dissimilarity filter. The vectors are ~7 GB PER LANGUAGE and
 # are downloaded on first use; see download_model.py --fasttext.
 semantic = ["fasttext>=0.9.2"]
-# scripts/plot_*.py
-plots = ["matplotlib>=3.7"]
 # assess_output.py checks German POS with these; it degrades silently without them.
 assess = [
     "de_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/de_core_news_sm-3.8.0/de_core_news_sm-3.8.0-py3-none-any.whl",
 ]
-all = ["maze-automate[de,ar,semantic,plots,assess]"]
+all = ["maze-automate[de,ar,semantic,assess]"]
 
 [dependency-groups]
 dev = [
