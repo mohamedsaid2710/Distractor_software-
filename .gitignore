@@ -32,7 +32,7 @@ test_output*.txt
 plots/
 # AI Assistant Instructions
 docs/copilot-instructions.md
-CLAUDE.md
+plan/
 # Temporary/Working files
 requirements_working.txt
 
