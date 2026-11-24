@@ -80,6 +80,17 @@ def load_pos_lexicon(artifact_path, lang_label):
     return dict(tags)
 
 
+def lexicon_source(artifact_path):
+    """Short description of a lexicon's source for the start-up banner."""
+    try:
+        with open(artifact_path, "r", encoding="utf-8") as f:
+            meta = json.load(f).get("_meta", {})
+    except Exception:
+        return "no lexicon found"
+    name = meta.get("source") or meta.get("tagger") or "unknown source"
+    return name.split(" (")[0] + " lexicon"
+
+
 def lexicon_status(artifact_path):
     """'norms', 'tagger-built', 'missing' or 'unreadable' for a POS lexicon file.
 

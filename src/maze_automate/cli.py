@@ -39,7 +39,7 @@ def fail(code, what, message):
     sys.exit(code)
 
 
-def print_splash(lang, model, nlp):
+def print_splash(lang, model, tagger, lexicon):
     banner = r"""
  ____  _     _                  _                  
 |  _ \(_)___| |_ _ __ __ _  ___| |_ ___  _ __ ___  
@@ -51,9 +51,10 @@ def print_splash(lang, model, nlp):
     splash = f"""\033[96m{banner}
 \033[0m                                                                 
 =================================================================
- \033[93m» Target Language \033[0m: {lang}
- \033[93m» Model chosen \033[0m: {model}
- \033[93m» Distractor NLP  \033[0m: {nlp}
+ \033[93m» Language        \033[0m: {lang}
+ \033[93m» Language model  \033[0m: {model}
+ \033[93m» Sentence tagger \033[0m: {tagger}
+ \033[93m» Candidate POS   \033[0m: {lexicon}
 =================================================================
 \033[92m[ System Online. Initializing pipeline... ]\033[0m
 """
@@ -110,12 +111,17 @@ def main():
 
     # hf_model_name is the key that actually loads the model
     # (scoring/hf_scorer.py); without it the scorer class's DEFAULT_MODEL is used.
-    model_str = params.get("hf_model_name", "(default of model_class)")
-    if lang_str == "German": nlp_str = "Stanza"
-    elif lang_str == "Arabic": nlp_str = "Stanza"
-    else: nlp_str = "SpaCy"
+    from maze_automate.pipeline import LANGUAGE_WIRING
+    import importlib
+    loc, cls = LANGUAGE_WIRING[params["language"]]["model"]
+    model_str = params.get("hf_model_name") or getattr(
+        getattr(importlib.import_module(loc), cls), "DEFAULT_MODEL", "?")
+    tagger_str = "spaCy" if params["language"] == "en" else "Stanza"
+    from maze_automate.candidates import lexicon_source
+    from maze_automate.utils import lexicon_path
+    lexicon_str = lexicon_source(lexicon_path(params["language"]))
 
-    print_splash(lang_str, model_str, nlp_str)
+    print_splash(lang_str, model_str, tagger_str, lexicon_str)
 
     try:
         failed_ids = run_stuff(input_path, output_path,

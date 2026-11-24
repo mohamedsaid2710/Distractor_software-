@@ -41,10 +41,6 @@ try:
 except ImportError:
     _wordfreq_mod = None
 
-print("\n" + "="*60)
-print("DISTRACTOR MODULE LOADED")
-print("="*60 + "\n")
-
 from maze_automate.candidates import (strip_arabic_diacritics,
                                  effective_target_length, MAX_TARGET_LENGTH)
 
