@@ -55,6 +55,15 @@ Add any distractor you do not want to the exclude list.
 The [Wiki](https://github.com/mohamedsaid2710/Distractor_software-/wiki) explains
 every setting, the selection procedure, the models and lexicons, and troubleshooting.
 
+> **Tune the settings for your stimuli.** The params files in `config/` are a
+> starting point, not a fit for every experiment: check the quality report and
+> adjust the thresholds, frequency band, POS matching and proper-noun exclusion
+> (`exclude_propn_candidates`) to your materials. See the
+> [Config Reference](https://github.com/mohamedsaid2710/Distractor_software-/wiki/Config-Reference).
+
+> **Actively maintained.** The software is updated regularly. Before generating
+> stimuli, make sure you are on the latest version (`git pull`, then `uv sync`).
+
 > **Caution:** the language models are trained on web text, so a distractor can
 > occasionally be offensive. Always review the output before using it.
 
