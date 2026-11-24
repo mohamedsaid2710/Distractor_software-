@@ -8,7 +8,7 @@ import textwrap
 
 import pytest
 
-from input import detect_delimiter, tokenize, read_input
+from maze_automate.input import detect_delimiter, tokenize, read_input
 
 
 # --- C1: delimiter -------------------------------------------------------
@@ -105,3 +105,21 @@ def test_distractor_slot_count_matches_the_sentence(tmp_path):
     sentence = read_input(str(f))['1'].sentences[0]
     assert sentence.words == ["It", "cost", "1,000", "dollars."]
     assert len(sentence.words) == 4
+
+
+# --- header detection ----------------------------------------------------
+
+def test_first_item_with_text_id_is_not_dropped_as_a_header(tmp_path):
+    """csv.Sniffer guessed 'header' here (first tag differs in length from the
+    rest) and the old code then dropped p1 because its id is not a number."""
+    lines = ["practice;p1;Der Hund schläft heute."]
+    lines += [f"exp;e{i};Die Katze Nummer {i} frisst gern Fisch." for i in range(1, 7)]
+    f = tmp_path / "in.txt"
+    f.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert list(read_input(str(f)))[0] == "p1"
+
+
+def test_named_header_row_is_skipped(tmp_path):
+    f = tmp_path / "in.txt"
+    f.write_text("Tag;ID;Sentence;Labels\nexp;e1;Der Hund schläft.\n", encoding="utf-8")
+    assert list(read_input(str(f))) == ["e1"]

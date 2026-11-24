@@ -22,29 +22,29 @@ jobs:
         with:
           python-version: "3.12"
 
+      # --locked: fail if uv.lock no longer matches pyproject.toml, instead of
+      # quietly re-resolving -- the lockfile is what makes runs reproducible.
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --locked
 
-      - name: Run repository smoke test
-        run: uv run bash ./scripts/smoke_test.sh
-
-      # The unit tests need no model weights and no network, so they belong in
-      # CI. They are what catches a regression in the frequency band, the
-      # input delimiter, German casing, the Farasa tag parser or the report.
-      - name: Run unit tests
+      # No model weights and no network needed: the end-to-end test runs the
+      # whole pipeline in all three languages with a stand-in language model.
+      - name: Run tests
         run: uv run python -m pytest -q
 
-      # A wheel that contains no importable code is exactly the bug that made
-      # `pip install .` useless, and it is invisible unless something looks.
-      - name: Verify the built wheel actually contains the code
+      # The installed package must carry its code AND the POS lexicons; a
+      # wheel without them installs but cannot run.
+      - name: Verify the built wheel contains the code and the lexicons
         run: |
           uv build --wheel -o dist
           uv run python - <<'PY'
           import glob, zipfile, sys
-          wheel = glob.glob("dist/*.whl")[0]
-          names = [n for n in zipfile.ZipFile(wheel).namelist() if n.endswith(".py")]
-          packages = [n for n in names if n.startswith("models/")]
-          print(f"{len(names)} .py files, {len(packages)} under models/")
-          if len(names) < 15 or len(packages) < 4:
-              sys.exit("wheel is missing code -- check [tool.setuptools] in pyproject.toml")
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          need = ["maze_automate/pipeline.py", "maze_automate/scoring/hf_scorer.py",
+                  "maze_automate/lexicons/en.json", "maze_automate/lexicons/de.json",
+                  "maze_automate/lexicons/ar.json"]
+          missing = [n for n in need if n not in names]
+          print(f"{len(names)} files in the wheel")
+          if missing:
+              sys.exit(f"wheel is missing {missing} -- check [tool.setuptools] in pyproject.toml")
           PY

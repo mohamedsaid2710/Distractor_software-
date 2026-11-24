@@ -1,7 +1,7 @@
 {
   "title": "Distractor_software: Automated maze-task distractor generation for English, German, and Arabic",
   "upload_type": "software",
-  "description": "<p>Distractor_software generates maze-task distractor stimuli for psycholinguistic experiments in English, German, and Arabic. Built on Transformer-based language models (GPT-2), the pipeline selects real-word distractors that are contextually implausible while matching the target word in length and frequency range.</p><p>The tool was developed to produce the stimuli for the Master's thesis <em>Dissecting the Maze Task with Eye-Tracking</em> (University of Stuttgart) and subsequently generalized and released as open-source software. It adapts the original <a href=\"https://github.com/vboyce/Maze\">Maze repository</a> by Victoria Boyce, adding distinct Transformer models, language-specific NLP tooling, GPU batch processing, semantic embedding filters, and an interactive configuration workflow.</p>",
+  "description": "<p>Distractor_software generates maze-task distractor stimuli for psycholinguistic experiments in English, German, and Arabic. For every word of a sentence it selects a real word of similar length and frequency that a Transformer language model (GPT-2) finds highly implausible in context.</p><p>Candidates are filtered by part of speech using lexicons built from published lexical norms (SUBTLEX-US, dlexDB, CAMeL Tools), optionally by semantic dissimilarity (fastText), and every run writes a per-position quality report.</p><p>The tool was developed to produce the stimuli for the Master's thesis <em>Dissecting the Maze Task with Eye-Tracking</em> (University of Stuttgart) and adapts the original <a href=\"https://github.com/vboyce/Maze\">Maze repository</a> by Victoria Boyce.</p><p><strong>Licensing:</strong> the code is MIT. The bundled part-of-speech lexicons are not covered by the MIT licence; each follows its source's terms (English, SUBTLEX-US: non-commercial research use; German, dlexDB: CC BY-SA 4.0; Arabic, CAMeL Tools data: GPL-2.0). See src/maze_automate/lexicons/LICENSE.md.</p>",
   "creators": [
     {
       "name": "Said, Mohammed",
@@ -30,5 +30,6 @@
       "relation": "isSupplementTo",
       "scheme": "url"
     }
-  ]
+  ],
+  "version": "2.0.0"
 }

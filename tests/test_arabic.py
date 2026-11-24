@@ -1,75 +1,9 @@
-"""Arabic: Farasa tag parsing and diacritic handling.
-
-Every Arabic word came back 'X' from the tagger: farasapy wraps its output in
-S/S ... E/E sentinels and separates tokens with spaces, while the parser split
-on '+' alone -- so it read the trailing 'E' as the tag.  'X' enters no
-candidate pool, so Arabic ran with no POS information and
-`exclude_propn_candidates` did nothing at all.
-"""
-import pytest
-
-from utils import strip_punct, copy_punct
-from wordfreq_distractor import (_farasa_tag_to_upos, _farasa_morpheme_tags,
-                                 strip_arabic_diacritics)
+"""Arabic: diacritic and punctuation handling, and the clitic filter."""
+import json
 
 
-# --- Farasa parsing ------------------------------------------------------
-
-@pytest.mark.parametrize("raw,expected", [
-    ("S/S كتاب/NOUN-MS E/E", "NOUN"),          # feature suffix stripped
-    ("S/S في/PREP E/E", "ADP"),
-    ("S/S يكتب/V E/E", "VERB"),
-    ("S/S مدرس +ة/NOUN+NSUFF-FS E/E", "NOUN"),  # NSUFF is a clitic
-    ("S-و/CONJ+ال/DET+قمر/NOUN", "NOUN"),        # the older sentinel-less format
-    ("S/S التي/PART E/E", "PART"),
-])
-def test_lexical_head_is_found(raw, expected):
-    assert _farasa_tag_to_upos(raw) == expected
-
-
-@pytest.mark.parametrize("raw,expected", [
-    ("S/S ال+ كتاب/DET+NOUN-MS E/E", ["DET", "NOUN"]),
-    ("S/S ال+ مدرس +ة/DET+NOUN+NSUFF-FS E/E", ["DET", "NOUN", "NSUFF"]),
-    ("S/S كتاب/NOUN-MS E/E", ["NOUN"]),
-])
-def test_forms_and_tags_are_on_opposite_sides_of_one_slash(raw, expected):
-    """Farasa writes form1+form2/tag1+tag2, not form1/tag1+form2/tag2.
-
-    Pairing each form with its neighbour's tag labelled every definite noun
-    'DET' -- 12,289 of 43,567 words in the Arabic lexicon.
-    """
-    assert _farasa_morpheme_tags(raw) == expected
-
-
-@pytest.mark.parametrize("raw", [
-    "S/S ال+ كتاب/DET+NOUN-MS E/E",
-    "S/S ال+ مدرس +ة/DET+NOUN+NSUFF-FS E/E",
-])
-def test_definite_article_does_not_hide_the_noun(raw):
-    assert _farasa_tag_to_upos(raw) == "NOUN"
-
-
-def test_possessive_suffix_does_not_make_a_noun_a_pronoun():
-    """Arabic writes possessives as suffixes; the head is still the noun.
-
-    The shipped lexicon holds 7,166 PRON entries because of this.
-    """
-    assert _farasa_tag_to_upos("S/S كتاب +ه/NOUN+PRON E/E") == "NOUN"
-
-
-def test_standalone_pronoun_is_still_a_pronoun():
-    """Skipping clitics must not erase a word that IS a function word."""
-    assert _farasa_tag_to_upos("S/S هو/PRON E/E") == "PRON"
-
-
-def test_unparseable_input_is_X_not_a_crash():
-    assert _farasa_tag_to_upos("") == "X"
-    assert _farasa_tag_to_upos("S/S E/E") == "X"
-    assert _farasa_tag_to_upos("nonsense") == "X"
-
-
-def test_unknown_tag_becomes_X():
-    assert _farasa_tag_to_upos("S/S x/WEIRDTAG E/E") == "X"
+from maze_automate.utils import strip_punct, copy_punct, lexicon_path
+from maze_automate.candidates import strip_arabic_diacritics, _load_clitic_words
 
 
 # --- diacritics (C4) -----------------------------------------------------
@@ -97,3 +31,37 @@ def test_real_punctuation_around_a_vocalized_word_still_moves():
 
 def test_diacritic_stripping_is_still_available_for_lookups():
     assert strip_arabic_diacritics(VOCALIZED) == UNVOCALIZED
+
+
+# --- clitic filter -------------------------------------------------------
+
+def test_clitic_words_are_read_from_the_lexicon(tmp_path):
+    p = tmp_path / "lex.json"
+    p.write_text(json.dumps({"tags": {}, "clitics": ["والكتاب", "بالبيت"]}),
+                 encoding="utf-8")
+    assert _load_clitic_words(str(p)) == {"والكتاب", "بالبيت"}
+
+
+def test_shipped_arabic_lexicon_marks_clitic_forms():
+    clitics = _load_clitic_words(lexicon_path("ar"))
+    assert {"والكتاب", "بالبيت", "للطالب", "وقال"} <= clitics
+    for stem in ("وزير", "لكن", "كتاب"):       # start with و/ل/ك but are stems
+        assert stem not in clitics
+
+
+# --- common web misspellings (lexical_norms.arabic_misspellings) ---------
+def test_arabic_misspellings_found_by_frequency():
+    from maze_automate.lexicons.norms import arabic_misspellings
+    freq = {"فتاه": 1e-6, "فتاة": 5e-5, "هذة": 1e-6, "هذه": 1e-3,
+            "بى": 1e-6, "بي": 1e-4, "راية": 2e-5, "رؤية": 2e-4,
+            "كتاب": 1e-4}.get
+    f = lambda w: freq(w) or 0.0
+    out = arabic_misspellings(["فتاه", "هذة", "بى", "راية", "كتاب"], freq=f)
+    assert out == {"فتاه": "فتاة", "هذة": "هذه", "بى": "بي"}
+    # راية (flag) is a real word: ا is never swapped for ؤ.
+
+
+def test_madda_words_are_not_misspellings():
+    from maze_automate.lexicons.norms import arabic_misspellings
+    freq = {"آثر": 1e-5, "أثر": 1e-3}.get
+    assert arabic_misspellings(["آثر"], freq=lambda w: freq(w) or 0.0) == {}

@@ -3,11 +3,11 @@
 `early_position_boost` never fired in any language: the test parsed the label
 ID with int(), but make_labels rewrites every ID to "1_L5" form before
 choose_distractor runs, so int() raised ValueError into a bare except.
-`params_de.txt` has carried `early_position_boost: 20` the whole time.
+`config/params_de.txt` has carried `early_position_boost: 20` the whole time.
 """
 import pytest
 
-from sentence_set import Label
+from maze_automate.selection import Label, surprisal_thresholds
 
 
 def _label_with(positions, words=None, surprisals=None):
@@ -20,22 +20,10 @@ def _label_with(positions, words=None, surprisals=None):
 
 
 def _targets(lab, params):
-    """Run only the threshold arithmetic, as choose_distractor does."""
-    early_boost = float(params.get('early_position_boost', 0))
-    early_count = int(params.get('early_position_count', 2))
-    is_early = any(p is not None and 1 <= p <= early_count for p in lab.positions)
-    short_boost = float(params.get('short_word_boost', 0))
-    short_max = int(params.get('short_word_max_len', 3))
-    is_short = any(len(w) <= short_max for w in lab.words)
-    out = []
-    for surprisal in lab.surprisals:
-        base = max(params["min_abs"], surprisal + params["min_delta"])
-        if is_early:
-            base += early_boost
-        if is_short:
-            base += short_boost
-        out.append(base)
-    return out, is_early
+    """The real threshold function, as choose_distractor calls it."""
+    targets, is_early, _ = surprisal_thresholds(lab.words, lab.surprisals,
+                                                lab.positions, params)
+    return targets, is_early
 
 
 PARAMS = {"min_abs": 15, "min_delta": 8,
@@ -80,3 +68,16 @@ def test_any_early_occurrence_across_condition_rows_counts():
 def test_zero_boost_is_a_no_op():
     p = dict(PARAMS, early_position_boost=0)
     assert _targets(_label_with([1]), p)[0] == _targets(_label_with([9]), p)[0]
+
+
+def test_short_target_uses_min_abs_short_and_its_boost():
+    p = {"min_abs": 25, "min_delta": 8, "min_abs_short": 15, "short_word_boost": 5}
+    targets, _, is_short = surprisal_thresholds(["the"], [2.0], [4], p)
+    assert is_short and targets == [20.0]          # max(15, 10) + 5
+
+
+def test_vowelled_arabic_short_word_counts_its_letters():
+    # "مِنْ" is 2 letters (4 code points with its marks).
+    _, _, is_short = surprisal_thresholds(["مِنْ"], [2.0], [4],
+                                          {"min_abs": 20, "min_delta": 5})
+    assert is_short

@@ -6,9 +6,8 @@ Both of these failed before the fix, for every English and Arabic run.
 import math
 
 import pytest
-import wordfreq
 
-from wordfreq_distractor import (
+from maze_automate.candidates import (
     _freq_band,
     get_thresholds_en,
     get_thresholds_de,

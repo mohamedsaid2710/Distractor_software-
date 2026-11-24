@@ -9,7 +9,7 @@ import csv
 
 import pytest
 
-from output import REPORT_COLUMNS, report_path, init_report, append_report, summarize_report
+from maze_automate.output import REPORT_COLUMNS, report_path, init_report, append_report, summarize_report
 
 
 class FakeLabel:

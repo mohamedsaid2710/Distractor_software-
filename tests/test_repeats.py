@@ -7,7 +7,7 @@ word appeared five times in a 10-item English run.
 """
 import pytest
 
-from limit_repeats import Repeatcounter
+from maze_automate.selection import Repeatcounter
 
 
 def test_long_word_is_banned_at_the_limit():

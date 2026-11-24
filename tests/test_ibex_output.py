@@ -10,7 +10,7 @@ import re
 
 import pytest
 
-from output import ibex_line
+from maze_automate.output import ibex_line
 
 # Extracts the s:"..." and a:"..." payloads, honouring backslash escapes.
 FIELD_RE = re.compile(r'(?<![\w])([sa]):("(?:[^"\\]|\\.)*")')

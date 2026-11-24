@@ -1,100 +1,48 @@
-# Python internals
+# Python
 __pycache__/
 *.pyc
 
-# Virtual Environment / uv
+# Environment (uv.lock IS committed: it pins the library versions, and
+# different transformers/torch versions can change surprisal values)
 .venv/
 .uv/
 venv/
 env/
 .env
-# NOTE: uv.lock is deliberately committed. This tool generates experimental
-# stimuli, and unpinned transformers/torch versions can shift tokenization and
-# therefore surprisal values between runs. The lockfile is what makes a rerun
-# reproducible; pyproject.toml only carries lower bounds.
-
-# Generated Output Files
-test_output.csv
-test_output_final.csv
-test_output_*.csv
-output.csv
-output_sample.csv
-output*.txt
-test_output*.txt
-*.log
-
-# System files
-.DS_Store
-
-# IDE / editor
-.vscode/
-.idea/
-plots/
-# AI Assistant Instructions
-docs/copilot-instructions.md
-plan/
-# Temporary/Working files
-requirements_working.txt
-
-# Large Model Files (Over 100MB) - MUST IGNORE THESE
-
-models/benjamin-gerpt2/
-models/openai-community-gpt2-medium/
-models/aubmindlab-aragpt2-medium/
-models/benjamin-gerpt2/onnx/
-models/openai-community-gpt2-medium/onnx/
-models/benjamin-gerpt2/pytorch_model.bin
-models/benjamin-gerpt2/model.safetensors
-models/benjamin-gerpt2/flax_model.msgpack
-models/benjamin-gerpt2/tf_model.h5
-models/benjamin-gerpt2/*blobs*
-models/openai-community-gpt2-medium/pytorch_model.bin
-models/openai-community-gpt2-medium/model.safetensors
-models/openai-community-gpt2-medium/flax_model.msgpack
-models/openai-community-gpt2-medium/tf_model.h5
-models/openai-community-gpt2-medium/*blobs*
-models/aubmindlab-aragpt2-medium/pytorch_model.bin
-models/aubmindlab-aragpt2-medium/model.safetensors
-models/aubmindlab-aragpt2-medium/flax_model.msgpack
-models/aubmindlab-aragpt2-medium/tf_model.h5
-models/aubmindlab-aragpt2-medium/*blobs*
-
-# Ignore any large numbered blob files (cached from HuggingFace)
-models/benjamin-gerpt2/[0-9a-f]*[0-9a-f]
-models/openai-community-gpt2-medium/[0-9a-f]*[0-9a-f]
-models/aubmindlab-aragpt2-medium/[0-9a-f]*[0-9a-f]
-
-# Keep generated wiki builds out (GitHub wiki is separate)
-/docs/wiki/
-*.wiki/
-cc.de.300.bin
-cc.de.300.bin.gz.part
-cc.en.300.bin
-cc.en.300.bin.gz.part
-cc.ar.300.bin
-cc.ar.300.bin.gz.part
-
-scripts/plot_semantic_histogram.py
-DISTRACTOR_QUALITY_CHECKLIST.md
-software logic.md
-# NOTE: german_pos_cache_v2.json is deliberately NOT ignored. It is the live
-# German POS cache (the "absolute truth" for tagged words) and must be tracked
-# alongside the English and Arabic caches. Nothing in the code reads the
-# .pre-audit-backup copy: without the tracked file, wordfreq_distractor.py's
-# `os.path.exists` check simply fails and German runs with an EMPTY pos_cache,
-# silently degrading noun capitalization and POS matching with no fallback.
-progress_summary.md
-FUTURE_REFACTOR_PLAN.md
-scripts/plot_length_scatter.py
-scripts/plot_frequency_scatter.py
-length_scatter.png
-frequency_scatter.png
-semantic_similarity_histogram.png
-frequency_scatter_mediumgpt.png
-length_scatter_mediumgpt.png
-semantic_similarity_histogram_mediumgpt.png
 
 # Build artifacts (uv build / pip install .)
 build/
 dist/
 *.egg-info/
+
+# Generated output
+output*.txt
+output*.csv
+test_output*
+*.report.csv
+*.log
+
+# Local models and vectors (downloads normally go to the user cache)
+models/
+cc.*.300.bin*
+
+# Raw lexical norms for tools/build_lexicon.py: downloaded, never committed
+data/norms/
+
+# Local working files
+test_sentences/
+plan/
+plots/
+scripts/
+*.png
+DISTRACTOR_QUALITY_CHECKLIST.md
+software logic.md
+progress_summary.md
+FUTURE_REFACTOR_PLAN.md
+docs/copilot-instructions.md
+requirements_working.txt
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

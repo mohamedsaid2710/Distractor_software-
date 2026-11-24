@@ -9,7 +9,7 @@ import math
 
 import pytest
 
-from wordfreq_distractor import wordfreq_dict
+from maze_automate.candidates import wordfreq_dict
 
 
 class _W:

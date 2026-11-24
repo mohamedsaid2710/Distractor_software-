@@ -1,0 +1,54 @@
+# Maze distractor parameters: English
+# Full reference: wiki/Config-Reference.md
+# The most implausible candidate that meets the thresholds is always chosen.
+
+# --- Surprisal thresholds (bits) ---
+min_delta: 10                   # distractor must be at least this much more surprising than the target
+min_abs: 25                    # ...and at least this surprising overall
+min_abs_short: 15              # min_abs for short targets (function words)
+early_position_boost: 0        # extra bits required at the first positions of a sentence
+early_position_count: 2        # how many positions count as "first"
+
+# --- Candidates ---
+num_to_test: 200               # candidates scored per position
+min_pool_size: 60              # widen the frequency band until the pool has this many words
+freq_tolerance: 1.0            # candidate frequency = target frequency +/- this (Zipf)
+freq_widen_step: 0.1           # Zipf added per widening step
+max_freq_widen: 9              # maximum widening steps
+short_word_freq_match: False   # False: short function words (der, the) get no frequency band, only the floor below
+short_word_band_floor: 4.0     # lowest candidate frequency (Zipf) for those targets
+min_zipf: 3.0                  # lowest candidate frequency (Zipf)
+min_word_len: 2                # shortest candidate word
+len_tolerance: 0               # allowed length difference from the target
+enforce_length_match: True     # require the length match
+lowercase_only: True          # candidates are lowercase forms only
+exclude_propn_candidates: True # never use proper nouns
+exclude_words: "exclude_en.txt"  # words never used as distractors
+
+# --- Part of speech ---
+pos_match: 1                   # 0 off | 1 noun with noun, non-noun with non-noun | 2 same class
+pos_min_share: 0.8             # use only words with this POS in at least 80% of uses (0 = off)
+
+# --- Semantic filter (fastText) ---
+semantic_filter: True          # reject candidates similar in meaning to the target
+semantic_threshold: 0.35       # maximum allowed similarity
+
+# --- Repeats ---
+max_repeat: 1                  # how often one distractor may be used
+repeat_exempt_max_len: 4       # words this short or shorter may repeat freely
+allow_banned_fallback: False   # last resort: allow excluded/repeated words
+first_token_placeholder: True  # first word gets x-x-x
+
+# --- Output ---
+seed: 12345                    # same input + same seed = same output; null = random
+write_report: True             # also write <output>.report.csv
+
+# --- Model & hardware ---
+language: "en"
+hf_model_name: "openai-community/gpt2-medium"
+context_window: null           # left-context tokens for scoring; null = full
+device: "cuda"                 # "cuda" or "cpu"; delete the line to auto-detect
+model_batch_size: 1024
+nlp_batch_size: 2000
+chunk_size: 2048
+# On CPU use instead: device: "cpu", model_batch_size: 32, nlp_batch_size: 200, chunk_size: 512

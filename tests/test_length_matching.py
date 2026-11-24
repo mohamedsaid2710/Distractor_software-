@@ -4,11 +4,11 @@ The threshold functions clamped the length they searched with, while
 candidate_length_ok compared against the true length -- so with
 `len_tolerance: 0` a 1- or 2-letter English target rejected every candidate its
 own pool could offer and fell through the entire retrieval cascade.  17% of
-non-initial tokens in English_sample.txt are 1-2 characters.
+non-initial tokens in examples/english_sample.txt are 1-2 characters.
 """
 import pytest
 
-from wordfreq_distractor import (
+from maze_automate.candidates import (
     effective_target_length,
     get_thresholds_en,
     get_thresholds_de,
@@ -51,9 +51,9 @@ def test_all_languages_use_the_same_floor(fn):
 
 def test_two_letter_english_pool_is_non_empty():
     """`min_word_len: 3` left words_by_len[2] empty, so nothing could match."""
-    from set_params import set_params
-    from wordfreq_distractor import wordfreq_English_zipf_dict
-    params = set_params("params_en.txt")
+    from maze_automate.params import set_params
+    from maze_automate.candidates import wordfreq_English_zipf_dict
+    params = set_params("config/params_en.txt")
     params["semantic_filter"] = False
     d = wordfreq_English_zipf_dict(params)
     eff = effective_target_length(2, params)
